@@ -521,9 +521,21 @@ class Database {
         'palakkad', 'cochin', 'trivandrum', 'coimbatore', 'bangalore'
       ]);
       
-      const isPlace = INDIAN_PLACES.has(cleanName.toLowerCase());
+      const BLACKLIST_WORDS = new Set([
+        'camera', 'photo', 'image', 'video', 'selfie', 'location', 'checkin', 'checkout',
+        'attendance', 'group', 'admin', 'supervisor', 'site', 'office', 'staff', 'worker',
+        'employee', 'present', 'absent', 'leave', 'wages', 'salary', 'pay', 'payroll',
+        'work', 'duty', 'shift', 'date', 'time', 'hours', 'mins', 'minutes', 'secs',
+        'seconds', 'hour', 'day', 'month', 'year', 'week', 'sunday', 'monday',
+        'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'in', 'out'
+      ]);
       
-      if (cleanName.length >= 2 && !isPlace) {
+      const lowerCleanName = cleanName.toLowerCase();
+      const isPlace = INDIAN_PLACES.has(lowerCleanName);
+      const isBlacklisted = BLACKLIST_WORDS.has(lowerCleanName) || 
+                            lowerCleanName.split(/\s+/).some(w => BLACKLIST_WORDS.has(w));
+      
+      if (cleanName.length >= 2 && !isPlace && !isBlacklisted) {
         const cleanPhone = (parsedData.rawSender || "").replace(/\D/g, '');
         
         // Find existing employee strictly by name to prevent duplicates

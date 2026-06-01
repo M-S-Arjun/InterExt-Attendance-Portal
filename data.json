@@ -1273,16 +1273,6 @@
       "monthlyWage": 20000,
       "designation": "Project Manager",
       "paymentMode": "Interext"
-    },
-    {
-      "id": "emp_1780289480998_812",
-      "name": "Camera Attendance",
-      "phone": "",
-      "status": "active",
-      "dailyRate": 120,
-      "hourlyRate": 20,
-      "siteId": "site_a",
-      "createdAt": "2026-06-01T04:51:20.998Z"
     }
   ],
   "sites": [
@@ -1835,25 +1825,6 @@
       "isFullDay": true,
       "calculatedWage": 140,
       "duration": 540
-    },
-    {
-      "employeeId": "emp_1780289480998_812",
-      "employeeName": "Camera Attendance",
-      "siteName": "INTEREXT OFFICE",
-      "date": "2026-06-01",
-      "checkIn": "2026-06-01T04:51:20.996Z",
-      "checkOut": null,
-      "messageText": "Camera ഉപയോഗിച്ച് attendance എടുക്കാൻ ആണ്",
-      "status": "checked-in",
-      "travelHours": 0,
-      "id": "att_1780289481017",
-      "regularHours": 0,
-      "otHours": 0,
-      "extraHours": 0,
-      "isHalfDay": false,
-      "isFullDay": false,
-      "calculatedWage": 0,
-      "duration": 0
     }
   ],
   "settings": {
