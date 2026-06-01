@@ -1819,11 +1819,11 @@
       "travelHours": 0,
       "id": "att_1780285938596",
       "regularHours": 8,
-      "otHours": 1,
+      "otHours": 0,
       "extraHours": 0,
       "isHalfDay": false,
       "isFullDay": true,
-      "calculatedWage": 140,
+      "calculatedWage": 466.67,
       "duration": 540
     }
   ],
