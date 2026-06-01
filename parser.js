@@ -455,24 +455,55 @@ class AttendanceParser {
         console.error("Single time parsing failed:", err);
       }
     } else {
-      // No times detected - default to current date/time and detect In vs Out by keyword
-      const outKeywords = ['out', 'checkout', 'check-out', 'left', 'leave', 'exit', 'finish', 'done', 'leaving'];
-      const foundOut = outKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(cleanLine));
+      // Detect Leave keyword (e.g. "on leave", "leave today", "leave tomorrow")
+      const leaveKeywords = ['on leave', 'leave today', 'leave tomorrow', 'taking leave', 'casual leave', 'sick leave', 'cl', 'sl', 'el', 'pl'];
+      const isLeave = leaveKeywords.some(kw => cleanLine.includes(kw))
+        || /\b(?:i\s+am\s+)?(?:on\s+)?leave\b/i.test(cleanLine);
       
-      const timestamp = messageTimestamp ? new Date(messageTimestamp).toISOString() : new Date().toISOString();
-      if (foundOut) {
-        checkOutTimestamp = timestamp;
-        actionType = 'out';
+      if (isLeave) {
+        actionType = 'leave';
       } else {
-        checkInTimestamp = timestamp;
-        actionType = 'in';
+        // No times detected - default to current date/time and detect In vs Out by keyword
+        // Remove 'leave' from outKeywords to prevent leaves from being parsed as checkouts
+        const outKeywords = ['out', 'checkout', 'check-out', 'left', 'exit', 'finish', 'done', 'leaving'];
+        const foundOut = outKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(cleanLine));
+        
+        const timestamp = messageTimestamp ? new Date(messageTimestamp).toISOString() : new Date().toISOString();
+        if (foundOut) {
+          checkOutTimestamp = timestamp;
+          actionType = 'out';
+        } else {
+          checkInTimestamp = timestamp;
+          actionType = 'in';
+        }
       }
     }
 
-    const isSuccess = !!(matchedEmployee && (matchedSite || (extractedSite && extractedSite !== "—")));
+    let leaveDate = null;
+    if (actionType === 'leave') {
+      const isTomorrow = /\btomorrow\b/i.test(cleanLine);
+      if (isTomorrow && dateStr) {
+        try {
+          const parts = dateStr.split('-');
+          const dateObj = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+          dateObj.setDate(dateObj.getDate() + 1);
+          
+          const y = dateObj.getFullYear();
+          const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+          const d = String(dateObj.getDate()).padStart(2, '0');
+          leaveDate = `${y}-${m}-${d}`;
+        } catch (e) {
+          leaveDate = dateStr;
+        }
+      } else {
+        leaveDate = dateStr;
+      }
+    }
+
+    const isSuccess = !!(matchedEmployee && (actionType === 'leave' || matchedSite || (extractedSite && extractedSite !== "—")));
     let reason = "";
     if (!matchedEmployee) reason = "Worker name unrecognized";
-    else if (!matchedSite && (!extractedSite || extractedSite === "—")) reason = "Work site not specified/recognized";
+    else if (actionType !== 'leave' && !matchedSite && (!extractedSite || extractedSite === "—")) reason = "Work site not specified/recognized";
 
     return {
       isSuccess,
@@ -480,10 +511,11 @@ class AttendanceParser {
       matchedEmployeeId: matchedEmployee ? matchedEmployee.id : null,
       matchedSiteId: matchedSite ? matchedSite.id : null,
       extractedName: extractedName || parts[0] || cleanLine.substring(0, 15),
-      extractedSite: extractedSite || "—",
+      extractedSite: actionType === 'leave' && (!extractedSite || extractedSite === "—") ? "—" : (extractedSite || "—"),
       extractedAction: actionType,
       checkInTime: checkInTimestamp,
       checkOutTime: checkOutTimestamp,
+      leaveDate: leaveDate,
       confidence: Number(((employeeConfidence + siteConfidence) / 2).toFixed(2))
     };
   }

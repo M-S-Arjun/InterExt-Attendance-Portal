@@ -679,6 +679,28 @@ class Database {
         travelHours: parsedData.travelHours || 0.0
       };
       return this.saveAttendance(record);
+    } else if (parsedData.extractedAction === 'leave') {
+      // Record clean Leave log
+      const targetDate = parsedData.leaveDate || targetDateStr;
+      const record = {
+        employeeId: employee.id,
+        employeeName: employee.name,
+        siteName: site.name || "—",
+        date: targetDate,
+        checkIn: null,
+        checkOut: null,
+        duration: 0,
+        regularHours: 0.0,
+        otHours: 0.0,
+        extraHours: 0.0,
+        isHalfDay: false,
+        isFullDay: false,
+        calculatedWage: 0.0,
+        messageText: rawText,
+        status: "leave",
+        travelHours: 0.0
+      };
+      return this.saveAttendance(record);
     } else if (parsedData.extractedAction === 'in') {
       // Create new check-in
       const record = {

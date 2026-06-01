@@ -1825,27 +1825,6 @@
       "isFullDay": true,
       "calculatedWage": 466.67,
       "duration": 540
-    },
-    {
-      "employeeId": "emp_2050",
-      "employeeName": "Maya Sunil",
-      "siteName": "INTEREXT OFFICE",
-      "date": "2026-06-01",
-      "checkIn": "2026-06-01T06:41:05.000Z",
-      "checkOut": null,
-      "messageText": "Selfie caption",
-      "status": "checked-in",
-      "travelHours": 0,
-      "id": "att_1780314065817",
-      "regularHours": 0,
-      "otHours": 0,
-      "extraHours": 0,
-      "isHalfDay": false,
-      "isFullDay": false,
-      "calculatedWage": 0,
-      "duration": 0,
-      "notes": "[FLAGGED SELFIE] Location Mismatch via Location Pin (44637m)",
-      "isManualOverride": false
     }
   ],
   "settings": {
