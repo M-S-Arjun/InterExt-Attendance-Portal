@@ -1,0 +1,1168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#ff6b00">
+  <title>WhatsApp Attendance & Payroll Tracker</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Google Fonts - Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+  <!-- Sidebar Collapse State Restorer (Prevents Layout Flash on Load) -->
+  <script>
+    if (localStorage.getItem('sidebar-collapsed') === 'true') {
+      document.documentElement.classList.add('sidebar-collapsed');
+    }
+  </script>
+</head>
+<body>
+
+  <!-- Main Container -->
+  <div class="app-layout">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-logo">
+          <img src="/logo.jpg" class="brand-logo-img" alt="Logo">
+        </div>
+        <div class="brand-text">
+          <h2>INTEREXT</h2>
+          <span>Attendance Panel</span>
+        </div>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <button class="nav-item active" onclick="switchTab('dashboard')">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('logs')">
+          <i data-lucide="calendar-range"></i>
+          <span>Attendance Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('travel')">
+          <i data-lucide="navigation"></i>
+          <span>Travel Time Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('employees')">
+          <i data-lucide="users"></i>
+          <span>Workers Registry</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('payroll')">
+          <i data-lucide="wallet"></i>
+          <span>Monthly Payroll</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('selfies')">
+          <i data-lucide="camera"></i>
+          <span>Selfie Verifications</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('sites')">
+          <i data-lucide="map-pin"></i>
+          <span>Work Sites</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('holidays')">
+          <i data-lucide="calendar"></i>
+          <span>Holiday Calendar</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('settings')">
+          <i data-lucide="sliders"></i>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="connection-pill status-disconnected" id="sidebar-status-pill">
+          <div class="status-indicator-ping"></div>
+          <span id="sidebar-status-text">Disconnected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Content -->
+    <main class="main-content">
+      
+      <!-- Top Header -->
+      <header class="top-header">
+        <div class="header-left-group">
+          <button class="btn-sidebar-toggle" onclick="toggleSidebar()" id="sidebar-toggle-btn" title="Toggle Sidebar">
+            <i data-lucide="menu"></i>
+          </button>
+          <div class="header-welcome">
+            <h1 id="page-title">Dashboard Overview</h1>
+            <p id="page-subtitle">Real-time daily wage attendance tracking</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="active-group-badge" id="active-group-badge" style="display: none;">
+            <i data-lucide="message-square"></i>
+            <span>Monitoring: <strong id="header-group-name">—</strong></span>
+          </div>
+          <div class="current-date-badge">
+            <i data-lucide="clock"></i>
+            <span id="header-datetime">Loading...</span>
+          </div>
+          <button class="btn-theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Light/Dark Theme">
+            <i data-lucide="sun" id="theme-icon-sun" style="display: none;"></i>
+            <i data-lucide="moon" id="theme-icon-moon"></i>
+          </button>
+        </div>
+      </header>
+
+      <!-- TAB 1: DASHBOARD VIEW -->
+      <div id="tab-dashboard" class="tab-view active">
+        <!-- Connection Manager Box (Dynamic Overlay / Panel) -->
+        <section id="connection-center" class="glass-card connection-card">
+          <div class="connection-layout">
+            <div class="connection-info">
+              <h3>WhatsApp Connection Center</h3>
+              <p id="connection-desc">Scan the QR code below from your phone's WhatsApp Linked Devices to link this server.</p>
+              <div class="connection-status-block">
+                <span class="status-label">Current Status:</span>
+                <span class="status-badge status-disconnected" id="conn-status-badge">Checking Connection...</span>
+              </div>
+              <div class="instructions-list" id="scan-instructions">
+                <h4>Setup Instructions:</h4>
+                <ol>
+                  <li>Open WhatsApp on your mobile phone.</li>
+                  <li>Tap <strong>Settings</strong> (iOS) or <strong>Menu/Three Dots</strong> (Android) and select <strong>Linked Devices</strong>.</li>
+                  <li>Tap <strong>Link a Device</strong> and point your camera at the QR code shown.</li>
+                  <li>Once scanned, the dashboard will automatically connect and load your group chats.</li>
+                </ol>
+              </div>
+            </div>
+            <div class="connection-visual">
+              <div id="qr-container" class="qr-container">
+                <div class="qr-placeholder" id="qr-placeholder">
+                  <i data-lucide="loader" class="animate-spin"></i>
+                  <p>Initializing WhatsApp Service...</p>
+                </div>
+                <img id="qr-image" src="" alt="WhatsApp QR Code" style="display: none;">
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Metrics Grid -->
+        <div class="metrics-grid">
+          <div class="metric-card card-blue">
+            <div class="metric-icon"><i data-lucide="users"></i></div>
+            <div class="metric-details">
+              <h3>Active Registry</h3>
+              <span class="metric-value" id="metric-total-emp">0</span>
+              <span class="metric-subtext">Registered Employees</span>
+            </div>
+          </div>
+          <div class="metric-card card-green">
+            <div class="metric-icon"><i data-lucide="user-check"></i></div>
+            <div class="metric-details">
+              <h3>Present Today</h3>
+              <span class="metric-value" id="metric-present">0</span>
+              <span class="metric-subtext" id="metric-present-percent">0% Attendance</span>
+            </div>
+          </div>
+          <div class="metric-card card-red">
+            <div class="metric-icon"><i data-lucide="user-x"></i></div>
+            <div class="metric-details">
+              <h3>Absent Today</h3>
+              <span class="metric-value" id="metric-absent">0</span>
+              <span class="metric-subtext">Marked Daily Wage Absent</span>
+            </div>
+          </div>
+          <div class="metric-card card-amber" id="exceptions-metric-card" onclick="scrollToExceptions()">
+            <div class="metric-icon"><i data-lucide="alert-triangle"></i></div>
+            <div class="metric-details">
+              <h3>Pending Exceptions</h3>
+              <span class="metric-value" id="metric-pending">0</span>
+              <span class="metric-subtext">Requires Admin Mapping</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts & Logs Section Grid -->
+        <div class="dashboard-grid">
+          <!-- Charts Left Column -->
+          <div class="chart-column">
+            <!-- Site Distribution Chart -->
+            <div class="glass-card chart-card">
+              <div class="card-header">
+                <h3><i data-lucide="pie-chart"></i> On-Site Worker Distribution</h3>
+              </div>
+              <div class="card-body chart-body">
+                <canvas id="siteChart"></canvas>
+              </div>
+            </div>
+            <!-- Attendance History Chart -->
+            <div class="glass-card chart-card">
+              <div class="card-header">
+                <h3><i data-lucide="trending-up"></i> Weekly Attendance Trends</h3>
+              </div>
+              <div class="card-body chart-body">
+                <canvas id="historyChart"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <!-- Exception Board & Live Ticker Right Column -->
+          <div class="ticker-column">
+            <!-- Exception Resolve Panel -->
+            <div class="glass-card exception-panel" id="exception-panel" style="display: none;">
+              <div class="card-header border-amber">
+                <h3 class="text-amber"><i data-lucide="alert-circle"></i> Exception Resolution Board</h3>
+                <span class="badge badge-amber" id="exception-count-badge">0 pending</span>
+              </div>
+              <div class="card-body">
+                <div class="pending-list" id="pending-messages-list">
+                  <!-- Generated Dynamically -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Live Message Ticker -->
+            <div class="glass-card ticker-panel">
+              <div class="card-header">
+                <h3><i data-lucide="activity"></i> Real-time WhatsApp Feed</h3>
+                <span class="live-pulse"></span>
+              </div>
+              <div class="card-body ticker-body">
+                <div class="ticker-feed" id="ticker-feed">
+                  <div class="ticker-empty">
+                    <i data-lucide="message-square-dashed"></i>
+                    <p>No messages received yet. Select an attendance group in Settings and send check-ins!</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: ATTENDANCE LOG VIEW -->
+      <div id="tab-logs" class="tab-view">
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="file-spreadsheet"></i> Attendance Master Sheet</h3>
+            </div>
+            <div class="header-right flex-filters">
+              <div class="filter-group">
+                <label>Target Date</label>
+                <input type="date" id="log-filter-date" class="form-control" onchange="handleTargetDateChange()">
+              </div>
+              <div class="filter-group">
+                <label>Range Start</label>
+                <input type="date" id="log-filter-start" class="form-control" onchange="checkRangeChange()">
+              </div>
+              <div class="filter-group">
+                <label>Range End</label>
+                <input type="date" id="log-filter-end" class="form-control" onchange="checkRangeChange()">
+              </div>
+              <div class="filter-buttons">
+                <button class="btn btn-secondary btn-icon" onclick="resetDateFilters()"><i data-lucide="refresh-cw"></i> Reset</button>
+                <button class="btn btn-primary btn-icon" onclick="exportPayrollCSV()"><i data-lucide="download"></i> Export Excel</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Master Log Excel-style Filters & Search Bar -->
+          <div class="table-control-bar">
+            <div class="table-control-left">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="log-search-input" class="form-control" placeholder="Search by name, site, status or shift..." oninput="applyFiltersLogs()">
+              </div>
+            </div>
+            <div class="table-control-right">
+              <select id="log-filter-status" class="table-control-select" onchange="applyFiltersLogs()">
+                <option value="">-- All Statuses --</option>
+                <option value="completed">Present</option>
+                <option value="checked-in">Checked-In</option>
+                <option value="absent">Absent</option>
+                <option value="leave">Leave</option>
+              </select>
+              <select id="log-filter-site" class="table-control-select" onchange="applyFiltersLogs()">
+                <option value="">-- All Sites --</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="overflow-x">
+            <table class="data-table" id="attendance-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Employee Name</th>
+                  <th>Status</th>
+                  <th>Work Site</th>
+                  <th>Check-In</th>
+                  <th>Check-Out</th>
+                  <th>Total Hours</th>
+                  <th>Travel Time (Hrs)</th>
+                  <th>Shift Summary</th>
+                  <th>Calculated Pay</th>
+                  <th style="width: 100px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="attendance-table-body">
+                <!-- Generated Dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2.5: TRAVEL TIME LOG VIEW -->
+      <div id="tab-travel" class="tab-view">
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="navigation"></i> Travel Time Tracking Log</h3>
+              <p>Review daily worker travel times, 50% paid halving rule calculations, and payout amounts</p>
+            </div>
+            <div class="header-right flex-filters">
+              <div class="filter-group">
+                <label>Month</label>
+                <input type="month" id="travel-filter-month" class="form-control" onchange="applyFiltersTravel()">
+              </div>
+              <div class="filter-buttons">
+                <button class="btn btn-secondary btn-icon" onclick="resetTravelFilters()"><i data-lucide="refresh-cw"></i> Reset</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Metrics summary for travel time -->
+          <div class="metrics-grid" style="margin-bottom: 20px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+            <div class="metric-card bg-slate-card">
+              <div class="metric-title">Total Travel Hours (Reported)</div>
+              <div class="metric-value" id="travel-stat-reported">0.00 hrs</div>
+              <div class="metric-desc">Total travel time reported by supervisors</div>
+            </div>
+            <div class="metric-card bg-slate-card">
+              <div class="metric-title">Total Paid Hours (50%)</div>
+              <div class="metric-value text-green" id="travel-stat-paid">0.00 hrs</div>
+              <div class="metric-desc">Company policy 50% paid travel credit</div>
+            </div>
+            <div class="metric-card bg-slate-card">
+              <div class="metric-title">Total Travel Payout</div>
+              <div class="metric-value text-green" id="travel-stat-payout">₹0.00</div>
+              <div class="metric-desc">Calculated travel time payout amount</div>
+            </div>
+          </div>
+          
+          <!-- Master Log Excel-style Filters & Search Bar -->
+          <div class="table-control-bar">
+            <div class="table-control-left">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="travel-search-input" class="form-control" placeholder="Search by name, site, or source..." oninput="applyFiltersTravel()">
+              </div>
+            </div>
+          </div>
+          
+          <div class="overflow-x">
+            <table class="data-table" id="travel-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Employee Name</th>
+                  <th>Work Site</th>
+                  <th>Stated Travel Hours</th>
+                  <th>Paid Travel Hours</th>
+                  <th>Hourly Rate</th>
+                  <th>Travel Payout Amount</th>
+                  <th>WhatsApp Text Source</th>
+                  <th style="width: 100px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="travel-table-body">
+                <!-- Generated Dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3: WORKERS REGISTRY VIEW -->
+      <div id="tab-employees" class="tab-view">
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="users-round"></i> Employee Directory</h3>
+              <p>Manage employee records, default locations, and payroll wage configurations</p>
+            </div>
+            <div class="header-right">
+              <button class="btn btn-primary btn-icon" onclick="openEmployeeModal()"><i data-lucide="user-plus"></i> Add New Employee</button>
+            </div>
+          </div>
+          
+          <!-- Workers Directory Excel-style Filters & Search Bar -->
+          <div class="table-control-bar">
+            <div class="table-control-left">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="emp-search-input" class="form-control" placeholder="Search by ID, name, designation, mode..." oninput="applyFiltersEmployees()">
+              </div>
+            </div>
+            <div class="table-control-right">
+              <select id="emp-filter-status" class="table-control-select" onchange="applyFiltersEmployees()">
+                <option value="">-- All Statuses --</option>
+                <option value="active">Active</option>
+                <option value="inactive">Suspended</option>
+              </select>
+              <select id="emp-filter-mode" class="table-control-select" onchange="applyFiltersEmployees()">
+                <option value="">-- All Modes of Work --</option>
+              </select>
+
+            </div>
+          </div>
+          
+          <div class="overflow-x">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Worker ID</th>
+                  <th>Worker Name</th>
+                  <th>Designation</th>
+                  <th>Mode of Work</th>
+                  <th>WhatsApp Phone</th>
+                  <th>Shift Timings</th>
+                  <th>Daily Wages</th>
+                  <th>Monthly Wages</th>
+                  <th>Hourly Rate</th>
+                  <th>Payment Mode</th>
+
+                  <th>Status</th>
+                  <th>Registry Date</th>
+                  <th style="width: 150px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="employees-table-body">
+                <!-- Generated Dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3.5: SELFIE VERIFICATIONS VIEW -->
+      <div id="tab-selfies" class="tab-view">
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="shield-check"></i> On-Site Selfie Verification Board</h3>
+              <p>Review real-time EXIF geolocation metadata, capture timestamps, and verify anti-spoofing check-in records</p>
+            </div>
+            <div class="header-right flex-filters">
+              <button class="btn btn-secondary btn-icon" onclick="loadSelfieLogs()"><i data-lucide="refresh-cw"></i> Refresh Board</button>
+            </div>
+          </div>
+          
+          <!-- Selfie control bar -->
+          <div class="table-control-bar">
+            <div class="table-control-left">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="selfie-search-input" class="form-control" placeholder="Search by name, site, or status..." oninput="applyFiltersSelfies()">
+              </div>
+            </div>
+            <div class="table-control-right">
+              <select id="selfie-filter-status" class="table-control-select" onchange="applyFiltersSelfies()">
+                <option value="">-- All Statuses --</option>
+                <option value="verified">Verified On-Site</option>
+                <option value="flagged_location">Flagged: Location Mismatch</option>
+                <option value="flagged_time">Flagged: Pre-clicked Image</option>
+                <option value="warning_no_exif">Warning: Missing EXIF Data</option>
+                <option value="rejected">Admin Rejected</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="overflow-x" style="height: calc(100vh - 310px); border: 1px solid var(--glass-border); background-color: rgba(0, 0, 0, 0.08); border-radius: var(--border-radius-sm);">
+            <table class="data-table" id="selfies-table" style="min-width: 1500px;">
+              <thead>
+                <tr>
+                  <th style="width: 80px;">Selfie</th>
+                  <th>Worker Name</th>
+                  <th>Matched Site</th>
+                  <th>Received Time</th>
+                  <th>Image Captured (EXIF)</th>
+                  <th>GPS Coordinates</th>
+                  <th>Distance & Gap</th>
+                  <th>Status</th>
+                  <th style="width: 150px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="selfies-table-body">
+                <!-- Generated Dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 4: WORK SITES VIEW -->
+      <div id="tab-sites" class="tab-view">
+        <div class="sites-view-layout">
+          <!-- Add Site Panel Left -->
+          <div class="glass-card site-form-card">
+            <div class="card-header">
+              <h3><i data-lucide="plus-circle"></i> Add New Work Site</h3>
+            </div>
+            <div class="card-body">
+              <form id="site-form" onsubmit="handleSiteSubmit(event)">
+                <input type="hidden" id="site-id">
+                <div class="form-group">
+                  <label for="site-name">Work Site Name</label>
+                  <input type="text" id="site-name" class="form-control" placeholder="e.g. Site A, Manhattan Office" required>
+                </div>
+                <div class="form-group">
+                  <label for="site-description">Site Location / Notes (Optional)</label>
+                  <textarea id="site-description" class="form-control" placeholder="Optional details..." rows="3"></textarea>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="site-latitude">Latitude (GPS)</label>
+                    <input type="number" id="site-latitude" class="form-control" placeholder="e.g. 9.9312" step="0.000001" min="-90" max="90">
+                  </div>
+                  <div class="form-group">
+                    <label for="site-longitude">Longitude (GPS)</label>
+                    <input type="number" id="site-longitude" class="form-control" placeholder="e.g. 76.2673" step="0.000001" min="-180" max="180">
+                  </div>
+                </div>
+                <div class="form-actions">
+                  <button type="button" class="btn btn-secondary" onclick="resetSiteForm()">Clear</button>
+                  <button type="submit" class="btn btn-primary" id="site-submit-btn">Register Site</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- Site Registry List Right -->
+          <div class="glass-card site-list-card">
+            <div class="card-header">
+              <h3><i data-lucide="map"></i> Registered Work Sites</h3>
+            </div>
+            <div class="overflow-x">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Site Name</th>
+                    <th>Location Notes</th>
+                    <th>GPS Coordinates</th>
+                    <th>Date Registered</th>
+                    <th style="width: 120px;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="sites-table-body">
+                  <!-- Generated Dynamically -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 4.5: MONTHLY PAYROLL SUMMARY -->
+      <div id="tab-payroll" class="tab-view">
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="wallet"></i> Monthly Salary Sheets</h3>
+              <p>Calculate component-wise salaries, LOP deductions, custom advances, and export summaries</p>
+            </div>
+            <div class="header-right flex-filters">
+              <div class="filter-group">
+                <label>Target Month</label>
+                <input type="month" id="payroll-month" class="form-control" onchange="loadPayrollSheet()">
+              </div>
+              <div class="filter-buttons">
+                <button class="btn btn-secondary btn-icon" onclick="savePayrollAdjustments()"><i data-lucide="save"></i> Save Sheet</button>
+                <button class="btn btn-primary btn-icon" onclick="exportPayrollExcelSheet()"><i data-lucide="file-spreadsheet"></i> Export Excel</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Payroll Excel-style Filters & Search Bar -->
+          <div class="table-control-bar">
+            <div class="table-control-left">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="pay-search-input" class="form-control" placeholder="Search by ID, name..." oninput="applyFiltersPayroll()">
+              </div>
+            </div>
+            <div class="table-control-right">
+              <select id="pay-filter-mode" class="table-control-select" onchange="applyFiltersPayroll()">
+                <option value="">-- All Modes of Work --</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="overflow-x">
+            <table class="data-table" id="payroll-table" style="min-width: 3360px;">
+              <thead>
+                <tr>
+                  <th style="width: 60px;">No</th>
+                  <th style="width: 110px;">Employee ID</th>
+                  <th style="width: 180px;">Name</th>
+                  <th style="width: 125px;">Std Working days</th>
+                  <th style="width: 120px;">Basic</th>
+                  <th style="width: 120px;">DA</th>
+                  <th style="width: 135px;">Other Allowances</th>
+                  <th style="width: 130px;">Gross Salary</th>
+                  <th style="width: 110px;">Working Days</th>
+                  <th style="width: 125px;">amount</th>
+                  <th style="width: 110px;">LOP(Day)</th>
+                  <th style="width: 130px;">LOP( Amount)</th>
+                  <th style="width: 110px;">OT(Hrs)</th>
+                  <th style="width: 125px;">OT(Amount)</th>
+                  <th style="width: 130px;">Travel Time(Hrs)</th>
+                  <th style="width: 140px;">Travel Time( Amount)</th>
+                  <th style="width: 110px;">Extra days</th>
+                  <th style="width: 135px;">Extra days Amount</th>
+                  <th style="width: 115px;">Missing days</th>
+                  <th style="width: 145px;">Missing days(Amount)</th>
+                  <th style="width: 120px;">Holiday Days</th>
+                  <th style="width: 140px;">Holiday Bonus (₹)</th>
+                  <th style="width: 135px;">Earned Salary</th>
+                  <th style="width: 110px;">PF</th>
+                  <th style="width: 110px;">ESIC</th>
+                  <th style="width: 110px;">PT</th>
+                  <th style="width: 135px;">Net Salary</th>
+                  <th style="width: 90px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="payroll-table-body">
+                <!-- Generated Dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 5: SETTINGS VIEW -->
+      <div id="tab-settings" class="tab-view">
+        <div class="glass-card log-panel" style="max-width: 1200px; margin: 0 auto;">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="sliders"></i> Payroll & Wage Calculation Rules</h3>
+              <p>Configure parameters, ratios, multipliers, and statutory rates applied to payroll calculations</p>
+            </div>
+          </div>
+          
+          <div class="card-body">
+            <form id="settings-form" onsubmit="handleSettingsSubmit(event)">
+              
+              <!-- WhatsApp Settings Card Section -->
+              <h4 class="settings-sec-title" style="margin-top: 0;"><i data-lucide="message-square"></i> WhatsApp Group Connection</h4>
+              <div class="form-group" style="max-width: 600px; margin-bottom: 30px;">
+                <label for="settings-group-select">Attendance Group Name</label>
+                <input type="text" id="settings-group-select" class="form-control" placeholder="e.g. Onsite Attendance Group" required>
+                <span class="help-text">Only messages coming from this specific WhatsApp group will be monitored and parsed.</span>
+              </div>
+              
+              <!-- Calculations Table Config Section -->
+              <h4 class="settings-sec-title"><i data-lucide="calculator"></i> Payroll & Statutory Deduction Rules</h4>
+              
+              <div class="overflow-x" style="margin-bottom: 30px;">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Payroll Component</th>
+                      <th>Automated Mathematical Calculation Method</th>
+                      <th style="width: 250px;">Editable Configuration Rule / Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <!-- Component 1: Daily Shift Hours Thresholds -->
+                    <tr>
+                      <td><strong>Full-Day Shift Threshold</strong></td>
+                      <td>Awarded if daily working hours are &ge; standard limit. Wages calculated as:<br><code style="font-size:0.75rem;">Daily Salary + (Overtime Hours * Hourly Rate)</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-full-hours" class="form-control" min="1" max="24" step="0.5" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>hours</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>Half-Day Shift Threshold</strong></td>
+                      <td>Awarded if daily hours fall below Full-Day but &ge; Half-Day. Wages calculated as:<br><code style="font-size:0.75rem;">(Basic % of Daily Salary) + (Extra Hours * Hourly Rate)</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-half-hours" class="form-control" min="1" max="24" step="0.5" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>hours</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Basic, DA, Allowances -->
+                    <tr>
+                      <td><strong>Basic Salary Component</strong></td>
+                      <td>Basic component share of worker's monthly wages:<br><code style="font-size:0.75rem;">Gross Salary * Basic Percentage</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-basic-ratio" class="form-control" min="0" max="100" step="1" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>% of Gross</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>DA (Dearness Allowance)</strong></td>
+                      <td>DA component share of worker's monthly wages:<br><code style="font-size:0.75rem;">Gross Salary * DA Percentage</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-da-ratio" class="form-control" min="0" max="100" step="1" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>% of Gross</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>Other Allowances</strong></td>
+                      <td>Other Allowances share of worker's monthly wages:<br><code style="font-size:0.75rem;">Gross Salary * Allowances Percentage</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-allowances-ratio" class="form-control" min="0" max="100" step="1" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>% of Gross</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 2: Overtime multiplier -->
+                    <tr>
+                      <td><strong>Overtime (OT) Rate</strong></td>
+                      <td>Hourly payment rate applied to overtime hours worked:<br><code style="font-size:0.75rem;">OT Hours * Hourly Wage * Multiplier</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-ot-multiplier" class="form-control" min="0.5" max="5" step="0.05" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>x hourly rate</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 3: Travel Time ratio -->
+                    <tr>
+                      <td><strong>Travel Time Paid Ratio</strong></td>
+                      <td>Fraction of reported travel hours paid under company policy:<br><code style="font-size:0.75rem;">Stated Travel Hours * Paid Ratio * Hourly Wage</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-travel-ratio" class="form-control" min="0" max="1" step="0.05" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>(e.g. 0.50 = 50%)</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 4: LOP Deduction Rate -->
+                    <tr>
+                      <td><strong>Loss of Pay (LOP)</strong></td>
+                      <td>Daily wage deduction rate applied to absent days:<br><code style="font-size:0.75rem;">LOP Days * Daily Wage * Multiplier</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-lop-rate" class="form-control" min="0" max="3" step="0.05" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>x daily rate</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 5: Provident Fund PF -->
+                    <tr>
+                      <td><strong>Provident Fund (PF)</strong></td>
+                      <td>Employee contribution auto-deducted from monthly wages:<br><code style="font-size:0.75rem;">Basic Salary * PF Rate</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-pf-rate" class="form-control" min="0" max="50" step="0.01" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>% of Basic</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 6: ESIC -->
+                    <tr>
+                      <td><strong>ESIC Contribution</strong></td>
+                      <td>Employee contribution auto-deducted from monthly wages:<br><code style="font-size:0.75rem;">Earned Salary * ESIC Rate</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-esic-rate" class="form-control" min="0" max="10" step="0.01" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>% of Earned</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 7: PT flat tax -->
+                    <tr>
+                      <td><strong>Professional Tax (PT)</strong></td>
+                      <td>Flat monthly professional tax deduction amount:<br><code style="font-size:0.75rem;">Flat P.T. Tax Amount</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <span>₹</span>
+                            <input type="number" id="settings-pt-tax" class="form-control" min="0" max="1000" step="1" required style="width:100px; display:inline-block; margin-left:4px;">
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              
+              <div class="settings-actions">
+                <button type="submit" class="btn btn-primary btn-icon"><i data-lucide="save"></i> Save Rules & Ratios Configuration</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 9: HOLIDAY CALENDAR VIEW -->
+      <div id="tab-holidays" class="tab-view">
+        <div class="glass-card holiday-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="calendar"></i> Company Public Holidays</h3>
+              <span class="badge badge-primary" id="holidays-count-badge">0 holidays</span>
+            </div>
+            <button class="btn btn-primary btn-icon" onclick="openHolidayModal()">
+              <i data-lucide="calendar-plus"></i> Add Public Holiday
+            </button>
+          </div>
+          <div class="card-body">
+            <div class="holiday-layout">
+              <!-- Left side: Holidays Table -->
+              <div class="holiday-list-container">
+                <table class="data-table" id="holidays-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Day</th>
+                      <th>Holiday Name</th>
+                      <th style="width: 100px; text-align: center;">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="holidays-table-body">
+                    <!-- Loaded dynamically -->
+                  </tbody>
+                </table>
+              </div>
+              
+              <!-- Right side: Visual calendar grid cards -->
+              <div class="holiday-grid-container" id="holiday-calendar-grid">
+                <!-- Loaded dynamically (Month grids of 2026) -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- POPUP MODAL: Add/Edit Employee -->
+  <div class="modal" id="employee-modal">
+    <div class="modal-content glass-card">
+      <div class="modal-header">
+        <h3 id="employee-modal-title">Add New Employee Record</h3>
+        <button class="btn-close" onclick="closeEmployeeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="employee-form" onsubmit="handleEmployeeSubmit(event)">
+          <input type="hidden" id="emp-id">
+          
+          <div class="form-group">
+            <label for="emp-userid">Worker ID</label>
+            <input type="text" id="emp-userid" class="form-control" placeholder="e.g. 2038" required>
+            <span class="help-text">Unique identification code (e.g. 2038, IN048)</span>
+          </div>
+
+          <div class="form-group">
+            <label for="emp-name">Full Name</label>
+            <input type="text" id="emp-name" class="form-control" placeholder="e.g. John Doe" required>
+            <span class="help-text">Used for fuzzy-matching. Must be distinct.</span>
+          </div>
+
+          <div class="form-group">
+            <label for="emp-designation">Designation</label>
+            <input type="text" id="emp-designation" class="form-control" placeholder="e.g. Workshop Assistant, Welder">
+            <span class="help-text">Job title (e.g. Workshop Assistant, Project Manager)</span>
+          </div>
+
+          <div class="form-group">
+            <label for="emp-mode">Mode of Work</label>
+            <input type="text" id="emp-mode" class="form-control" placeholder="e.g. Office Staff, Welders" required>
+            <span class="help-text">Job role or category (e.g. Office Staff, Welders, Daily Wages Staff)</span>
+          </div>
+
+          <div class="form-group">
+            <label for="emp-payment">Payment Mode</label>
+            <input type="text" id="emp-payment" class="form-control" placeholder="e.g. Interext, City Advertisers">
+            <span class="help-text">Payment method or agency (e.g. Interext, City Advertisers)</span>
+          </div>
+
+          <div class="form-group">
+            <label for="emp-phone">WhatsApp Phone Number (Optional)</label>
+            <input type="tel" id="emp-phone" class="form-control" placeholder="e.g. 919876543210 (country code first)">
+            <span class="help-text">Country code first, no spaces or special symbols</span>
+          </div>
+
+
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="emp-shift-start">Shift Start Time</label>
+              <input type="time" id="emp-shift-start" class="form-control">
+              <span class="help-text">e.g. 08:00</span>
+            </div>
+            <div class="form-group">
+              <label for="emp-shift-end">Shift End Time</label>
+              <input type="time" id="emp-shift-end" class="form-control">
+              <span class="help-text">e.g. 17:00</span>
+            </div>
+          </div>
+
+          <div class="form-row-3">
+            <div class="form-group">
+              <label for="emp-daily">Actual Daily Wages (₹)</label>
+              <input type="number" id="emp-daily" class="form-control" placeholder="e.g. 120" min="0" step="0.01">
+            </div>
+            <div class="form-group">
+              <label for="emp-monthly">Actual Monthly Wages (₹) - Optional</label>
+              <input type="number" id="emp-monthly" class="form-control" placeholder="e.g. 25000" min="0" step="0.01">
+            </div>
+            <div class="form-group">
+              <label for="emp-hourly">Hourly Rate (₹) - Optional</label>
+              <input type="number" id="emp-hourly" class="form-control" placeholder="e.g. 20" min="0" step="0.01">
+            </div>
+          </div>
+
+          <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="emp-std-days">Standard Working Days (per month)</label>
+              <input type="number" id="emp-std-days" class="form-control" min="1" max="31" value="30" required>
+              <span class="help-text">Standard work days in a month (e.g., 26 or 30)</span>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="emp-status">Employment Status</label>
+              <select id="emp-status" class="form-control">
+                <option value="active">Active (Marks absent when missing)</option>
+                <option value="inactive">Inactive (Suspended / Disabled)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group" style="background: rgba(255, 255, 255, 0.02); padding: 15px; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 10px; font-weight: 600; color: var(--color-primary);">Statutory Deductions Eligibility</label>
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+              <label class="checkbox-container" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
+                <input type="checkbox" id="emp-pf-enabled" checked style="accent-color: var(--color-primary); width: 16px; height: 16px;">
+                <span>Provident Fund (PF) Deduction Enabled</span>
+              </label>
+              <label class="checkbox-container" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
+                <input type="checkbox" id="emp-esic-enabled" checked style="accent-color: var(--color-primary); width: 16px; height: 16px;">
+                <span>ESIC Deduction Enabled</span>
+              </label>
+              <label class="checkbox-container" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
+                <input type="checkbox" id="emp-pt-enabled" checked style="accent-color: var(--color-primary); width: 16px; height: 16px;">
+                <span>Professional Tax (PT) Deduction Enabled</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeEmployeeModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="emp-submit-btn">Save Worker</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- POPUP MODAL: Manual Attendance Adjuster -->
+  <div class="modal" id="attendance-modal">
+    <div class="modal-content glass-card">
+      <div class="modal-header">
+        <h3>Manual Attendance Adjuster</h3>
+        <button class="btn-close" onclick="closeAttendanceModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="attendance-form" onsubmit="handleAttendanceSubmit(event)">
+          <input type="hidden" id="att-id">
+          <input type="hidden" id="att-emp-id">
+          <input type="hidden" id="att-date">
+
+          <div class="form-group">
+            <label>Worker Name</label>
+            <input type="text" id="att-emp-name" class="form-control" disabled>
+          </div>
+
+          <div class="form-group">
+            <label for="att-status">Attendance Status</label>
+            <select id="att-status" class="form-control" onchange="toggleManualTimeFields()">
+              <option value="checked-in">Checked-In (Active duty)</option>
+              <option value="completed">Completed Shift (Present)</option>
+              <option value="absent">Absent</option>
+              <option value="leave">On Leave / Excused</option>
+            </select>
+          </div>
+
+          <div class="form-group" id="att-site-group">
+            <label for="att-site">Work Site Assigned</label>
+            <select id="att-site" class="form-control">
+              <!-- Site list dynamically added -->
+            </select>
+          </div>
+
+          <div class="form-row" id="att-times-row">
+            <div class="form-group">
+              <label for="att-checkin">Check-In Time</label>
+              <input type="datetime-local" id="att-checkin" class="form-control">
+            </div>
+            <div class="form-group" id="att-checkout-group">
+              <label for="att-checkout">Check-Out Time</label>
+              <input type="datetime-local" id="att-checkout" class="form-control">
+            </div>
+          </div>
+
+          <!-- Custom Overrides Box -->
+          <div class="manual-override-box" id="att-override-box">
+            <div class="override-checkbox-container">
+              <input type="checkbox" id="att-override" onchange="toggleOverrideFields()">
+              <label for="att-override" class="text-amber"><strong>Enable Manual Hours & Wage Override</strong></label>
+            </div>
+            <p class="help-text">Check this box if you want to bypass the automated check-in/out hour calculation formulas and manually type exact payroll values.</p>
+            
+            <div class="override-fields" id="att-override-fields" style="display: none;">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="att-reg-hours">Regular Hours</label>
+                  <input type="number" id="att-reg-hours" class="form-control" min="0" max="24" step="0.01">
+                </div>
+                <div class="form-group">
+                  <label for="att-ot-hours">Overtime Hours</label>
+                  <input type="number" id="att-ot-hours" class="form-control" min="0" max="24" step="0.01">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="att-extra-hours">Extra Hours (Half-Day)</label>
+                  <input type="number" id="att-extra-hours" class="form-control" min="0" max="24" step="0.01">
+                </div>
+                <div class="form-group">
+                  <label for="att-wage">Calculated Wage (₹)</label>
+                  <input type="number" id="att-wage" class="form-control" min="0" step="0.01">
+                </div>
+              </div>
+              <div class="form-row" style="margin-top: 10px;">
+                <div class="override-checkbox-container">
+                  <input type="checkbox" id="att-is-fd">
+                  <label for="att-is-fd">Full-Day Shift Credit</label>
+                </div>
+                <div class="override-checkbox-container">
+                  <input type="checkbox" id="att-is-hd">
+                  <label for="att-is-hd">Half-Day Shift Credit</label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="att-travel-hours">Travel Hours Paid (daily)</label>
+            <input type="number" id="att-travel-hours" class="form-control" min="0" max="24" step="0.01" placeholder="0.00">
+          </div>
+
+          <div class="form-group">
+            <label for="att-notes">Administrative Notes</label>
+            <input type="text" id="att-notes" class="form-control" placeholder="Add custom comments (e.g. forgot phone)...">
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeAttendanceModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Adjustment</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- POPUP MODAL: Add/Edit Holiday -->
+  <div class="modal" id="holiday-modal">
+    <div class="modal-content glass-card">
+      <div class="modal-header">
+        <h3 id="holiday-modal-title">Add New Public Holiday</h3>
+        <button class="btn-close" onclick="closeHolidayModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="holiday-form" onsubmit="handleHolidaySubmit(event)">
+          <input type="hidden" id="holiday-original-date">
+          <div class="form-group">
+            <label for="holiday-date">Holiday Date</label>
+            <input type="date" id="holiday-date" class="form-control" required>
+          </div>
+          <div class="form-group">
+            <label for="holiday-name">Holiday Name</label>
+            <input type="text" id="holiday-name" class="form-control" placeholder="e.g. Christmas, Vishu" required>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeHolidayModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Holiday</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Selfie Lightbox Popup Modal -->
+  <div class="modal" id="selfie-modal">
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3 id="selfie-modal-title">Selfie Check-In Details</h3>
+        <button class="btn-close" onclick="closeSelfieModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="text-align: center; padding: 20px;">
+        <img id="selfie-modal-img" src="" alt="Selfie Image" style="max-width: 100%; max-height: 60vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border);">
+        <div id="selfie-modal-meta" style="margin-top: 15px; text-align: left; background: rgba(0, 0, 0, 0.25); padding: 15px; border-radius: 8px; border: 1px solid var(--glass-border); font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary);">
+          <!-- Loaded dynamically -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeSelfieModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lucide Script Boot -->
+  <script>
+    lucide.createIcons();
+  </script>
+  <!-- Frontend Controller Script -->
+  <script src="app.js"></script>
+</body>
+</html>

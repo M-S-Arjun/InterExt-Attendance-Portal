@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#ff6b00">
+  <title>On-Site Mobile Check-In Portal</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Google Fonts: Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Capacitor Native Bridge (Automatically injected inside the native mobile app WebView shell) -->
+  <script src="capacitor.js"></script>
+  <style>
+    :root {
+      --bg-dark: #09090b;
+      --bg-card: rgba(18, 18, 24, 0.7);
+      --color-primary: #ff6b00;
+      --color-primary-hover: #e05e00;
+      --color-success: #10b981;
+      --color-error: #ef4444;
+      --color-warning: #f59e0b;
+      --text-primary: #f4f4f5;
+      --text-secondary: #a1a1aa;
+      --text-tertiary: #71717a;
+      --glass-border: rgba(255, 255, 255, 0.08);
+      --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+      --border-radius: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg-dark);
+      background-image: radial-gradient(circle at 50% -20%, #1e1b18 0%, var(--bg-dark) 70%);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      overflow-x: hidden;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 450px;
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--border-radius);
+      box-shadow: var(--glass-shadow);
+      padding: 25px;
+      text-align: center;
+    }
+
+    .logo-header {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 25px;
+    }
+
+    .logo-icon {
+      background: rgba(255, 107, 0, 0.15);
+      color: var(--color-primary);
+      padding: 12px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 107, 0, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px rgba(255, 107, 0, 0.2);
+    }
+
+    .logo-header h2 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+    }
+
+    .logo-header p {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .status-alert {
+      padding: 12px 15px;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      font-weight: 500;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-align: left;
+      border: 1px solid var(--glass-border);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .status-alert.info {
+      border-color: rgba(245, 158, 11, 0.2);
+      background: rgba(245, 158, 11, 0.05);
+      color: var(--color-warning);
+    }
+
+    .status-alert.success {
+      border-color: rgba(16, 185, 129, 0.2);
+      background: rgba(16, 185, 129, 0.05);
+      color: var(--color-success);
+    }
+
+    .status-alert.error {
+      border-color: rgba(239, 68, 68, 0.2);
+      background: rgba(239, 68, 68, 0.05);
+      color: var(--color-error);
+    }
+
+    .form-group {
+      text-align: left;
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .form-control {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      padding: 12px;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 0.9rem;
+      transition: all 0.25s;
+    }
+
+    .form-control:focus {
+      outline: none;
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 2px rgba(255, 107, 0, 0.15);
+    }
+
+    .camera-container {
+      width: 100%;
+      aspect-ratio: 4/3;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px dashed var(--glass-border);
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+      cursor: pointer;
+      transition: border-color 0.25s;
+    }
+
+    .camera-container:hover {
+      border-color: var(--color-primary);
+    }
+
+    #camera-preview {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none;
+      transform: scaleX(-1);
+      -webkit-transform: scaleX(-1);
+    }
+
+    #captured-image {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none;
+    }
+
+    .camera-placeholder {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-secondary);
+    }
+
+    .camera-placeholder i {
+      color: var(--color-primary);
+    }
+
+    .btn {
+      width: 100%;
+      background: var(--color-primary);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 12px rgba(255, 107, 0, 0.2);
+    }
+
+    .btn:hover {
+      background: var(--color-primary-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn:disabled {
+      background: var(--text-tertiary);
+      color: var(--text-secondary);
+      cursor: not-allowed;
+      box-shadow: none;
+      transform: none;
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--glass-border);
+      color: var(--text-primary);
+      margin-top: 10px;
+      box-shadow: none;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    /* Invisible file input for mobile native camera hook */
+    #native-camera-input {
+      display: none;
+    }
+
+    .footer {
+      margin-top: 25px;
+      font-size: 0.75rem;
+      color: var(--text-tertiary);
+    }
+
+    /* PWA Animations & Layout Tweaks */
+    @keyframes slideUp {
+      from {
+        transform: translate(-50%, 120%);
+        opacity: 0;
+      }
+      to {
+        transform: translate(-50%, 0);
+        opacity: 1;
+      }
+    }
+
+    @keyframes slideUpModal {
+      from {
+        transform: translateY(100%);
+      }
+      to {
+        transform: translateY(0);
+      }
+    }
+
+    .animate-spin {
+      animation: spin 1.5s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="logo-header">
+      <div class="logo-icon">
+        <i data-lucide="shield-check" style="width: 28px; height: 28px;"></i>
+      </div>
+      <h2>Site Check-In Portal</h2>
+      <p>On-Site Selfie & Geolocation Verification</p>
+    </div>
+
+    <!-- Geolocation status alert banner (Tap to retry) -->
+    <div class="status-alert info" id="gps-status" onclick="requestGPS()" style="cursor: pointer;">
+      <i data-lucide="map-pin" style="width: 18px; height: 18px;"></i>
+      <span id="gps-status-text">Requesting GPS Geolocation permission... (Tap to retry)</span>
+    </div>
+
+    <form id="checkin-form" onsubmit="handleCheckin(event)">
+      <!-- Name Select -->
+      <div class="form-group">
+        <label for="worker-select">Select Your Name</label>
+        <select id="worker-select" class="form-control" required>
+          <option value="">-- Loading Active Workers --</option>
+        </select>
+      </div>
+
+      <!-- Camera Capture Area -->
+      <div class="form-group">
+        <label>Snap Selfie Photo</label>
+        <div class="camera-container" onclick="triggerCamera()" id="capture-box">
+          <video id="camera-preview" autoplay playsinline muted></video>
+          <img id="captured-image" alt="Captured Selfie">
+          <div class="camera-placeholder" id="placeholder-box">
+            <i data-lucide="camera" style="width: 48px; height: 48px;"></i>
+            <span style="font-weight: 500; font-size: 0.85rem;">Tap to Capture Live Selfie</span>
+            <span style="font-size: 0.75rem; color: var(--text-tertiary);">Opens front camera automatically</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Native camera capture helper -->
+      <input type="file" id="native-camera-input" accept="image/*" capture="user" onchange="loadCapturedPhoto(event)">
+
+      <button type="submit" class="btn" id="submit-btn" disabled>
+        <i data-lucide="log-in" style="width: 18px; height: 18px;"></i> Submit On-Site Check-In
+      </button>
+
+      <button type="button" class="btn btn-secondary" onclick="resetForm()" style="display: none;" id="reset-btn">
+        <i data-lucide="refresh-cw" style="width: 16px; height: 16px;"></i> Retake Photo
+      </button>
+    </form>
+
+    <div class="footer">
+      Powered by Antigravity Attendance Tracking System &bull; Secure GPS Geofenced
+    </div>
+  </div>
+
+  <!-- Floating PWA Install Banner -->
+  <div id="pwa-install-banner" style="display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: calc(100% - 40px); max-width: 420px; background: rgba(18, 18, 24, 0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 107, 0, 0.25); border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.5), 0 0 20px rgba(255,107,0,0.15); padding: 15px; z-index: 9999; align-items: center; gap: 15px; transition: all 0.3s ease; animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);">
+    <div style="background: rgba(255, 107, 0, 0.15); color: #ff6b00; padding: 10px; border-radius: 10px; border: 1px solid rgba(255, 107, 0, 0.3); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+      <i data-lucide="download" style="width: 24px; height: 24px;"></i>
+    </div>
+    <div style="flex-grow: 1; text-align: left;">
+      <h4 style="font-size: 0.9rem; font-weight: 700; margin-bottom: 2px; color: #f4f4f5;">Install Attendance App</h4>
+      <p style="font-size: 0.72rem; color: #a1a1aa; line-height: 1.2; margin: 0;">Access front camera and lock GPS satellite locks directly from your home screen!</p>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px; flex-shrink: 0;">
+      <button id="pwa-install-btn" style="background: #ff6b00; color: white; border: none; padding: 8px 14px; border-radius: 6px; font-size: 0.78rem; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background 0.2s;">Install</button>
+      <button onclick="dismissInstallBanner()" style="background: transparent; color: #71717a; border: none; font-size: 0.72rem; cursor: pointer; text-decoration: underline;">Later</button>
+    </div>
+  </div>
+
+  <!-- iOS PWA Install Guide Modal -->
+  <div id="ios-install-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(9, 9, 11, 0.85); backdrop-filter: blur(8px); z-index: 10000; align-items: flex-end; justify-content: center; padding: 20px;">
+    <div style="width: 100%; max-width: 420px; background: #121218; border: 1px solid rgba(255,255,255,0.08); border-bottom: none; border-radius: 20px 20px 0 0; box-shadow: 0 -10px 40px rgba(0,0,0,0.5); padding: 25px; text-align: center; animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1); color: #f4f4f5; border-radius: 16px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <h3 style="font-size: 1.1rem; font-weight: 700; margin: 0; color: #f4f4f5;">Install Attendance App</h3>
+        <button onclick="closeIosInstallModal()" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); width: 28px; height: 28px; border-radius: 50%; color: #a1a1aa; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1.2rem;">&times;</button>
+      </div>
+      
+      <div style="background: rgba(255,107,0,0.1); border: 1px solid rgba(255,107,0,0.2); border-radius: 12px; padding: 15px; margin-bottom: 20px; display: flex; gap: 12px; align-items: center; text-align: left;">
+        <img src="/icon-192.png" style="width: 48px; height: 48px; border-radius: 12px; object-fit: cover;" alt="Logo">
+        <div>
+          <h4 style="font-size: 0.9rem; font-weight: 600; color: #ff6b00; margin: 0 0 2px 0;">Attendance Tracker</h4>
+          <p style="font-size: 0.75rem; color: #a1a1aa; margin: 0; line-height: 1.2;">Pin this to your iPhone home screen to use it as a native standalone app.</p>
+        </div>
+      </div>
+
+      <div style="text-align: left; display: flex; flex-direction: column; gap: 15px; margin-bottom: 25px;">
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <span style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; font-size: 0.8rem; font-weight: 600; color: #ff6b00; flex-shrink: 0;">1</span>
+          <p style="font-size: 0.82rem; color: #d4d4d8; margin: 0; line-height: 1.3;">Tap the **Share** button <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ff6b00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin: 0 2px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M12 2v9M8 5l4-4 4 4"></path></svg> at the bottom of Safari.</p>
+        </div>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <span style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; font-size: 0.8rem; font-weight: 600; color: #ff6b00; flex-shrink: 0;">2</span>
+          <p style="font-size: 0.82rem; color: #d4d4d8; margin: 0; line-height: 1.3;">Scroll down and select **Add to Home Screen** <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a1a1aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin: 0 2px;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>.</p>
+        </div>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <span style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 50%; font-size: 0.8rem; font-weight: 600; color: #ff6b00; flex-shrink: 0;">3</span>
+          <p style="font-size: 0.82rem; color: #d4d4d8; margin: 0; line-height: 1.3;">Tap **Add** in the top-right corner of your screen!</p>
+        </div>
+      </div>
+
+      <button onclick="closeIosInstallModal()" style="width: 100%; background: #ff6b00; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.9rem; transition: background 0.2s;">Got It</button>
+    </div>
+  </div>
+
+  <script>
+    // App State Variables
+    let latitude = null;
+    let longitude = null;
+    let gpsAccuracy = null;
+    let gpsWatchId = null;
+    let base64Photo = null;
+    let videoStream = null;
+    let isWebcamActive = false;
+
+    // Load Lucide Icons
+    lucide.createIcons();
+
+    // 1. Fetch Geolocation Natively via HTML5 API immediately on load
+    document.addEventListener('DOMContentLoaded', () => {
+      requestGPS();
+      loadActiveWorkers();
+      startWebcam();
+
+      // Register Service Worker for PWA Standalone App Install
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js')
+          .then(reg => console.log('[PWA] Service Worker registered scope:', reg.scope))
+          .catch(err => console.warn('[PWA] Service Worker registration failed:', err));
+      }
+
+      // Check for iOS Safari Install Promo
+      setTimeout(checkIosInstallPrompt, 1500); // 1.5 seconds delay for premium UX
+    });
+
+    async function startWebcam() {
+      const video = document.getElementById('camera-preview');
+      const placeholder = document.getElementById('placeholder-box');
+      const img = document.getElementById('captured-image');
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        console.log("HTML5 getUserMedia not supported. Using native file picker fallback.");
+        isWebcamActive = false;
+        return;
+      }
+
+      try {
+        if (videoStream) {
+          stopWebcam();
+        }
+
+        // Request front facing camera natively
+        videoStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false
+        });
+
+        video.srcObject = videoStream;
+        video.style.display = 'block';
+        placeholder.style.display = 'none';
+        img.style.display = 'none';
+        isWebcamActive = true;
+        
+        console.log("Webcam stream started successfully!");
+      } catch (err) {
+        console.warn("Webcam access failed or denied. Using native file picker fallback:", err.message);
+        video.style.display = 'none';
+        placeholder.style.display = 'flex';
+        img.style.display = 'none';
+        isWebcamActive = false;
+      }
+    }
+
+    function stopWebcam() {
+      if (videoStream) {
+        videoStream.getTracks().forEach(track => track.stop());
+        videoStream = null;
+      }
+      isWebcamActive = false;
+    }
+
+    function snapPhoto() {
+      const video = document.getElementById('camera-preview');
+      const img = document.getElementById('captured-image');
+      
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      
+      const ctx = canvas.getContext('2d');
+      
+      // Mirror the captured image so it matches the mirrored preview
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+      
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      base64Photo = canvas.toDataURL('image/jpeg', 0.9);
+      
+      img.src = base64Photo;
+      img.style.display = 'block';
+      video.style.display = 'none';
+      
+      stopWebcam();
+      
+      document.getElementById('reset-btn').style.display = 'flex';
+      enableSubmitIfReady();
+    }
+
+    async function requestGPS() {
+      const gpsBanner = document.getElementById('gps-status');
+      const gpsText = document.getElementById('gps-status-text');
+
+      const isCapacitor = typeof window.Capacitor !== 'undefined' && window.Capacitor !== null;
+
+      // Clear any active watches first
+      if (gpsWatchId !== null) {
+        if (isCapacitor) {
+          try {
+            await Capacitor.Plugins.Geolocation.clearWatch({ id: gpsWatchId });
+          } catch (e) {
+            console.warn("Failed to clear Capacitor watch:", e.message);
+          }
+        } else {
+          navigator.geolocation.clearWatch(gpsWatchId);
+        }
+        gpsWatchId = null;
+      }
+
+      gpsBanner.className = 'status-alert info';
+      gpsText.innerHTML = `<i data-lucide="loader" class="animate-spin" style="display:inline-block; width:14px; height:14px; vertical-align:middle; margin-right:5px;"></i> Connecting to GPS satellites... Waking up sensor.`;
+      lucide.createIcons();
+
+      // TRIPLE-FALLBACK SELF-HEALING GPS ENGINE
+      if (isCapacitor) {
+        console.log("[GPS Engine] Running inside Native App wrapper. Activating Capacitor Geolocation...");
+        const { Geolocation } = Capacitor.Plugins;
+
+        try {
+          // 1. Explicitly request native OS permissions on boot
+          await Geolocation.requestPermissions();
+
+          // 2. Try High Accuracy watch first
+          await startNativeGPSWatch(true);
+        } catch (e) {
+          console.warn("[GPS Engine] Native Geolocation permission request failed. Falling back...", e);
+          // Fallback immediately to standard HTML5 browser geolocation inside WebView
+          startBrowserGPSWatch();
+        }
+
+        async function startNativeGPSWatch(highAccuracy) {
+          console.log(`[GPS Engine] Starting Native Watch. High Accuracy: ${highAccuracy}`);
+          try {
+            gpsWatchId = await Geolocation.watchPosition(
+              { enableHighAccuracy: highAccuracy, timeout: 20000, maximumAge: 0 },
+              (position, err) => {
+                if (err) {
+                  console.error(`[GPS Engine] Native GPS Error (HighAccuracy=${highAccuracy}):`, err);
+                  
+                  // If high accuracy failed and we haven't tried coarse yet, fall back to coarse!
+                  if (highAccuracy) {
+                    console.log("[GPS Engine] Retrying with enableHighAccuracy = false (Network/Coarse)...");
+                    startNativeGPSWatch(false);
+                  } else {
+                    // Both high and coarse native failed! Fall back to browser Geolocation
+                    console.log("[GPS Engine] Both native modes failed. Falling back to WebView browser GPS...");
+                    startBrowserGPSWatch();
+                  }
+                  return;
+                }
+
+                if (position && position.coords) {
+                  updateGPSCoordinates(position.coords.latitude, position.coords.longitude, position.coords.accuracy);
+                }
+              }
+            );
+          } catch (watchErr) {
+            console.error("[GPS Engine] Native watchPosition crashed. Falling back to browser...", watchErr);
+            startBrowserGPSWatch();
+          }
+        }
+      } else {
+        // Run standard browser GPS directly on PC/Desktop
+        startBrowserGPSWatch();
+      }
+
+      function startBrowserGPSWatch() {
+        console.log("[GPS Engine] Running Browser GPS watch...");
+        if (!navigator.geolocation) {
+          gpsBanner.className = 'status-alert error';
+          gpsText.textContent = "GPS Geolocation is not supported by your browser.";
+          return;
+        }
+
+        gpsWatchId = navigator.geolocation.watchPosition(
+          (position) => {
+            updateGPSCoordinates(position.coords.latitude, position.coords.longitude, position.coords.accuracy);
+          },
+          (error) => {
+            console.error("[GPS Engine] Browser GPS error:", error);
+            
+            gpsBanner.className = 'status-alert error';
+            let msg = "GPS Location unavailable. Please ensure location services (GPS toggle) are enabled on your phone and step outside.";
+            if (error.code === error.PERMISSION_DENIED) {
+              msg = "GPS Permission denied inside phone WebView. Please enable Location in App Settings.";
+            } else if (error.code === error.POSITION_UNAVAILABLE) {
+              msg = "GPS signal unavailable. Please turn on your device GPS/Location toggle!";
+            } else if (error.code === error.TIMEOUT) {
+              msg = "GPS signal weak (Search timed out). Retrying connection...";
+            }
+            gpsText.textContent = msg;
+            enableSubmitIfReady();
+          },
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
+      }
+
+      function updateGPSCoordinates(lat, lon, accuracy) {
+        latitude = lat;
+        longitude = lon;
+        gpsAccuracy = accuracy;
+
+        console.log(`[GPS Engine] Position updated: Lat: ${lat}, Lon: ${lon}, Accuracy: ${accuracy}m`);
+
+        if (accuracy > 150) {
+          gpsBanner.className = 'status-alert info';
+          gpsBanner.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+          gpsBanner.style.background = 'rgba(245, 158, 11, 0.1)';
+          gpsBanner.style.color = 'var(--color-warning)';
+          gpsText.innerHTML = `<i data-lucide="loader" class="animate-spin" style="display:inline-block; width:14px; height:14px; vertical-align:middle; margin-right:5px;"></i> GPS signal weak. Accuracy: <strong>${Math.round(accuracy)} meters</strong> (Waiting for <= 150m)...`;
+          lucide.createIcons();
+        } else {
+          gpsBanner.className = 'status-alert success';
+          gpsBanner.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+          gpsBanner.style.background = 'rgba(16, 185, 129, 0.1)';
+          gpsBanner.style.color = 'var(--color-success)';
+          gpsText.innerHTML = `<i data-lucide="check-circle" style="display:inline-block; width:14px; height:14px; vertical-align:middle; margin-right:5px;"></i> GPS Locked! Accuracy: <strong>${Math.round(accuracy)} meters</strong> (${lat.toFixed(5)}, ${lon.toFixed(5)})`;
+          lucide.createIcons();
+        }
+        enableSubmitIfReady();
+      }
+    }
+
+    // 2. Fetch Active Employees from API to populate dropdown
+    async function loadActiveWorkers() {
+      const select = document.getElementById('worker-select');
+      try {
+        const employees = await fetch('/api/employees').then(r => r.json());
+        select.innerHTML = '<option value="">-- Choose Your Name --</option>';
+        
+        // Filter active only and sort alphabetically
+        const active = employees
+          .filter(e => e.status === 'active')
+          .sort((a, b) => a.name.localeCompare(b.name));
+          
+        active.forEach(emp => {
+          const opt = document.createElement('option');
+          opt.value = emp.id;
+          opt.textContent = `${emp.name} (ID: ${emp.userId || emp.id})`;
+          select.appendChild(opt);
+        });
+      } catch (err) {
+        console.error("Failed to load workers:", err);
+        select.innerHTML = '<option value="">Error loading employee directory</option>';
+      }
+    }
+
+    // 3. Camera triggers hidden file input with user capture flag (opens native mobile selfie camera)
+    function triggerCamera() {
+      if (isWebcamActive && videoStream) {
+        snapPhoto();
+      } else {
+        document.getElementById('native-camera-input').click();
+      }
+    }
+
+    function loadCapturedPhoto(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        base64Photo = e.target.result;
+        
+        // Render captured image in camera container
+        const img = document.getElementById('captured-image');
+        const placeholder = document.getElementById('placeholder-box');
+        const video = document.getElementById('camera-preview');
+        
+        img.src = base64Photo;
+        img.style.display = 'block';
+        placeholder.style.display = 'none';
+        video.style.display = 'none';
+        
+        document.getElementById('reset-btn').style.display = 'flex';
+        enableSubmitIfReady();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function resetForm() {
+      base64Photo = null;
+      document.getElementById('captured-image').style.display = 'none';
+      document.getElementById('native-camera-input').value = '';
+      document.getElementById('reset-btn').style.display = 'none';
+      
+      startWebcam().then(() => {
+        if (!isWebcamActive) {
+          document.getElementById('placeholder-box').style.display = 'flex';
+        }
+      });
+      
+      enableSubmitIfReady();
+    }
+
+    function enableSubmitIfReady() {
+      const submitBtn = document.getElementById('submit-btn');
+      const isReady = (latitude !== null && longitude !== null && gpsAccuracy !== null && gpsAccuracy <= 150 && base64Photo !== null);
+      submitBtn.disabled = !isReady;
+    }
+
+    // 4. Submit form payload to /api/checkin/web
+    async function handleCheckin(event) {
+      event.preventDefault();
+      
+      const empId = document.getElementById('worker-select').value;
+      if (!empId) {
+        alert("Please select your name first!");
+        return;
+      }
+
+      if (latitude === null || longitude === null) {
+        alert("GPS Location is required! Please refresh and allow location permissions.");
+        return;
+      }
+
+      if (!base64Photo) {
+        alert("Please snap a selfie first!");
+        return;
+      }
+
+      const submitBtn = document.getElementById('submit-btn');
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<i data-lucide="loader" class="animate-spin" style="width:18px; height:18px;"></i> Submitting...';
+      lucide.createIcons();
+
+      try {
+        const payload = {
+          employeeId: empId,
+          base64Data: base64Photo.split(',')[1], // strip data URL prefix
+          latitude: Number(latitude),
+          longitude: Number(longitude),
+          mimetype: base64Photo.split(';')[0].split(':')[1] || 'image/jpeg'
+        };
+
+        const res = await fetch('/api/checkin/web', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || "Check-in failed");
+        }
+
+        const data = await res.json();
+        
+        // Show stunning success alert
+        alert(`Check-in Successful!\n\nName: ${data.employeeName}\nSite: ${data.siteName}\nStatus: ${data.status.replace('_', ' ').toUpperCase()}`);
+        
+        // Clear photo, keep select/location or reset completely
+        resetForm();
+      } catch (err) {
+        console.error("Submission error:", err);
+        alert(`Check-in Failed: ${err.message}`);
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i data-lucide="log-in" style="width: 18px; height: 18px;"></i> Submit On-Site Check-In';
+        lucide.createIcons();
+      }
+    }
+
+    // --- Progressive Web App (PWA) Smart Install Prompt Controllers ---
+    let deferredPrompt = null;
+
+    // Listen to native browser PWA install event (Android/Chrome/Edge)
+    window.addEventListener('beforeinstallprompt', (e) => {
+      // Prevent standard browser bottom mini-infobar from interrupting UX
+      e.preventDefault();
+      deferredPrompt = e;
+      
+      // Only display the banner if the user isn't already inside the standalone app shell
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+      const dismissed = localStorage.getItem('pwa_banner_dismissed') === 'true';
+      
+      if (!isStandalone && !dismissed) {
+        const installBanner = document.getElementById('pwa-install-banner');
+        if (installBanner) {
+          installBanner.style.display = 'flex';
+          lucide.createIcons();
+        }
+      }
+    });
+
+    // Wire Android PWA one-click install button trigger
+    document.getElementById('pwa-install-btn')?.addEventListener('click', async () => {
+      if (!deferredPrompt) return;
+      
+      // Trigger the native chrome installation prompt
+      deferredPrompt.prompt();
+      
+      const { outcome } = await deferredPrompt.userChoice;
+      console.log(`[PWA] Installation prompt selection outcome: ${outcome}`);
+      
+      deferredPrompt = null;
+      document.getElementById('pwa-install-banner').style.display = 'none';
+    });
+
+    function dismissInstallBanner() {
+      document.getElementById('pwa-install-banner').style.display = 'none';
+      // Mark as dismissed for this browser session to respect employee preference
+      localStorage.setItem('pwa_banner_dismissed', 'true');
+    }
+
+    // iOS Safari Add-to-Home-Screen detection overlay helper
+    function checkIosInstallPrompt() {
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+      const dismissed = localStorage.getItem('ios_guide_dismissed') === 'true';
+
+      if (isIOS && !isStandalone && !dismissed) {
+        const installBanner = document.getElementById('pwa-install-banner');
+        if (installBanner) {
+          installBanner.style.display = 'flex';
+          
+          // Modify prompt elements specifically for iOS Safari context
+          const p = installBanner.querySelector('p');
+          if (p) p.textContent = 'Add this app to your iPhone home screen for fullscreen camera & satellite GPS!';
+          
+          const btn = document.getElementById('pwa-install-btn');
+          if (btn) {
+            btn.textContent = 'Install App';
+            btn.onclick = (e) => {
+              e.preventDefault();
+              showIosInstallModal();
+            };
+          }
+          lucide.createIcons();
+        }
+      }
+    }
+
+    function showIosInstallModal() {
+      document.getElementById('pwa-install-banner').style.display = 'none';
+      const iosModal = document.getElementById('ios-install-modal');
+      if (iosModal) {
+        iosModal.style.display = 'flex';
+        lucide.createIcons();
+      }
+    }
+
+    function closeIosInstallModal() {
+      document.getElementById('ios-install-modal').style.display = 'none';
+      // Mark dismissed to avoid blocking active worker check-ins
+      localStorage.setItem('ios_guide_dismissed', 'true');
+    }
+  </script>
+</body>
+</html>

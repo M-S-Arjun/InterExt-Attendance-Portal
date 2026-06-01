@@ -1,0 +1,22 @@
+# Dependency directories
+node_modules/
+
+# WhatsApp session and browser caches (CRITICAL SECURITY)
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Backups
+backups/
+
+# Output and build packages
+dist/
+mobile_dist/
+android/
+ios/
+
+# Temporary and log files
+*.log
+*.tmp
+.env
+Attendance_Payroll.xlsx.tmp
+data.json.tmp

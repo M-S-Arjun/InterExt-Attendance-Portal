@@ -1,0 +1,42 @@
+{
+  "name": "whatsapp-attendance-tracking",
+  "version": "1.0.0",
+  "description": "WhatsApp Group Message Attendance and Payroll Tracker for On-Site Daily Wage Workers",
+  "main": "main.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "app:run": "electron .",
+    "app:package": "electron-packager . \"Antigravity Attendance System\" --platform=win32 --arch=x64 --out=dist --overwrite --ignore=\"/\\.wwebjs_auth\" --ignore=\"/\\.wwebjs_cache\" --ignore=\"/dist\" --ignore=\"/backups\""
+  },
+  "keywords": [
+    "whatsapp",
+    "attendance",
+    "payroll",
+    "daily-wage",
+    "automation"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4",
+    "@capacitor/geolocation": "^8.2.0",
+    "@capacitor/ios": "^8.3.4",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "exif-parser": "^0.1.12",
+    "express": "^4.19.2",
+    "heic-convert": "^2.1.0",
+    "qrcode": "^1.5.3",
+    "socket.io": "^4.7.5",
+    "tesseract.js": "^7.0.0",
+    "whatsapp-web.js": "^1.26.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron": "^42.3.0",
+    "electron-packager": "^17.1.2"
+  }
+}

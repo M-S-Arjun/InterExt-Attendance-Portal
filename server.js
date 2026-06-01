@@ -1,0 +1,1105 @@
+require('dotenv').config();
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+// Synchonous process cleanup for production-grade reliability
+try {
+  if (process.platform === 'win32') {
+    console.log("[Process Cleanup] Scanning and terminating orphan Chrome processes...");
+    const psCommand = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"name = 'chrome.exe'\\" | ForEach-Object { if ($_.CommandLine -like '*wwebjs_auth*' -or $_.CommandLine -like '*puppeteer*') { Stop-Process -Id $_.ProcessId -Force } }"`;
+    execSync(psCommand, { stdio: 'ignore' });
+    console.log("[Process Cleanup] Completed scanning and terminating orphan Chrome processes.");
+  }
+} catch (err) {
+  console.warn("[Process Cleanup] Warning: Could not execute Chrome cleanup on boot:", err.message);
+}
+
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const XLSX = require('xlsx');
+const database = require('./database');
+const whatsapp = require('./whatsapp');
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Enable permissive CORS for mobile Capacitor origins (capacitor://localhost or http://localhost)
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+// --- Express REST API Routes ---
+
+// WhatsApp Connection Status
+app.get('/api/status', (req, res) => {
+  res.json({
+    status: whatsapp.status,
+    qr: whatsapp.qrCodeDataUrl,
+    activeChats: whatsapp.activeChats
+  });
+});
+
+// System General Analytics
+app.get('/api/stats', (req, res) => {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const employees = database.getEmployees();
+  const activeEmpCount = employees.filter(e => e.status === 'active').length;
+  const attendanceToday = database.getAttendanceForDate(todayStr);
+  
+  const presentCount = attendanceToday.filter(a => a.status === 'checked-in' || a.status === 'completed').length;
+  const absentCount = attendanceToday.filter(a => a.status === 'absent').length;
+  const pendingCount = database.getPendingMessages().length;
+
+  res.json({
+    totalEmployees: activeEmpCount,
+    presentToday: presentCount,
+    absentToday: absentCount,
+    pendingExceptions: pendingCount
+  });
+});
+
+// Force Refresh Active Groups
+app.post('/api/chats/refresh', async (req, res) => {
+  const chats = await whatsapp.refreshChats();
+  res.json(chats);
+});
+
+// Trigger a WhatsApp client reconnect (logout + reinitialize)
+app.post('/api/whatsapp/reconnect', async (req, res) => {
+  try {
+    console.log('[API] Received request to reconnect WhatsApp client...');
+    // Attempt a graceful logout first
+    try {
+      await whatsapp.logout();
+      console.log('[API] WhatsApp client logged out successfully.');
+    } catch (e) {
+      console.warn('[API] WhatsApp logout attempt failed (continuing):', e.message);
+    }
+
+    // Reinitialize after short delay to allow resources to free
+    setTimeout(() => {
+      try {
+        whatsapp.initialize();
+        console.log('[API] WhatsApp reinitialization triggered.');
+      } catch (e) {
+        console.error('[API] Failed to reinitialize WhatsApp client:', e.message);
+      }
+    }, 1000);
+
+    res.json({ ok: true, message: 'Reconnection attempt started' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Settings CRUD
+app.get('/api/settings', (req, res) => {
+  res.json(database.getSettings());
+});
+
+app.post('/api/settings', (req, res) => {
+  const settings = database.saveSettings(req.body);
+  res.json(settings);
+});
+
+// Employees CRUD
+app.get('/api/employees', (req, res) => {
+  res.json(database.getEmployees());
+});
+
+app.post('/api/employees', (req, res) => {
+  try {
+    const emp = database.saveEmployee(req.body);
+    res.json(emp);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/employees/:id', (req, res) => {
+  database.deleteEmployee(req.params.id);
+  res.json({ success: true });
+});
+
+// Sites CRUD
+app.get('/api/sites', (req, res) => {
+  res.json(database.getSites());
+});
+
+app.post('/api/sites', (req, res) => {
+  try {
+    const site = database.saveSite(req.body);
+    res.json(site);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/sites/:id', (req, res) => {
+  database.deleteSite(req.params.id);
+  res.json({ success: true });
+});
+
+// Holidays CRUD
+app.get('/api/holidays', (req, res) => {
+  res.json(database.getHolidays());
+});
+
+app.post('/api/holidays', (req, res) => {
+  try {
+    const holiday = database.saveHoliday(req.body);
+    res.json(holiday);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/holidays/:date', (req, res) => {
+  try {
+    database.deleteHoliday(req.params.date);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Attendance Management
+app.get('/api/attendance', (req, res) => {
+  const { date, startDate, endDate } = req.query;
+  
+  if (startDate && endDate) {
+    return res.json(database.getAttendanceForRange(startDate, endDate));
+  }
+  
+  const targetDate = date || new Date().toISOString().split('T')[0];
+  res.json(database.getAttendanceForDate(targetDate));
+});
+
+// Save or manual edit attendance log
+app.post('/api/attendance/save', (req, res) => {
+  try {
+    const record = database.saveAttendance(req.body);
+    io.emit('attendance_updated', record);
+    res.json(record);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Resolve Exception Board (Unparsed Message)
+app.get('/api/pending', (req, res) => {
+  res.json(database.getPendingMessages());
+});
+
+app.post('/api/pending/resolve', (req, res) => {
+  try {
+    const { messageId, employeeId, employeeName, siteId, siteName, action, time, date } = req.body;
+
+    const db = database.read();
+    let emp = employeeId ? db.employees.find(e => e.id === employeeId) : null;
+    const normalizedEmployeeName = employeeName ? employeeName.trim() : "";
+    const normalizedSiteName = siteName ? siteName.trim() : "";
+
+    if (!emp && normalizedEmployeeName) {
+      emp = db.employees.find(e => e.name.toLowerCase() === normalizedEmployeeName.toLowerCase());
+    }
+
+    if (!emp && normalizedEmployeeName) {
+      // Auto-register new custom worker if not found
+      const defaultSiteId = siteId || (db.sites[0] ? db.sites[0].id : null);
+      emp = database.saveEmployee({
+        name: normalizedEmployeeName,
+        phone: "",
+        status: "active",
+        dailyRate: 120,
+        hourlyRate: 20,
+        siteId: defaultSiteId || "site_a"
+      });
+    }
+
+    let site = siteId ? db.sites.find(s => s.id === siteId) : null;
+    if (!site && normalizedSiteName) {
+      site = db.sites.find(s => s.name.toLowerCase() === normalizedSiteName.toLowerCase());
+    }
+    if (!site && normalizedSiteName) {
+      site = database.saveSite({
+        name: normalizedSiteName,
+        description: "Custom site created via exception resolver"
+      });
+    }
+
+    const pendingMsg = db.pending_messages.find(m => m.id === messageId);
+    if (!emp) return res.status(400).json({ error: "Employee name is required." });
+
+    const targetSiteName = site ? site.name : (normalizedSiteName || "Main Site");
+    const targetDate = date || new Date().toISOString().split('T')[0];
+    const timestamp = time ? new Date(`${targetDate}T${time}`).toISOString() : new Date().toISOString();
+
+    let record = {};
+    const existingIndex = db.attendance.findIndex(a => a.employeeId === emp.id && a.date === targetDate);
+
+    if (action === 'in') {
+      record = {
+        employeeId: emp.id,
+        employeeName: emp.name,
+        siteName: targetSiteName,
+        date: targetDate,
+        checkIn: timestamp,
+        checkOut: null,
+        messageText: pendingMsg ? `[RESOLVED] ${pendingMsg.messageText}` : "Manual check-in",
+        status: "checked-in"
+      };
+    } else {
+      if (existingIndex >= 0) {
+        record = db.attendance[existingIndex];
+        record.checkOut = timestamp;
+        record.messageText += pendingMsg ? ` | [RESOLVED] ${pendingMsg.messageText}` : " | Manual check-out";
+      } else {
+        const defaultCheckIn = new Date(`${targetDate}T08:00:00`).toISOString();
+        record = {
+          employeeId: emp.id,
+          employeeName: emp.name,
+          siteName: targetSiteName,
+          date: targetDate,
+          checkIn: defaultCheckIn,
+          checkOut: timestamp,
+          messageText: pendingMsg ? `[RESOLVED OUT ONLY] ${pendingMsg.messageText}` : "Manual out-only",
+          status: "completed"
+        };
+      }
+    }
+
+    const saved = database.saveAttendance(record);
+    database.deletePendingMessage(messageId);
+
+    io.emit('attendance_updated', saved);
+    io.emit('pending_updated');
+
+    res.json({ success: true, record: saved });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/pending/:id', (req, res) => {
+  database.deletePendingMessage(req.params.id);
+  io.emit('pending_updated');
+  res.json({ success: true });
+});
+
+// --- Selfie Verification Board APIs ---
+app.get('/api/selfies', (req, res) => {
+  if (!database.read().selfies) {
+    return res.json([]);
+  }
+  res.json(database.getSelfies().sort((a, b) => b.timestamp.localeCompare(a.timestamp)));
+});
+
+app.post('/api/selfies/verify', (req, res) => {
+  try {
+    const { id, adminNotes } = req.body;
+    const db = database.read();
+    if (!db.selfies) db.selfies = [];
+    
+    const selfie = db.selfies.find(s => s.id === id);
+    if (!selfie) {
+      return res.status(404).json({ error: "Selfie record not found" });
+    }
+    
+    selfie.status = 'verified';
+    if (adminNotes !== undefined) selfie.adminNotes = adminNotes;
+    database.writeAtomic(db);
+    
+    // Also trigger attendance check-in update if matched worker exists!
+    const emp = db.employees.find(e => e.id === selfie.employeeId);
+    if (emp) {
+      const parserObj = require('./parser');
+      const mockResult = {
+        isSuccess: true,
+        isList: false,
+        extractedName: emp.name,
+        extractedSite: selfie.siteName || emp.siteId || "Main Site",
+        extractedAction: "in",
+        matchedEmployee: emp
+      };
+      
+      const loggedRecord = database.recordFromWhatsApp(mockResult, `Selfie manually verified by Admin: ${adminNotes || ''}`);
+      io.emit('attendance_updated', loggedRecord);
+    }
+    
+    io.emit('selfie_updated', selfie);
+    res.json(selfie);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/selfies/reject', (req, res) => {
+  try {
+    const { id, adminNotes } = req.body;
+    const db = database.read();
+    if (!db.selfies) db.selfies = [];
+    
+    const selfie = db.selfies.find(s => s.id === id);
+    if (!selfie) {
+      return res.status(404).json({ error: "Selfie record not found" });
+    }
+    
+    selfie.status = 'rejected';
+    if (adminNotes !== undefined) selfie.adminNotes = adminNotes;
+    database.writeAtomic(db);
+    
+    // If rejected, update associated attendance notes if exists
+    const emp = db.employees.find(e => e.id === selfie.employeeId);
+    if (emp) {
+      const targetDate = selfie.timestamp.split('T')[0];
+      const recIndex = db.attendance.findIndex(a => a.employeeId === emp.id && a.date === targetDate);
+      if (recIndex >= 0) {
+        db.attendance[recIndex].notes = `[REJECTED SELFIE] ${adminNotes || 'Location invalid'}`;
+        database.writeAtomic(db);
+        database.syncToExcel();
+        io.emit('attendance_updated', db.attendance[recIndex]);
+      }
+    }
+    
+    io.emit('selfie_updated', selfie);
+    res.json(selfie);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- On-Site Mobile Web Check-In Portal Routes ---
+app.get('/checkin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'checkin.html'));
+});
+
+app.post('/api/checkin/web', async (req, res) => {
+  try {
+    const { employeeId, base64Data, latitude, longitude, mimetype } = req.body;
+    
+    if (!employeeId || !base64Data || !latitude || !longitude) {
+      return res.status(400).json({ error: "Missing required check-in fields." });
+    }
+    
+    const db = database.read();
+    
+    // Find matched Employee
+    const emp = db.employees.find(e => e.id === employeeId);
+    if (!emp) {
+      return res.status(404).json({ error: "Employee record not found" });
+    }
+    
+    let buffer = Buffer.from(base64Data, 'base64');
+    let ext = mimetype.split('/')[1] || 'jpg';
+    if (ext.includes(';')) ext = ext.split(';')[0];
+    
+    let activeMime = mimetype;
+    if (mimetype.toLowerCase().includes('heic') || mimetype.toLowerCase().includes('heif') || ext.toLowerCase() === 'heic' || ext.toLowerCase() === 'heif') {
+      try {
+        console.log(`[Web Check-In] HEIC image detected. Converting to JPEG on-the-fly...`);
+        const heicConvert = require('heic-convert');
+        const jpegBuffer = await heicConvert({
+          buffer: buffer,
+          format: 'JPEG',
+          quality: 0.8
+        });
+        buffer = jpegBuffer;
+        ext = 'jpeg';
+        activeMime = 'image/jpeg';
+        console.log(`[Web Check-In] HEIC image successfully converted to JPEG.`);
+      } catch (convErr) {
+        console.error(`[Web Check-In] Failed to convert HEIC to JPEG:`, convErr.message);
+      }
+    }
+    
+    // 1. Save image to static folder
+    const selfieDir = path.join(__dirname, 'public', 'uploads', 'selfies');
+    if (!fs.existsSync(selfieDir)) {
+      fs.mkdirSync(selfieDir, { recursive: true });
+    }
+    
+    const filename = `web_${employeeId}_${Date.now()}.${ext}`;
+    const filepath = path.join(selfieDir, filename);
+    fs.writeFileSync(filepath, buffer);
+    const imageUrl = `/uploads/selfies/${filename}`;
+    
+    // 2. Parse EXIF data from uploaded Base64 photo to extract actual capture time!
+    let exifGPS = null;
+    let exifDateTime = null;
+    
+    try {
+      const ExifParser = require('exif-parser');
+      const parser = ExifParser.create(buffer);
+      const result = parser.parse();
+      const tags = result.tags;
+      
+      if (tags) {
+        if (tags.GPSLatitude !== undefined && tags.GPSLongitude !== undefined) {
+          exifGPS = {
+            latitude: Number(tags.GPSLatitude),
+            longitude: Number(tags.GPSLongitude)
+          };
+        }
+        
+        let dateSecs = tags.DateTimeOriginal || tags.ModifyDate || tags.CreateDate;
+        if (dateSecs) {
+          const utcDate = new Date(dateSecs * 1000);
+          const year = utcDate.getUTCFullYear();
+          const month = utcDate.getUTCMonth();
+          const date = utcDate.getUTCDate();
+          const hours = utcDate.getUTCHours();
+          const minutes = utcDate.getUTCMinutes();
+          const seconds = utcDate.getUTCSeconds();
+          
+          const localDate = new Date(year, month, date, hours, minutes, seconds);
+          exifDateTime = localDate.toISOString();
+        }
+      }
+    } catch (e) {
+      console.warn("[Web Check-In] EXIF metadata extraction failed:", e.message);
+    }
+    
+    // 3. Geofence matching (using the browser's hardware GPS, which is highly accurate)
+    let siteName = "—";
+    let siteId = "";
+    let distance = null;
+    let closestSite = null;
+    
+    if (db.sites && db.sites.length > 0) {
+      let minDistance = Infinity;
+      
+      db.sites.forEach(site => {
+        if (site.latitude && site.longitude) {
+          const dist = database.getHaversineDistance(latitude, longitude, site.latitude, site.longitude);
+          if (dist < minDistance) {
+            minDistance = dist;
+            closestSite = site;
+          }
+        }
+      });
+      
+      if (closestSite) {
+        distance = minDistance;
+        if (minDistance <= 200) {
+          siteId = closestSite.id;
+          siteName = closestSite.name;
+        }
+      }
+    }
+    
+    // 4. Time offset (anti-spoofing) checking
+    const receivedTime = new Date();
+    let timeDiffMinutes = 0;
+    
+    if (exifDateTime) {
+      const photoTime = new Date(exifDateTime);
+      timeDiffMinutes = Number((Math.abs(receivedTime - photoTime) / 60000).toFixed(1));
+    }
+    
+    // 5. Evaluate Status
+    let status = "flagged_location";
+    let isWithinBounds = distance !== null && distance <= 200;
+    
+    // Time check: if EXIF datetime is present, gap must be <= 15 minutes!
+    let isRealTime = exifDateTime ? timeDiffMinutes <= 15 : true;
+    
+    // Anti-Spoofing GPS Verification: If photo has EXIF GPS, compare it to the browser's GPS!
+    let isGpsSpoofed = false;
+    if (exifGPS) {
+      const gpsMismatchDist = database.getHaversineDistance(latitude, longitude, exifGPS.latitude, exifGPS.longitude);
+      if (gpsMismatchDist > 150) { // More than 150 meters mismatch between photo capture and submission!
+        isGpsSpoofed = true;
+      }
+    }
+    
+    if (!isWithinBounds) {
+      status = "flagged_location";
+    } else if (!isRealTime) {
+      status = "flagged_time";
+    } else if (isGpsSpoofed) {
+      status = "flagged_location"; // Spoofed GPS location!
+    } else {
+      status = "verified";
+    }
+    
+    let adminNotes = `Checked in via Mobile Web Portal. GPS verified (${Math.round(distance || 0)}m distance).`;
+    if (!isWithinBounds) {
+      adminNotes = `[FLAGGED LOCATION] Off-Site Check-In! Closest registered site is ${closestSite ? closestSite.name : 'none'} (${Math.round(distance || 0)}m away).`;
+    } else if (isGpsSpoofed) {
+      adminNotes = `[SPOOFING SUSPECTED] Geolocation mismatch! Photo EXIF coordinates differ from browser coordinates.`;
+    } else if (!isRealTime) {
+      adminNotes = `[FLAGGED TIME] Photo was clicked earlier (Gap: ${timeDiffMinutes} mins).`;
+    }
+    
+    // 6. Assemble selfie record
+    const selfieRecord = {
+      id: `selfie_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      employeeId: emp.id,
+      employeeName: emp.name,
+      messageId: `web_checkin_${Date.now()}`,
+      imageUrl,
+      timestamp: receivedTime.toISOString(),
+      exifDateTime: exifDateTime || receivedTime.toISOString(), // Fall back to live time if no EXIF
+      exifGPS: exifGPS || { latitude: Number(latitude), longitude: Number(longitude) },
+      siteId,
+      siteName,
+      distance: distance !== null ? Number(distance.toFixed(1)) : null,
+      timeDiffMinutes: Number(timeDiffMinutes.toFixed(1)),
+      status,
+      adminNotes
+    };
+    
+    if (!db.selfies) db.selfies = [];
+    db.selfies.push(selfieRecord);
+    database.writeAtomic(db);
+    
+    // 7. Auto-check-in to attendance database if VERIFIED
+    if (status === "verified") {
+      const parserObj = require('./parser');
+      const mockResult = {
+        isSuccess: true,
+        isList: false,
+        extractedName: emp.name,
+        extractedSite: siteName || emp.siteId || "Main Site",
+        extractedAction: "in",
+        matchedEmployee: emp
+      };
+      
+      const loggedRecord = database.recordFromWhatsApp(mockResult, `Web check-in at ${siteName}`);
+      io.emit('attendance_updated', loggedRecord);
+    } else {
+      // Flagged location/time
+      const parserObj = require('./parser');
+      const mockResult = {
+        isSuccess: true,
+        isList: false,
+        extractedName: emp.name,
+        extractedSite: siteName || emp.siteId || "Main Site",
+        extractedAction: "in",
+        matchedEmployee: emp
+      };
+      const record = database.recordFromWhatsApp(mockResult, `Web check-in at ${siteName}`);
+      
+      const dbRead = database.read();
+      const recIndex = dbRead.attendance.findIndex(a => a.id === record.id);
+      if (recIndex >= 0) {
+        let warningNote = `[FLAGGED SELFIE] Web Geofence Mismatch (${Math.round(distance)}m)`;
+        if (!isRealTime) {
+          warningNote = `[FLAGGED SELFIE] Photo Clicked Earlier (Gap: ${timeDiffMinutes} mins)`;
+        } else if (isGpsSpoofed) {
+          warningNote = `[FLAGGED SELFIE] GPS coordinates spoofed!`;
+        }
+        
+        dbRead.attendance[recIndex].notes = warningNote;
+        dbRead.attendance[recIndex].isManualOverride = false;
+        database.writeAtomic(dbRead);
+        database.syncToExcel();
+        io.emit('attendance_updated', dbRead.attendance[recIndex]);
+      }
+    }
+    
+    // Emit WebSocket notifications
+    io.emit('selfie_received', selfieRecord);
+    io.emit('stats_updated');
+    
+    res.json(selfieRecord);
+  } catch (err) {
+    console.error("Web check-in error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Monthly Salary Payroll Routes ---
+app.get('/api/payroll', (req, res) => {
+  const { month } = req.query;
+  const targetMonth = month || new Date().toISOString().substring(0, 7); // e.g. "2026-03"
+  res.json(database.getMonthlySalarySheet(targetMonth));
+});
+
+app.post('/api/payroll/save', (req, res) => {
+  try {
+    const adj = database.savePayrollAdjustment(req.body);
+    res.json({ success: true, adjustment: adj });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Wage-Ready Payroll Export (CSV Generator)
+app.get('/api/export', (req, res) => {
+  const { startDate, endDate } = req.query;
+  
+  if (!startDate || !endDate) {
+    return res.status(400).send("Both startDate and endDate query parameters are required.");
+  }
+
+  try {
+    const list = database.getAttendanceForRange(startDate, endDate);
+    
+    // Sort chronologically (ascending) and alphabetically by name (ascending)
+    list.sort((a, b) => a.date.localeCompare(b.date) || a.employeeName.localeCompare(b.employeeName));
+    
+    // CSV Columns Header
+    let csvContent = "Date,Worker Name,Status,Work Site,Check-In,Check-Out,Total Hours,Full Day Credits,Half Day Credits,Extra Hours (Half-Day),Overtime Hours (Full-Day),Calculated Wage (₹),Message Source,Notes\n";
+    
+    list.forEach(row => {
+      const date = row.date;
+      const name = `"${row.employeeName.replace(/"/g, '""')}"`;
+      const status = row.status.toUpperCase();
+      const site = `"${row.siteName.replace(/"/g, '""')}"`;
+      const inTime = row.checkIn ? new Date(row.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
+      const outTime = row.checkOut ? new Date(row.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
+      
+      const totalHours = row.status === 'absent' ? 0.0 : Number((row.duration / 60).toFixed(2));
+      const fullDay = row.isFullDay ? 1 : 0;
+      const halfDay = row.isHalfDay ? 1 : 0;
+      const extra = row.extraHours || 0.0;
+      const ot = row.otHours || 0.0;
+      const wage = row.calculatedWage || 0.0;
+      const rawText = row.messageText ? `"${row.messageText.replace(/"/g, '""').replace(/\n/g, ' ')}"` : "—";
+      
+      let note = "";
+      if (row.status === 'absent') note = "Absent";
+      else if (row.isManualOverride) note = "Manual Overridden Entry";
+      else if (row.isFullDay && ot > 0) note = "Standard Shift Completed + OT";
+      else if (row.isHalfDay) note = "Half-Day Credit + Extra Hours";
+      else if (row.status === 'completed' && !row.isHalfDay && !row.isFullDay) note = "Hourly Pay (Under Half-Day)";
+      else if (row.status === 'checked-in') note = "Currently Checked-In (No checkout yet)";
+      
+      csvContent += `${date},${name},${status},${site},${inTime},${outTime},${totalHours},${fullDay},${halfDay},${extra},${ot},${wage},${rawText},"${note}"\n`;
+    });
+
+    const fileDateStr = new Date().toISOString().split('T')[0];
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="Attendance_Payroll_Export_${startDate}_to_${endDate}_generated_${fileDateStr}.csv"`);
+    res.status(200).send(csvContent);
+  } catch (err) {
+    res.status(500).send(`Export failed: ${err.message}`);
+  }
+});
+
+// Premium Wage-Ready Payroll Export (Excel .xlsx Generator)
+app.get('/api/export/excel', (req, res) => {
+  const { startDate, endDate, search, status, site } = req.query;
+  
+  if (!startDate || !endDate) {
+    return res.status(400).send("Both startDate and endDate query parameters are required.");
+  }
+
+  try {
+    let list = database.getAttendanceForRange(startDate, endDate);
+    
+    // Apply Excel-like filters matching frontend live view
+    if (status) {
+      list = list.filter(row => row.status.toLowerCase() === status.toLowerCase());
+    }
+    if (site) {
+      list = list.filter(row => row.siteName.toLowerCase() === site.toLowerCase());
+    }
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(row => {
+        const hoursDecimal = row.status === 'absent' || row.status === 'leave' ? 0.0 : Number((row.duration / 60).toFixed(2));
+        let shiftSummary = "—";
+        if (row.status === 'completed') {
+          if (row.isFullDay) {
+            shiftSummary = row.otHours > 0 ? `Full Shift + ${row.otHours} hr OT` : "Full-Day Shift";
+          } else if (row.isHalfDay) {
+            shiftSummary = row.extraHours > 0 ? `Half Day + ${row.extraHours} hr Ext` : "Half-Day Shift";
+          } else {
+            shiftSummary = "Hourly Credit";
+          }
+        } else if (row.status === 'checked-in') {
+          shiftSummary = "On Active Duty";
+        }
+
+        return (
+          row.employeeName.toLowerCase().includes(q) ||
+          (row.userId && row.userId.toLowerCase().includes(q)) ||
+          row.siteName.toLowerCase().includes(q) ||
+          row.status.toLowerCase().includes(q) ||
+          shiftSummary.toLowerCase().includes(q) ||
+          row.date.includes(q) ||
+          hoursDecimal.toString().includes(q)
+        );
+      });
+    }
+    
+    // Sort chronologically (ascending) and alphabetically by name (ascending)
+    list.sort((a, b) => a.date.localeCompare(b.date) || a.employeeName.localeCompare(b.employeeName));
+    
+    const excelRows = [];
+    
+    list.forEach(row => {
+      let dayName = "—";
+      try {
+        dayName = new Date(row.date).toLocaleDateString('en-US', { weekday: 'long' });
+      } catch(e) {}
+
+      const inTimeStr = row.checkIn ? new Date(row.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : "—";
+      let outTimeStr = "—";
+      if (row.checkOut) {
+        outTimeStr = new Date(row.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      } else if (row.status === 'checked-in') {
+        outTimeStr = "Currently Checked-In";
+      }
+
+      const hoursDecimal = row.status === 'absent' || row.status === 'leave' ? 0.0 : Number((row.duration / 60).toFixed(2));
+
+      let note = "";
+      if (row.status === 'absent') note = "Absent";
+      else if (row.isManualOverride) note = "Manual Overridden Entry";
+      else if (row.isFullDay && (row.otHours || 0) > 0) note = "Standard Shift Completed + OT";
+      else if (row.isHalfDay) note = "Half-Day Credit + Extra Hours";
+      else if (row.status === 'completed' && !row.isHalfDay && !row.isFullDay) note = "Hourly Pay (Under Half-Day)";
+      else if (row.status === 'checked-in') note = "Currently Checked-In (No checkout yet)";
+
+      excelRows.push({
+        "Date": row.date,
+        "Day of Week": dayName,
+        "Worker Name": row.employeeName,
+        "Duty Status": row.status.toUpperCase(),
+        "Work Site Location": row.siteName,
+        "Check-In Time": inTimeStr,
+        "Check-Out Time": outTimeStr,
+        "Total Hours Worked": hoursDecimal,
+        "Full-Day Payout Credits": row.isFullDay ? 1 : 0,
+        "Half-Day Payout Credits": row.isHalfDay ? 1 : 0,
+        "Extra Hours (Post Half-Day)": row.extraHours || 0.0,
+        "Overtime Hours (Post Full-Day)": row.otHours || 0.0,
+        "Travel Hours Paid": row.travelHours || 0.0,
+        "Calculated Wages (₹)": row.calculatedWage || 0.0,
+        "WhatsApp Text Source": row.messageText || "—",
+        "Administrative Notes": note
+      });
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(excelRows);
+    
+    // Auto-fit column widths for premium feel!
+    if (excelRows.length > 0) {
+      const columns = Object.keys(excelRows[0]);
+      ws['!cols'] = columns.map(col => {
+        const maxCharLen = Math.max(
+          col.length,
+          ...excelRows.map(row => String(row[col] || '').length)
+        );
+        return { wch: Math.max(12, maxCharLen + 2) };
+      });
+    }
+
+    XLSX.utils.book_append_sheet(wb, ws, "Attendance & Wages");
+    
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    
+    const fileDateStr = new Date().toISOString().split('T')[0];
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="Attendance_Payroll_Export_${startDate}_to_${endDate}_generated_${fileDateStr}.xlsx"`);
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).send(`Export failed: ${err.message}`);
+  }
+});
+
+// Premium Monthly Salary Sheet Excel (.xlsx) Exporter
+app.get('/api/export/payroll/excel', async (req, res) => {
+  const { month, search, mode } = req.query;
+  const targetMonth = month || new Date().toISOString().substring(0, 7);
+
+  try {
+    let list = database.getMonthlySalarySheet(targetMonth);
+    
+    // Apply filters matching the live UI view exactly!
+    if (mode) {
+      list = list.filter(row => row.modeOfWork && row.modeOfWork.toLowerCase().trim() === mode.toLowerCase().trim());
+    }
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(row => 
+        row.employeeName.toLowerCase().includes(q) ||
+        (row.userId && row.userId.toLowerCase().includes(q)) ||
+        (row.modeOfWork && row.modeOfWork.toLowerCase().includes(q))
+      );
+    }
+    
+    // Sort alphabetically by worker name
+    list.sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+    
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet(`Salary Sheet ${targetMonth}`);
+    
+    // Exact Headers as per Excel screenshot with Holiday Days and Holiday Bonus
+    const headers = [
+      "No", "Employee ID", "Name", "Std Working days", "Basic", "DA", "Other Allowances", 
+      "Gross Salary", "Working Days", "amount", "LOP(Day)", "LOP( Amount)", 
+      "OT(Hrs)", "OT(Amount)", "Travel Time(Hrs)", "Travel Time( Amount)", 
+      "Extra days", "Extra days Amount", "Missing days", "Missing days(Amount)", 
+      "Holiday Days", "Holiday Bonus (₹)", "Earned Salary", "PF", "ESIC", "PT", "Net Salary"
+    ];
+    
+    worksheet.addRow(headers);
+    
+    // Add row data
+    list.forEach((row, idx) => {
+      worksheet.addRow([
+        idx + 1,
+        row.userId || "—",
+        row.employeeName,
+        row.stdWorkingDays,
+        row.basic,
+        row.da,
+        row.allowances,
+        row.actualSalary,
+        row.workingDays,
+        row.amount,
+        row.lopDays,
+        row.lopAmount,
+        row.otHours,
+        row.otPayout,
+        row.travelTimeHours,
+        row.travelTimePayout,
+        row.extraDays,
+        row.extraDaysAmount,
+        row.missingDays,
+        row.missingDaysAmount,
+        row.holidayDaysWorked || 0,
+        row.holidayBonus || 0.0,
+        row.earnedSalary,
+        row.pf || 0,
+        row.esic || 0,
+        row.pt || 0,
+        row.netSalary
+      ]);
+    });
+    
+    // Auto-fit column widths for premium feel!
+    worksheet.columns.forEach(col => {
+      let maxLen = 0;
+      col.eachCell({ includeEmpty: true }, (cell) => {
+        const valStr = cell.value ? String(cell.value) : '';
+        if (valStr.length > maxLen) {
+          maxLen = valStr.length;
+        }
+      });
+      col.width = Math.max(12, maxLen + 3);
+    });
+    
+    // Style header row (row 1)
+    const headerRow = worksheet.getRow(1);
+    headerRow.height = 28;
+    headerRow.eachCell((cell) => {
+      cell.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      
+      // Default header fill: dark slate/blue (#1E293B)
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1E293B' }
+      };
+      
+      // Border lines
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        bottom: { style: 'medium', color: { argb: 'FF94A3B8' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+      };
+    });
+    
+    // Style data rows
+    worksheet.eachRow((row, rowNum) => {
+      if (rowNum === 1) return; // skip header
+      
+      row.height = 22;
+      row.eachCell((cell, colNum) => {
+        cell.font = { name: 'Segoe UI', size: 10 };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        
+        // Left-align employee ID (2) and Name (3)
+        if (colNum === 2 || colNum === 3) {
+          cell.alignment = { vertical: 'middle', horizontal: 'left' };
+        }
+        
+        // Currency / Number formatting for financial columns
+        const currencyCols = [5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 21, 22, 23, 24, 25];
+        if (currencyCols.includes(colNum)) {
+          cell.numFormat = '"₹"#,##0.00';
+          cell.alignment = { vertical: 'middle', horizontal: 'right' };
+        }
+        
+        // Elegant light green background and bold green text for the Net Salary payout cell!
+        if (colNum === 25) {
+          cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFF0FDF4' }
+          };
+        }
+        
+        // Thin gray grid borders for all cells
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+        };
+      });
+    });
+    
+    // Force active gridlines explicitly in the viewer
+    worksheet.views = [{ showGridLines: true }];
+    
+    const buffer = await workbook.xlsx.writeBuffer();
+    
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="Salary_Sheet_Export_${targetMonth}_generated_${new Date().toISOString().split('T')[0]}.xlsx"`);
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).send(`Export failed: ${err.message}`);
+  }
+});
+
+// --- Socket.io Handlers ---
+io.on('connection', (socket) => {
+  console.log(`Web client connected (Socket ID: ${socket.id})`);
+  
+  // Instantly send current states on handshake
+  socket.emit('whatsapp_status', whatsapp.status);
+  socket.emit('whatsapp_chats', whatsapp.activeChats);
+  if (whatsapp.qrCodeDataUrl) {
+    socket.emit('whatsapp_qr', whatsapp.qrCodeDataUrl);
+  }
+
+  socket.on('disconnect', () => {
+    console.log(`Web client disconnected (Socket ID: ${socket.id})`);
+  });
+});
+
+// Connect WhatsApp Client manager events to socket streamer
+whatsapp.on('status', (status) => {
+  io.emit('whatsapp_status', status);
+});
+
+whatsapp.on('qr', (dataUrl) => {
+  io.emit('whatsapp_qr', dataUrl);
+});
+
+whatsapp.on('chats_updated', (chats) => {
+  io.emit('whatsapp_chats', chats);
+});
+
+whatsapp.on('message_received', (data) => {
+  io.emit('whatsapp_message', data);
+  // Broadcast update metrics
+  io.emit('stats_updated');
+});
+
+whatsapp.on('selfie_received', (selfie) => {
+  io.emit('selfie_received', selfie);
+  io.emit('stats_updated'); // refresh dashboard counts
+});
+
+// Also stream raw messages (unfiltered) to connected clients for realtime feed
+whatsapp.on('raw_message', (data) => {
+  try {
+    const settings = database.getSettings();
+    if (!settings || !data) return;
+
+    // Prefer matching by explicit groupId if the admin has saved it (robust against renames)
+    if (settings.whatsappGroupId && data.groupId) {
+      if (settings.whatsappGroupId === data.groupId) {
+        io.emit('whatsapp_raw', data);
+      }
+      return;
+    }
+
+    // Fallback: match by group name (case-insensitive)
+    if (settings.whatsappGroupName && data.groupName) {
+      if (data.groupName.trim().toLowerCase() === settings.whatsappGroupName.trim().toLowerCase()) {
+        io.emit('whatsapp_raw', data);
+      }
+    }
+    // Otherwise ignore (personal chats or other groups)
+  } catch (err) {
+    console.error('Error while filtering raw_message for broadcast:', err);
+  }
+});
+
+// Catch errors and log to ensure 24/7 unbreakable keep-alive
+process.on('uncaughtException', (err) => {
+  console.error("[CRITICAL] Uncaught exception inside server process:", err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error("[CRITICAL] Unhandled promise rejection at:", promise, "reason:", reason);
+});
+
+// Boot systems
+server.listen(PORT, () => {
+  console.log(`=============================================================`);
+  console.log(`  Attendance Dashboard running at: http://localhost:${PORT}`);
+  console.log(`=============================================================`);
+  console.log(`\n⚡ 24/7 CONTINUOUS MONITORING ACTIVATED ⚡`);
+  console.log(`  • Health Check: Every 2 minutes`);
+  console.log(`  • KeepAlive Ping: Every 3 minutes`);
+  console.log(`  • Stale Session Detection: After 25 minutes of inactivity`);
+  console.log(`  • Auto-Reconnect: On any connection failure`);
+  console.log(`  \n🔒 CRITICAL: Keep this process running 24/7!`);
+  console.log(`  Use PM2 to keep the server alive: npm install -g pm2 && pm2 start server.js --name attendance`);
+  console.log(``);
+  
+  // Start WhatsApp Client integration
+  whatsapp.initialize();
+
+  // Run initial daily closeout sweep to finalize any outstanding shifts from previous days
+  try {
+    const closed = database.autoCloseOutstandingShifts();
+    if (closed > 0) {
+      console.log(`[Startup Sweep] Finalized ${closed} outstanding shifts.`);
+    }
+  } catch (e) {
+    console.error("Initial daily closeout failed:", e);
+  }
+
+  // Schedule daily closeout sweep once every hour
+  setInterval(() => {
+    try {
+      const closed = database.autoCloseOutstandingShifts();
+      if (closed > 0) {
+        io.emit('stats_updated');
+        io.emit('attendance_updated');
+        console.log(`[Hourly Sweep] Auto-closed ${closed} outstanding shifts.`);
+      }
+    } catch (e) {
+      console.error("Scheduled closeout sweep failed:", e);
+    }
+  }, 60 * 60 * 1000); // 1 hour
+});
+

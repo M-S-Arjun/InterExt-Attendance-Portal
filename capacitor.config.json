@@ -1,0 +1,8 @@
+{
+  "appId": "com.antigravity.checkin",
+  "appName": "Selfie Verification",
+  "webDir": "mobile_dist",
+  "server": {
+    "allowMixedContent": true
+  }
+}
