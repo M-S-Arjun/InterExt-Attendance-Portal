@@ -117,6 +117,10 @@ class WhatsAppManager extends EventEmitter {
         }),
         authTimeoutMs: 120000, // 2 minutes timeout for auth
         qrTimeoutMs: 120000,   // 2 minutes timeout for QR scanning
+        webVersionCache: {
+          type: 'remote',
+          remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
+        },
         puppeteer: {
           headless: true,
           protocolTimeout: 240000, // Terminate Protocol errors by setting 240s timeout (4 minutes for large accounts)
@@ -128,7 +132,8 @@ class WhatsAppManager extends EventEmitter {
             '--no-first-run',
             '--no-zygote',
             '--disable-gpu',
-            '--disable-extensions'
+            '--disable-extensions',
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
           ]
         }
       });
