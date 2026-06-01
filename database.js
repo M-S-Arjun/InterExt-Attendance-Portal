@@ -341,7 +341,8 @@ class Database {
       const holidays = db.holidays || [];
       const isHoliday = holidays.some(hol => hol.date === dateStr);
       
-      if (isHoliday && !isSunday) {
+      const isOfficeStaff = employee.modeOfWork && employee.modeOfWork.toLowerCase().trim() === 'office staff';
+      if (isHoliday && !isSunday && isOfficeStaff) {
         dailyRate = dailyRate * 2.0;
         hourlyRate = hourlyRate * 2.0;
       }
@@ -1029,19 +1030,22 @@ class Database {
       const missingDaysAmount = Number((missingDays * dailyRate).toFixed(2));
       
       // Holiday Days Worked: Count of days in empLogs that are holidays (except Sundays) and status is completed or checked-in
+      // Restricted strictly to Office Staff as per user instructions
       let defaultHolidayDaysWorked = 0;
-      empLogs.forEach(log => {
-        if (log.status === 'completed' || log.status === 'checked-in') {
-          const dateStr = log.date;
-          try {
-            const isSunday = new Date(dateStr).getDay() === 0;
-            const isHoliday = (db.holidays || []).some(h => h.date === dateStr);
-            if (isHoliday && !isSunday) {
-              defaultHolidayDaysWorked++;
-            }
-          } catch(e) {}
-        }
-      });
+      if (isOfficeStaff) {
+        empLogs.forEach(log => {
+          if (log.status === 'completed' || log.status === 'checked-in') {
+            const dateStr = log.date;
+            try {
+              const isSunday = new Date(dateStr).getDay() === 0;
+              const isHoliday = (db.holidays || []).some(h => h.date === dateStr);
+              if (isHoliday && !isSunday) {
+                defaultHolidayDaysWorked++;
+              }
+            } catch(e) {}
+          }
+        });
+      }
       
       const holidayDaysWorked = adj.holidayDaysWorked !== undefined ? Number(adj.holidayDaysWorked) : defaultHolidayDaysWorked;
       const holidayBonus = Number((holidayDaysWorked * dailyRate).toFixed(2));
