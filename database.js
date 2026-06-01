@@ -42,7 +42,8 @@ const DEFAULT_DB = {
   },
   pending_messages: [],
   selfies: [],
-  holidays: []
+  holidays: [],
+  processed_message_ids: []
 };
 
 class Database {
@@ -87,6 +88,12 @@ class Database {
       ];
       this.writeAtomic(db);
       console.log(`[Database Init] Seeding calendar with exactly ${db.holidays.length} holidays from the company calendar.`);
+    }
+    
+    // Ensure processed_message_ids array exists in existing databases
+    if (!db.processed_message_ids) {
+      db.processed_message_ids = [];
+      this.writeAtomic(db);
     }
     
     // Perform initial Excel compilation on boot
@@ -283,6 +290,35 @@ class Database {
     const db = this.read();
     db.pending_messages = (db.pending_messages || []).filter(m => m.id !== id);
     this.writeAtomic(db);
+  }
+
+  // --- Processed Message IDs ---
+  getProcessedMessageIds() {
+    return this.read().processed_message_ids || [];
+  }
+
+  saveProcessedMessageId(id) {
+    const db = this.read();
+    if (!db.processed_message_ids) db.processed_message_ids = [];
+    if (!db.processed_message_ids.includes(id)) {
+      db.processed_message_ids.push(id);
+      this.writeAtomic(db);
+    }
+  }
+
+  saveProcessedMessageIds(ids) {
+    const db = this.read();
+    if (!db.processed_message_ids) db.processed_message_ids = [];
+    let updated = false;
+    for (const id of ids) {
+      if (!db.processed_message_ids.includes(id)) {
+        db.processed_message_ids.push(id);
+        updated = true;
+      }
+    }
+    if (updated) {
+      this.writeAtomic(db);
+    }
   }
 
   // --- Attendance Table with dynamic absenteeism & shift calculations ---
@@ -499,7 +535,7 @@ class Database {
 
   // Check-in or Check-out directly by employee name & site name (from parser)
   // Handles linking or flags it
-  recordSingleFromWhatsApp(parsedData, rawText) {
+  recordSingleFromWhatsApp(parsedData, rawText, messageTimestamp = null) {
     let db = this.read();
     
     // Auto-registration feature: 
@@ -604,7 +640,9 @@ class Database {
       });
     }
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = messageTimestamp
+      ? new Date(messageTimestamp).toISOString().split('T')[0]
+      : new Date().toISOString().split('T')[0];
     
     // Determine target attendance log date from the parsed timestamps (or fallback to today)
     let targetDateStr = todayStr;
@@ -618,12 +656,12 @@ class Database {
 
     // Dynamic timestamp helpers to align defaults with the target date
     const getFallbackTimestamp = () => {
-      const now = new Date();
-      const timePart = now.toTimeString().split(' ')[0]; // HH:MM:SS
+      const fallbackBase = messageTimestamp ? new Date(messageTimestamp) : new Date();
+      const timePart = fallbackBase.toTimeString().split(' ')[0]; // HH:MM:SS
       try {
         return new Date(`${targetDateStr}T${timePart}`).toISOString();
       } catch (e) {
-        return now.toISOString();
+        return fallbackBase.toISOString();
       }
     };
 
@@ -683,13 +721,13 @@ class Database {
   }
 
   // Handles both single items and supervisor list items
-  recordFromWhatsApp(parsedData, rawText) {
+  recordFromWhatsApp(parsedData, rawText, messageTimestamp = null) {
     if (parsedData.isList) {
       // Option 2: Supervisor Consolidated Line List
       const logs = [];
       parsedData.items.forEach(item => {
         try {
-          const logged = this.recordSingleFromWhatsApp(item, item.originalLineText || rawText);
+          const logged = this.recordSingleFromWhatsApp(item, item.originalLineText || rawText, messageTimestamp);
           if (logged) logs.push(logged);
         } catch (e) {
           console.error("Failed to log worker line from list:", e);
@@ -698,7 +736,7 @@ class Database {
       return logs;
     } else {
       // Standard Single check-in/out range text
-      return this.recordSingleFromWhatsApp(parsedData, rawText);
+      return this.recordSingleFromWhatsApp(parsedData, rawText, messageTimestamp);
     }
   }
 
@@ -1333,7 +1371,7 @@ class Database {
         matchedEmployee: emp
       };
       
-      this.recordFromWhatsApp(mockResult, caption || `Selfie check-in at ${siteName}`);
+      this.recordFromWhatsApp(mockResult, caption || `Selfie check-in at ${siteName}`, msgTimestamp);
     } else if (emp) {
       // If flagged, still record attendance but mark with a warning in notes!
       const parserObj = require('./parser');
@@ -1350,7 +1388,7 @@ class Database {
         matchedEmployee: emp
       };
       
-      const record = this.recordFromWhatsApp(mockResult, caption || `Selfie check-in at ${siteName}`);
+      const record = this.recordFromWhatsApp(mockResult, caption || `Selfie check-in at ${siteName}`, msgTimestamp);
       
       // Update the record's notes specifically to highlight the flag
       const dbRead = this.read();
@@ -1366,7 +1404,7 @@ class Database {
     return selfieRecord;
   }
 
-  async applyLocationPinToRecentSelfie(senderPhone, latitude, longitude) {
+  async applyLocationPinToRecentSelfie(senderPhone, latitude, longitude, msgTimestamp = null) {
     const db = this.read();
     if (!db.selfies) return null;
     
@@ -1375,7 +1413,7 @@ class Database {
     const employeeId = emp ? emp.id : `unknown_${senderPhone}`;
     
     // Search selfies within last 5 minutes or next 5 minutes
-    const locationTime = new Date();
+    const locationTime = msgTimestamp ? new Date(msgTimestamp) : new Date();
     const matchingSelfies = db.selfies.filter(s => {
       if (s.employeeId !== employeeId) return false;
       const selfieTime = new Date(s.timestamp);

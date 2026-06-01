@@ -231,7 +231,7 @@ class AttendanceParser {
   ]);
 
   // Parse a single text line/message
-  parseSingleLine(cleanLine, dateStr = null, defaultSiteObj = null, rawSender = "") {
+  parseSingleLine(cleanLine, dateStr = null, defaultSiteObj = null, rawSender = "", messageTimestamp = null) {
     const employees = (database.getEmployees() || []).filter(e => e && e.status === 'active');
     const sites = (database.getSites() || []).filter(s => s && s.name);
 
@@ -459,7 +459,7 @@ class AttendanceParser {
       const outKeywords = ['out', 'checkout', 'check-out', 'left', 'leave', 'exit', 'finish', 'done', 'leaving'];
       const foundOut = outKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(cleanLine));
       
-      const timestamp = new Date().toISOString();
+      const timestamp = messageTimestamp ? new Date(messageTimestamp).toISOString() : new Date().toISOString();
       if (foundOut) {
         checkOutTimestamp = timestamp;
         actionType = 'out';
@@ -634,8 +634,10 @@ class AttendanceParser {
   }
 
   // Central Entry Point - Splits by newlines and handles line-by-line supervisor lists
-  parse(rawText, senderPhone = "") {
-    const todayStr = new Date().toISOString().split('T')[0];
+  parse(rawText, senderPhone = "", messageTimestamp = null) {
+    const todayStr = messageTimestamp
+      ? new Date(messageTimestamp).toISOString().split('T')[0]
+      : new Date().toISOString().split('T')[0];
     
     // Split into individual clean lines
     const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
@@ -739,7 +741,7 @@ class AttendanceParser {
         if (isNameLike && isSiteLike && hasTimeLine) {
           // Build a virtual single-line and parse
           const virtual = `${nameLine}, ${siteLine}, ${activeLines.find(l => timeRegexLine.test(l) || simpleRange.test(l))}`;
-          const res = this.parseSingleLine(virtual.toLowerCase(), todayStr, defaultSiteObj, senderPhone);
+          const res = this.parseSingleLine(virtual.toLowerCase(), todayStr, defaultSiteObj, senderPhone, messageTimestamp);
           res.rawSender = senderPhone;
           res.isList = false;
           res.travelHours = paidTravelHours;
@@ -840,7 +842,7 @@ class AttendanceParser {
         workerNames.forEach(name => {
           // Reconstruct virtual single-line report
           const virtualLine = `${name}, ${finalSiteName}, ${finalTimeRange}`;
-          const res = this.parseSingleLine(virtualLine.toLowerCase(), targetDate, defaultSiteObj, "");
+          const res = this.parseSingleLine(virtualLine.toLowerCase(), targetDate, defaultSiteObj, "", messageTimestamp);
           res.rawSender = senderPhone;
           res.originalLineText = virtualLine;
           res.travelHours = paidTravelHours;
@@ -868,7 +870,7 @@ class AttendanceParser {
       
       dataLines.forEach(line => {
         const cleanLine = line.toLowerCase();
-        const res = this.parseSingleLine(cleanLine, todayStr, defaultSiteObj, "");
+        const res = this.parseSingleLine(cleanLine, todayStr, defaultSiteObj, "", messageTimestamp);
         res.rawSender = senderPhone;
         res.originalLineText = line;
         res.travelHours = paidTravelHours;
@@ -882,7 +884,7 @@ class AttendanceParser {
     } else {
       // Option 1 or standard single check-in text
       const cleanLine = dataLines[0] ? dataLines[0].toLowerCase() : activeLines[0].toLowerCase();
-      const res = this.parseSingleLine(cleanLine, todayStr, defaultSiteObj, senderPhone);
+      const res = this.parseSingleLine(cleanLine, todayStr, defaultSiteObj, senderPhone, messageTimestamp);
       res.rawSender = senderPhone;
       res.isList = false;
       res.travelHours = paidTravelHours;

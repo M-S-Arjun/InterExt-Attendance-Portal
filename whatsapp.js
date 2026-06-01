@@ -254,6 +254,8 @@ class WhatsAppManager extends EventEmitter {
               console.log(`[Startup] Group resolved. Saving stable ID to settings: ${gid}`);
               database.saveSettings({ ...settings, whatsappGroupId: gid });
             }
+            // Trigger recovery of missed messages on startup
+            await this.recoverMissedMessages(matchedGroup);
           } else {
             console.warn(`[Startup] Active WhatsApp group named "${settings.whatsappGroupName}" not found in chat directory.`);
           }
@@ -283,117 +285,184 @@ class WhatsAppManager extends EventEmitter {
 
     // Handle Incoming and Outgoing Messages
     this.client.on('message_create', async (message) => {
-      this.lastMessageTime = Date.now(); // Update activity timestamp
       try {
-        const settings = database.getSettings();
-        if (!settings.whatsappGroupName) return; // No group selected yet
-
-        const chatId = message.from;
-        let groupName = this.groupNameCache[chatId];
-
-        let groupId = this.groupIdCache[chatId];
-        if (!groupName) {
-          console.log(`[Message Listener] Resolving chat for ID: ${chatId}...`);
-          const chat = await message.getChat();
-          if (chat.isGroup) {
-            groupName = chat.name.trim();
-            groupId = chat.id && chat.id._serialized ? chat.id._serialized : chat.id;
-            this.groupNameCache[chatId] = groupName;
-            this.groupIdCache[chatId] = groupId;
-            console.log(`[Message Listener] Cached group name: "${groupName}" -> ID: ${chatId}`);
-          }
-        }
-
-// Filter messages belonging only to our selected Attendance Group
-        const configuredGroupId = settings.whatsappGroupId || null;
-        const configuredGroupName = settings.whatsappGroupName || null;
-
-        // Match by groupId if configured, otherwise fall back to case-insensitive name match
-        const isMatchingGroup = (configuredGroupId && groupId && configuredGroupId === groupId)
-          || (groupName && configuredGroupName && groupName.toLowerCase() === configuredGroupName.trim().toLowerCase());
-
-        if (isMatchingGroup) {
-          // Emit a lightweight raw message event for real-time UI feed only for the configured group
-          try {
-            const senderPhone = (message.author || message.from).split('@')[0];
-            this.emit('raw_message', {
-              chatId,
-              groupId,
-              groupName,
-              sender: senderPhone,
-              messageText: message.body,
-              timestamp: new Date().toISOString()
-            });
-          } catch (e) {
-            // Non-fatal - continue
-          }
-
-          console.log(`Processing group message from ${message.author || message.from}: "${message.body || ''}"`);
-          
-          // Get clean phone number of sender
-          const senderPhone = (message.author || message.from).split('@')[0];
-          
-          const isPhoto = message.hasMedia && (message.type === 'image' || message.type === 'document');
-          const isLocation = message.type === 'location';
-          
-          if (isPhoto) {
-            console.log(`[Selfie Verifier] Media check-in received from +${senderPhone}`);
-            try {
-              const media = await message.downloadMedia();
-              if (media && media.mimetype && media.mimetype.startsWith('image/')) {
-                const selfieRecord = await database.verifyAndSaveSelfie(
-                  message.id._serialized,
-                  senderPhone,
-                  message.body || '', // Caption is contained in message.body
-                  media.data, // Base64 content
-                  media.mimetype,
-                  new Date().toISOString()
-                );
-                
-                console.log(`[Selfie Verifier] Media parsed. Status: ${selfieRecord.status}`);
-                this.emit('selfie_received', selfieRecord);
-              }
-            } catch (err) {
-              console.error("[Selfie Verifier] Failed to process media attachment:", err.message);
-            }
-          } else if (isLocation) {
-            console.log(`[Location Parser] Location pin received from +${senderPhone}: Lat: ${message.location.latitude}, Lon: ${message.location.longitude}`);
-            try {
-              const updatedSelfie = await database.applyLocationPinToRecentSelfie(
-                senderPhone,
-                message.location.latitude,
-                message.location.longitude
-              );
-              if (updatedSelfie) {
-                console.log(`[Location Parser] Successfully attached GPS coordinates to recent selfie. Status: ${updatedSelfie.status}`);
-                this.emit('selfie_updated', updatedSelfie);
-              }
-            } catch (err) {
-              console.error("[Location Parser] Failed to process location message:", err.message);
-            }
-          } else {
-            // Standard Text Message Parsing
-            const parseResult = parser.parse(message.body, senderPhone);
-            
-            // Store/update log in database
-            const loggedRecord = database.recordFromWhatsApp(parseResult, message.body);
-            
-            // Emit WebSocket notification to refresh UI
-            this.emit('message_received', {
-              sender: senderPhone,
-              groupId,
-              groupName,
-              messageText: message.body,
-              timestamp: new Date().toISOString(),
-              parseResult,
-              loggedRecord
-            });
-          }
-        }
+        await this.processMessage(message);
       } catch (err) {
-        console.error("Error processing incoming WhatsApp message:", err);
+        console.error("Error in message_create event handler:", err);
       }
     });
+  }
+
+  // Process individual WhatsApp message (both live and recovered history)
+  async processMessage(message) {
+    this.lastMessageTime = Date.now(); // Update activity timestamp
+    try {
+      const settings = database.getSettings();
+      if (!settings.whatsappGroupName) return; // No group selected yet
+
+      const chatId = message.from;
+      let groupName = this.groupNameCache[chatId];
+      let groupId = this.groupIdCache[chatId];
+
+      if (!groupName) {
+        console.log(`[Message Processor] Resolving chat for ID: ${chatId}...`);
+        const chat = await message.getChat();
+        if (chat.isGroup) {
+          groupName = chat.name.trim();
+          groupId = chat.id && chat.id._serialized ? chat.id._serialized : chat.id;
+          this.groupNameCache[chatId] = groupName;
+          this.groupIdCache[chatId] = groupId;
+          console.log(`[Message Processor] Cached group name: "${groupName}" -> ID: ${chatId}`);
+        }
+      }
+
+      // Filter messages belonging only to our selected Attendance Group
+      const configuredGroupId = settings.whatsappGroupId || null;
+      const configuredGroupName = settings.whatsappGroupName || null;
+
+      // Match by groupId if configured, otherwise fall back to case-insensitive name match
+      const isMatchingGroup = (configuredGroupId && groupId && configuredGroupId === groupId)
+        || (groupName && configuredGroupName && groupName.toLowerCase() === configuredGroupName.trim().toLowerCase());
+
+      if (isMatchingGroup) {
+        const msgId = message.id._serialized;
+        
+        // De-duplicate check
+        const processedIds = database.getProcessedMessageIds();
+        if (processedIds.includes(msgId)) {
+          return; // Skip already processed messages
+        }
+
+        const msgTimestampISO = new Date(message.timestamp * 1000).toISOString();
+
+        // Emit a lightweight raw message event for real-time UI feed only for the configured group
+        try {
+          const senderPhone = (message.author || message.from).split('@')[0];
+          this.emit('raw_message', {
+            chatId,
+            groupId,
+            groupName,
+            sender: senderPhone,
+            messageText: message.body,
+            timestamp: msgTimestampISO
+          });
+        } catch (e) {
+          // Non-fatal - continue
+        }
+
+        console.log(`Processing group message from ${message.author || message.from}: "${message.body || ''}"`);
+        
+        // Get clean phone number of sender
+        const senderPhone = (message.author || message.from).split('@')[0];
+        
+        const isPhoto = message.hasMedia && (message.type === 'image' || message.type === 'document');
+        const isLocation = message.type === 'location';
+        
+        if (isPhoto) {
+          console.log(`[Selfie Verifier] Media check-in received from +${senderPhone}`);
+          try {
+            const media = await message.downloadMedia();
+            if (media && media.mimetype && media.mimetype.startsWith('image/')) {
+              const selfieRecord = await database.verifyAndSaveSelfie(
+                message.id._serialized,
+                senderPhone,
+                message.body || '', // Caption is contained in message.body
+                media.data, // Base64 content
+                media.mimetype,
+                msgTimestampISO
+              );
+              
+              console.log(`[Selfie Verifier] Media parsed. Status: ${selfieRecord.status}`);
+              this.emit('selfie_received', selfieRecord);
+            }
+          } catch (err) {
+            console.error("[Selfie Verifier] Failed to process media attachment:", err.message);
+          }
+        } else if (isLocation) {
+          console.log(`[Location Parser] Location pin received from +${senderPhone}: Lat: ${message.location.latitude}, Lon: ${message.location.longitude}`);
+          try {
+            const updatedSelfie = await database.applyLocationPinToRecentSelfie(
+              senderPhone,
+              message.location.latitude,
+              message.location.longitude,
+              msgTimestampISO
+            );
+            if (updatedSelfie) {
+              console.log(`[Location Parser] Successfully attached GPS coordinates to recent selfie. Status: ${updatedSelfie.status}`);
+              this.emit('selfie_updated', updatedSelfie);
+            }
+          } catch (err) {
+            console.error("[Location Parser] Failed to process location message:", err.message);
+          }
+        } else {
+          // Standard Text Message Parsing
+          const parseResult = parser.parse(message.body, senderPhone, msgTimestampISO);
+          
+          // Store/update log in database
+          const loggedRecord = database.recordFromWhatsApp(parseResult, message.body, msgTimestampISO);
+          
+          // Emit WebSocket notification to refresh UI
+          this.emit('message_received', {
+            sender: senderPhone,
+            groupId,
+            groupName,
+            messageText: message.body,
+            timestamp: msgTimestampISO,
+            parseResult,
+            loggedRecord
+          });
+        }
+
+        // Save ID as processed
+        database.saveProcessedMessageId(msgId);
+      }
+    } catch (err) {
+      console.error("Error processing incoming WhatsApp message:", err);
+    }
+  }
+
+  // Historical Recovery Engine: Fetches and parses missed messages on system boot
+  async recoverMissedMessages(chat) {
+    console.log(`[Recovery Engine] Starting missed messages recovery for group: "${chat.name}"...`);
+    try {
+      // Fetch the last 150 messages from the group
+      const messages = await chat.fetchMessages({ limit: 150 });
+      console.log(`[Recovery Engine] Fetched ${messages.length} historical messages from WhatsApp.`);
+
+      const processedIds = database.getProcessedMessageIds();
+      const isInitialSync = processedIds.length === 0;
+
+      if (isInitialSync) {
+        console.log("[Recovery Engine] Initial startup sync: Seeding existing message IDs to establish baseline...");
+        const idsToSeed = messages.map(msg => msg.id._serialized);
+        
+        // Save the baseline IDs to database so they are never processed in the future
+        database.saveProcessedMessageIds(idsToSeed);
+        console.log(`[Recovery Engine] Initial baseline seeded with ${idsToSeed.length} message IDs. Future boots will parse missed messages.`);
+        return;
+      }
+
+      // If not initial sync, process any message that has not been processed yet
+      let processedCount = 0;
+      
+      // Chronological sort (oldest to newest) to process check-ins and check-outs sequentially
+      const sortedMessages = [...messages].sort((a, b) => a.timestamp - b.timestamp);
+
+      for (const msg of sortedMessages) {
+        const msgId = msg.id._serialized;
+        if (!processedIds.includes(msgId)) {
+          console.log(`[Recovery Engine] Found missed message from ${msg.author || msg.from} sent at ${new Date(msg.timestamp * 1000).toISOString()}: "${msg.body || ''}"`);
+          // Process this message using the processor logic
+          await this.processMessage(msg);
+          processedCount++;
+        }
+      }
+
+      console.log(`[Recovery Engine] Missed messages recovery complete. Processed ${processedCount} missed messages.`);
+    } catch (err) {
+      console.error("[Recovery Engine] Failed to recover missed messages:", err);
+    }
+  }
   }
 
   // Refresh and fetch all available group chat names
