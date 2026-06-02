@@ -714,52 +714,6 @@ app.get('/api/messages/recent', (req, res) => {
   res.json(recentMessages);
 });
 
-// Temporary endpoint to debug contact resolution from the WhatsApp client
-app.get('/api/debug-contacts', async (req, res) => {
-  try {
-    const client = whatsapp.client;
-    if (!client) return res.status(500).json({ error: "WhatsApp client not running" });
-    
-    const chats = await client.getChats();
-    const attendanceChat = chats.find(c => c.isGroup && c.name.toLowerCase() === 'attendance');
-    if (!attendanceChat) return res.json({ error: "ATTENDANCE group not found in active chats" });
-    
-    const participants = attendanceChat.groupMetadata.participants || [];
-    const details = [];
-    for (const p of participants) {
-      const jid = p.id._serialized;
-      try {
-        const contact = await client.getContactById(jid);
-        let phoneNum = contact.number || "";
-        
-        // Try getContactLidAndPhone if JID is @lid
-        let phoneFromLidMethod = null;
-        if (jid.endsWith('@lid') && typeof client.getContactLidAndPhone === 'function') {
-          const mapping = await client.getContactLidAndPhone([jid]);
-          if (mapping && mapping.length > 0 && mapping[0].pn) {
-            phoneFromLidMethod = mapping[0].pn;
-          }
-        }
-
-        details.push({
-          id: jid,
-          number: phoneNum,
-          phoneFromLidMethod: phoneFromLidMethod,
-          name: contact.name || "",
-          pushname: contact.pushname || "",
-          isMyContact: contact.isMyContact
-        });
-      } catch (err) {
-        details.push({ id: jid, error: err.message });
-      }
-    }
-    
-    res.json(details);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // --- Selfie Verification Board APIs ---
 app.get('/api/selfies', (req, res) => {
   if (!database.read().selfies) {
