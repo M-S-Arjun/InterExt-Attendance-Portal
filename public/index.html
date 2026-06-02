@@ -584,17 +584,20 @@
                   <input type="file" id="camera-image-file" class="form-control" accept="image/*">
                 </div>
               </div>
-              <div style="background: #f0f7ff; border-radius: 8px; padding: 12px; margin: 12px 0; border-left: 4px solid #2196F3;">
-                <div style="font-weight: 600; margin-bottom: 8px; color: #1976D2;">🧠 Face Recognition</div>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px;">
-                  <button type="button" class="btn btn-info" onclick="recognizeFaceFromCamera()" title="Recognize employee from uploaded image">
-                    🔍 Recognize Face
+              <div class="face-recognition-panel">
+                <div class="fr-header">
+                  <i data-lucide="cpu" class="fr-header-icon"></i>
+                  <span class="fr-header-title">Face Recognition Control Panel</span>
+                </div>
+                <div class="fr-buttons-grid">
+                  <button type="button" class="btn-fr" onclick="recognizeFaceFromCamera()" title="Recognize employee from uploaded image">
+                    <i data-lucide="scan-face"></i> Recognize Face
                   </button>
-                  <button type="button" class="btn btn-info" onclick="trainFaceRecognitionModel()" title="Train model with employee images">
-                    🧪 Train Model
+                  <button type="button" class="btn-fr" onclick="trainFaceRecognitionModel()" title="Train model with employee images">
+                    <i data-lucide="brain"></i> Train Model
                   </button>
-                  <button type="button" class="btn btn-info" onclick="getFaceRecognitionStatus()" title="Check face recognition status">
-                    ℹ️ Model Status
+                  <button type="button" class="btn-fr" onclick="getFaceRecognitionStatus()" title="Check face recognition status">
+                    <i data-lucide="info"></i> Model Status
                   </button>
                 </div>
               </div>

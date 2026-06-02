@@ -2094,5 +2094,111 @@ textarea.form-control {
   }
 }
 
+/* ==========================================================================
+   WIDGET: PREMIUM FACE RECOGNITION PANEL
+   ========================================================================== */
+.face-recognition-panel {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-lg);
+  padding: 24px;
+  margin: 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: var(--shadow-sm);
+  transition: all var(--transition-normal);
+  position: relative;
+  overflow: hidden;
+}
+
+.face-recognition-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background: linear-gradient(180deg, var(--color-primary), var(--color-info));
+}
+
+.face-recognition-panel:hover {
+  border-color: rgba(255, 107, 0, 0.25);
+  box-shadow: 0 8px 32px rgba(255, 107, 0, 0.08), var(--shadow-lg);
+}
+
+.fr-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fr-header-icon {
+  color: var(--color-primary);
+  width: 22px;
+  height: 22px;
+  filter: drop-shadow(0 0 4px var(--brand-shadow));
+}
+
+.fr-header-title {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: 0.75px;
+  text-transform: uppercase;
+  background: linear-gradient(90deg, var(--text-primary), var(--text-secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.fr-buttons-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.btn-fr {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--glass-border);
+  color: var(--text-primary);
+  padding: 14px 20px;
+  font-weight: 700;
+  font-size: 0.82rem;
+  border-radius: var(--border-radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-fr i {
+  width: 18px;
+  height: 18px;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.btn-fr:hover {
+  background: linear-gradient(135deg, rgba(255, 107, 0, 0.08), rgba(255, 107, 0, 0.01));
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(255, 107, 0, 0.2);
+}
+
+.btn-fr:hover i {
+  color: var(--color-primary);
+  transform: scale(1.1);
+}
+
+.btn-fr:active {
+  transform: translateY(-1px);
+}
+
 
 
