@@ -557,55 +557,111 @@
             </div>
           </div>
 
-          <div class="glass-card" style="margin-bottom: 18px; padding: 18px;">
-            <form id="camera-event-form" onsubmit="handleCameraEventSubmit(event)">
-              <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px;">
-                <div class="form-group">
-                  <label for="camera-emp-select">Employee</label>
-                  <select id="camera-emp-select" class="form-control" required></select>
+          <!-- Camera Control Grid Wrapper -->
+          <div class="camera-attendance-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 20px; margin-bottom: 24px;">
+            
+            <!-- Left Side: Manual Event Form -->
+            <div class="glass-card" style="margin-bottom: 0; padding: 24px; display: flex; flex-direction: column;">
+              <form id="camera-event-form" onsubmit="handleCameraEventSubmit(event)" style="display: flex; flex-direction: column; height: 100%;">
+                <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                  <div class="form-group" style="grid-column: span 2;">
+                    <label for="camera-emp-select">Employee</label>
+                    <select id="camera-emp-select" class="form-control" required></select>
+                  </div>
+                  <div class="form-group">
+                    <label for="camera-event-type">Event Type</label>
+                    <select id="camera-event-type" class="form-control">
+                      <option value="entry">Entry</option>
+                      <option value="exit">Exit</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label for="camera-site-select">Camera Location / Site</label>
+                    <select id="camera-site-select" class="form-control"></select>
+                  </div>
+                  <div class="form-group" style="grid-column: span 2;">
+                    <label for="camera-event-timestamp">Timestamp</label>
+                    <input type="datetime-local" id="camera-event-timestamp" class="form-control">
+                  </div>
+                  <div class="form-group" style="grid-column: span 2;">
+                    <label for="camera-image-file">Upload Employee Image (Optional File Test)</label>
+                    <input type="file" id="camera-image-file" class="form-control" accept="image/*">
+                  </div>
                 </div>
-                <div class="form-group">
-                  <label for="camera-event-type">Event Type</label>
-                  <select id="camera-event-type" class="form-control">
-                    <option value="entry">Entry</option>
-                    <option value="exit">Exit</option>
-                  </select>
+                
+                <div class="face-recognition-panel" style="margin-top: 20px; margin-bottom: 20px;">
+                  <div class="fr-header">
+                    <i data-lucide="cpu" class="fr-header-icon"></i>
+                    <span class="fr-header-title">Face Recognition Control Panel</span>
+                  </div>
+                  <div class="fr-buttons-grid">
+                    <button type="button" class="btn-fr" onclick="recognizeFaceFromCamera()" title="Recognize employee from uploaded image">
+                      <i data-lucide="scan-face"></i> Recognize Face
+                    </button>
+                    <button type="button" class="btn-fr" onclick="trainFaceRecognitionModel()" title="Train model with employee images">
+                      <i data-lucide="brain"></i> Train Model
+                    </button>
+                    <button type="button" class="btn-fr" onclick="getFaceRecognitionStatus()" title="Check face recognition status">
+                      <i data-lucide="info"></i> Model Status
+                    </button>
+                  </div>
                 </div>
-                <div class="form-group">
-                  <label for="camera-site-select">Camera Location / Site</label>
-                  <select id="camera-site-select" class="form-control"></select>
+                
+                <div class="form-actions" style="margin-top: auto; padding-top: 12px; justify-content: flex-end; border-top: 1px solid var(--glass-border);">
+                  <button type="button" class="btn btn-secondary" onclick="resetCameraEventForm()">Clear</button>
+                  <button type="submit" class="btn btn-primary" id="camera-event-submit-btn">Record Camera Event</button>
                 </div>
-                <div class="form-group">
-                  <label for="camera-event-timestamp">Timestamp</label>
-                  <input type="datetime-local" id="camera-event-timestamp" class="form-control">
+              </form>
+            </div>
+
+            <!-- Right Side: Live Webcam Scanner -->
+            <div class="glass-card webcam-scanner-card" style="padding: 24px; display: flex; flex-direction: column; gap: 16px; position: relative;">
+              <div class="card-header" style="padding: 0 0 12px 0; margin-bottom: 0; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--glass-border);">
+                <h3 style="font-size: 0.95rem; margin: 0; display: flex; align-items: center; gap: 8px;"><i data-lucide="video" style="color: var(--color-primary); width: 18px; height: 18px;"></i> Live Webcam Scanner</h3>
+                <span class="badge" id="camera-status-badge" style="background: rgba(113, 113, 122, 0.1); color: var(--text-tertiary); border: 1px solid var(--glass-border); font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 12px; letter-spacing: 0.5px; text-transform: uppercase;">OFFLINE</span>
+              </div>
+              
+              <div class="webcam-viewport" style="width: 100%; height: 260px; background: #07070a; border: 1px solid var(--glass-border); border-radius: var(--border-radius-md); position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 20px rgba(0,0,0,0.8);">
+                <!-- Video Feed -->
+                <video id="webcam-feed" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover; display: none; transform: scaleX(-1);"></video>
+                
+                <!-- Placeholder when camera is off -->
+                <div id="webcam-placeholder" style="text-align: center; color: var(--text-tertiary); display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                  <i data-lucide="camera-off" style="width: 42px; height: 42px; stroke-width: 1.5; color: var(--text-tertiary);"></i>
+                  <p style="font-size: 0.85rem; margin: 0;">Camera feed is inactive.</p>
+                  <p style="font-size: 0.75rem; color: var(--text-tertiary); margin: 0;">Click 'Start Camera' below to scan faces.</p>
                 </div>
-                <div class="form-group">
-                  <label for="camera-image-file">Employee Image (Optional)</label>
-                  <input type="file" id="camera-image-file" class="form-control" accept="image/*">
+
+                <!-- Scanner Animation Overlay (Only visible when active) -->
+                <div id="scanner-overlay" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; border: 1px solid rgba(255, 107, 0, 0.25); border-radius: var(--border-radius-md); box-sizing: border-box;">
+                  <div class="scan-line" style="position: absolute; width: 100%; height: 3px; background: linear-gradient(90deg, transparent, var(--color-primary), transparent); top: 0; animation: scanning 2.5s linear infinite; box-shadow: 0 0 10px var(--color-primary);"></div>
+                  <!-- Crosshair brackets -->
+                  <div style="position: absolute; top: 15px; left: 15px; width: 20px; height: 20px; border-top: 3px solid var(--color-primary); border-left: 3px solid var(--color-primary);"></div>
+                  <div style="position: absolute; top: 15px; right: 15px; width: 20px; height: 20px; border-top: 3px solid var(--color-primary); border-right: 3px solid var(--color-primary);"></div>
+                  <div style="position: absolute; bottom: 15px; left: 15px; width: 20px; height: 20px; border-bottom: 3px solid var(--color-primary); border-left: 3px solid var(--color-primary);"></div>
+                  <div style="position: absolute; bottom: 15px; right: 15px; width: 20px; height: 20px; border-bottom: 3px solid var(--color-primary); border-right: 3px solid var(--color-primary);"></div>
                 </div>
               </div>
-              <div class="face-recognition-panel">
-                <div class="fr-header">
-                  <i data-lucide="cpu" class="fr-header-icon"></i>
-                  <span class="fr-header-title">Face Recognition Control Panel</span>
-                </div>
-                <div class="fr-buttons-grid">
-                  <button type="button" class="btn-fr" onclick="recognizeFaceFromCamera()" title="Recognize employee from uploaded image">
-                    <i data-lucide="scan-face"></i> Recognize Face
-                  </button>
-                  <button type="button" class="btn-fr" onclick="trainFaceRecognitionModel()" title="Train model with employee images">
-                    <i data-lucide="brain"></i> Train Model
-                  </button>
-                  <button type="button" class="btn-fr" onclick="getFaceRecognitionStatus()" title="Check face recognition status">
-                    <i data-lucide="info"></i> Model Status
-                  </button>
-                </div>
+
+              <!-- Camera selector and controls -->
+              <div class="form-group" style="margin-bottom: 0;">
+                <label for="webcam-select" style="font-size: 0.8rem; margin-bottom: 6px; display: block; font-weight: 600; color: var(--text-secondary);">Select Video Source</label>
+                <select id="webcam-select" class="form-control" style="background: var(--bg-primary); border-color: var(--glass-border); font-size: 0.85rem; height: 36px; padding: 0 10px; width: 100%; color: var(--text-primary);"></select>
               </div>
-              <div class="form-actions" style="margin-top: 16px; justify-content: flex-end;">
-                <button type="button" class="btn btn-secondary" onclick="resetCameraEventForm()">Clear</button>
-                <button type="submit" class="btn btn-primary" id="camera-event-submit-btn">Record Camera Event</button>
+
+              <div style="display: flex; gap: 12px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--glass-border);">
+                <button type="button" class="btn btn-secondary btn-icon" id="btn-toggle-webcam" onclick="toggleWebcam()" style="flex: 1; height: 42px;">
+                  <i data-lucide="video"></i> Start Camera
+                </button>
+                <button type="button" class="btn btn-primary btn-icon" id="btn-capture-scan" onclick="captureAndRecognizeFace()" disabled style="flex: 1.5; height: 42px; opacity: 0.5; pointer-events: none;">
+                  <i data-lucide="scan"></i> Scan & Verify
+                </button>
               </div>
-            </form>
+
+              <!-- Hidden canvas for capturing frames -->
+              <canvas id="webcam-canvas" style="display: none;"></canvas>
+            </div>
+
           </div>
 
           <div class="overflow-x">

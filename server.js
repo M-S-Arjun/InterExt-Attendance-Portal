@@ -433,7 +433,19 @@ app.post('/api/face/recognize', async (req, res) => {
     if (data.success && data.matched) {
       // Face recognized - auto-create attendance event
       const db = database.read();
-      const employee = db.employees?.find(e => e.id === data.employee_id);
+      let employee = db.employees?.find(e => e.id === data.employee_id);
+      if (!employee) {
+        // Fallback: match by directory name format (lowercase with underscores)
+        employee = db.employees?.find(e => {
+          if (!e.name) return false;
+          const cleanDbName = e.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
+          const cleanInputName = data.employee_id.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
+          return cleanDbName === cleanInputName || 
+                 cleanDbName.replace(/_/g, '') === cleanInputName.replace(/_/g, '') || 
+                 cleanDbName.includes(cleanInputName) || 
+                 cleanInputName.includes(cleanDbName);
+        });
+      }
       
       if (employee) {
         const now = new Date();

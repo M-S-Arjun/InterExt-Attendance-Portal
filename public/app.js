@@ -222,6 +222,7 @@ function switchTab(tabName) {
       title.textContent = "Camera Attendance";
       subtitle.textContent = "Record office entry/exit events and map attendance to employee logs";
       refreshCameraEvents();
+      initWebcamList();
       break;
     case 'sites':
       title.textContent = "Work Sites Registry";
@@ -3034,5 +3035,160 @@ async function deleteHoliday(date) {
   } catch (err) {
     console.error("Failed to delete holiday:", err);
     alert("Failed to delete holiday: " + err.message);
+  }
+}
+
+// ==========================================================================
+// CAMERA ATTENDANCE WEBCAM SCANNING CONTROLLER
+// ==========================================================================
+let webcamStream = null;
+
+async function initWebcamList() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter(device => device.kind === 'videoinput');
+    const select = document.getElementById('webcam-select');
+    if (!select) return;
+
+    select.innerHTML = '';
+    if (videoDevices.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = "";
+      opt.text = "No cameras detected";
+      select.appendChild(opt);
+      return;
+    }
+
+    videoDevices.forEach((device, index) => {
+      const opt = document.createElement('option');
+      opt.value = device.deviceId;
+      opt.text = device.label || `Camera ${index + 1}`;
+      select.appendChild(opt);
+    });
+  } catch (err) {
+    console.error("Error listing camera devices:", err);
+  }
+}
+
+async function toggleWebcam() {
+  const btn = document.getElementById('btn-toggle-webcam');
+  const scanBtn = document.getElementById('btn-capture-scan');
+  const video = document.getElementById('webcam-feed');
+  const placeholder = document.getElementById('webcam-placeholder');
+  const overlay = document.getElementById('scanner-overlay');
+  const statusBadge = document.getElementById('camera-status-badge');
+  const select = document.getElementById('webcam-select');
+
+  if (!btn || !video || !placeholder || !overlay || !statusBadge) return;
+
+  if (webcamStream) {
+    // Stop webcam
+    const tracks = webcamStream.getTracks();
+    tracks.forEach(track => track.stop());
+    webcamStream = null;
+
+    video.srcObject = null;
+    video.style.display = 'none';
+    placeholder.style.display = 'flex';
+    overlay.style.display = 'none';
+
+    btn.innerHTML = `<i data-lucide="video"></i> Start Camera`;
+    statusBadge.textContent = "OFFLINE";
+    statusBadge.style.background = "rgba(113, 113, 122, 0.1)";
+    statusBadge.style.color = "var(--text-tertiary)";
+    statusBadge.style.borderColor = "var(--glass-border)";
+
+    scanBtn.disabled = true;
+    scanBtn.style.opacity = '0.5';
+    scanBtn.style.pointerEvents = 'none';
+
+    if (window.lucide) window.lucide.createIcons();
+  } else {
+    // Start webcam
+    const deviceId = select ? select.value : null;
+    const constraints = {
+      video: deviceId ? { deviceId: { exact: deviceId } } : true
+    };
+
+    try {
+      webcamStream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = webcamStream;
+      video.style.display = 'block';
+      placeholder.style.display = 'none';
+      overlay.style.display = 'block';
+
+      btn.innerHTML = `<i data-lucide="video-off"></i> Stop Camera`;
+      statusBadge.textContent = "ACTIVE SCANNING";
+      statusBadge.style.background = "rgba(255, 107, 0, 0.1)";
+      statusBadge.style.color = "var(--color-primary)";
+      statusBadge.style.borderColor = "rgba(255, 107, 0, 0.2)";
+
+      scanBtn.disabled = false;
+      scanBtn.style.opacity = '1';
+      scanBtn.style.pointerEvents = 'auto';
+
+      if (window.lucide) window.lucide.createIcons();
+    } catch (err) {
+      console.error("Error accessing webcam:", err);
+      alert("Could not access camera: " + err.message);
+    }
+  }
+}
+
+async function captureAndRecognizeFace() {
+  const video = document.getElementById('webcam-feed');
+  const canvas = document.getElementById('webcam-canvas');
+  if (!video || !canvas || !webcamStream) return;
+
+  const scanBtn = document.getElementById('btn-capture-scan');
+  const originalHtml = scanBtn.innerHTML;
+  
+  // Set scanning state
+  scanBtn.disabled = true;
+  scanBtn.innerHTML = `<i data-lucide="loader" class="animate-spin"></i> Analyzing...`;
+  if (window.lucide) window.lucide.createIcons();
+
+  try {
+    const ctx = canvas.getContext('2d');
+    // Set canvas dimensions to match the video feed
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+
+    // Draw the current video frame to the canvas
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Convert to Base64 image data url
+    const imageBase64 = canvas.toDataURL('image/jpeg');
+
+    // Call face recognition API
+    const resp = await fetch('/api/face/recognize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        imageBase64: imageBase64,
+        threshold: 0.55
+      })
+    });
+    
+    const result = await resp.json();
+    
+    if (result.recognized) {
+      // Auto-populate form
+      document.getElementById('camera-emp-select').value = result.employee.id;
+      document.getElementById('camera-event-type').value = result.eventType;
+      setCameraEventTimestampNow();
+      
+      alert(`✓ Face recognized successfully!\n\nEmployee: ${result.employee.name}\nConfidence: ${(result.confidence * 100).toFixed(1)}%\nAction Type: ${result.eventType.toUpperCase()}`);
+    } else {
+      alert('✗ Face match not recognized.\nPlease adjust your positioning, lighting, or select the employee manually.');
+    }
+  } catch (err) {
+    console.error("Webcam face recognition failed:", err);
+    alert("Scan failed: " + err.message);
+  } finally {
+    // Restore button
+    scanBtn.disabled = false;
+    scanBtn.innerHTML = originalHtml;
+    if (window.lucide) window.lucide.createIcons();
   }
 }
