@@ -68,6 +68,10 @@
           <i data-lucide="camera"></i>
           <span>Selfie Verifications</span>
         </button>
+        <button class="nav-item" onclick="switchTab('camera')">
+          <i data-lucide="video"></i>
+          <span>Camera Attendance</span>
+        </button>
         <button class="nav-item" onclick="switchTab('sites')">
           <i data-lucide="map-pin"></i>
           <span>Work Sites</span>
@@ -514,6 +518,107 @@
                 </tr>
               </thead>
               <tbody id="selfies-table-body">
+                <!-- Generated Dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3.75: CAMERA ATTENDANCE VIEW -->
+      <div id="tab-camera" class="tab-view">
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="video"></i> Camera Attendance Control</h3>
+              <p>Capture entry and exit events from office cameras, mark attendance, and attach employee imagery later.</p>
+            </div>
+            <div class="header-right flex-filters">
+              <button class="btn btn-secondary btn-icon" onclick="refreshCameraEvents()"><i data-lucide="refresh-cw"></i> Refresh Events</button>
+            </div>
+          </div>
+
+          <div class="table-control-bar" style="flex-wrap: wrap; gap: 16px;">
+            <div class="table-control-left" style="flex: 1 1 320px; min-width: 320px;">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="camera-search-input" class="form-control" placeholder="Search by employee, site, or event type..." oninput="applyCameraFilters()">
+              </div>
+            </div>
+            <div class="table-control-right" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <select id="camera-filter-type" class="table-control-select" onchange="applyCameraFilters()">
+                <option value="">-- All Event Types --</option>
+                <option value="entry">Entry</option>
+                <option value="exit">Exit</option>
+              </select>
+              <select id="camera-filter-site" class="table-control-select" onchange="applyCameraFilters()">
+                <option value="">-- All Sites --</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="glass-card" style="margin-bottom: 18px; padding: 18px;">
+            <form id="camera-event-form" onsubmit="handleCameraEventSubmit(event)">
+              <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px;">
+                <div class="form-group">
+                  <label for="camera-emp-select">Employee</label>
+                  <select id="camera-emp-select" class="form-control" required></select>
+                </div>
+                <div class="form-group">
+                  <label for="camera-event-type">Event Type</label>
+                  <select id="camera-event-type" class="form-control">
+                    <option value="entry">Entry</option>
+                    <option value="exit">Exit</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="camera-site-select">Camera Location / Site</label>
+                  <select id="camera-site-select" class="form-control"></select>
+                </div>
+                <div class="form-group">
+                  <label for="camera-event-timestamp">Timestamp</label>
+                  <input type="datetime-local" id="camera-event-timestamp" class="form-control">
+                </div>
+                <div class="form-group">
+                  <label for="camera-image-file">Employee Image (Optional)</label>
+                  <input type="file" id="camera-image-file" class="form-control" accept="image/*">
+                </div>
+              </div>
+              <div style="background: #f0f7ff; border-radius: 8px; padding: 12px; margin: 12px 0; border-left: 4px solid #2196F3;">
+                <div style="font-weight: 600; margin-bottom: 8px; color: #1976D2;">🧠 Face Recognition</div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px;">
+                  <button type="button" class="btn btn-info" onclick="recognizeFaceFromCamera()" title="Recognize employee from uploaded image">
+                    🔍 Recognize Face
+                  </button>
+                  <button type="button" class="btn btn-info" onclick="trainFaceRecognitionModel()" title="Train model with employee images">
+                    🧪 Train Model
+                  </button>
+                  <button type="button" class="btn btn-info" onclick="getFaceRecognitionStatus()" title="Check face recognition status">
+                    ℹ️ Model Status
+                  </button>
+                </div>
+              </div>
+              <div class="form-actions" style="margin-top: 16px; justify-content: flex-end;">
+                <button type="button" class="btn btn-secondary" onclick="resetCameraEventForm()">Clear</button>
+                <button type="submit" class="btn btn-primary" id="camera-event-submit-btn">Record Camera Event</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="overflow-x">
+            <table class="data-table" id="camera-events-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Employee</th>
+                  <th>Event</th>
+                  <th>Site</th>
+                  <th>Timestamp</th>
+                  <th>Image</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="camera-events-table-body">
                 <!-- Generated Dynamically -->
               </tbody>
             </table>

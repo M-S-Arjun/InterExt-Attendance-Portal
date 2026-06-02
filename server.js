@@ -324,6 +324,234 @@ app.post('/api/attendance/save', (req, res) => {
   }
 });
 
+// Camera attendance events
+app.get('/api/attendance/camera/events', (req, res) => {
+  const events = database.getCameraEvents();
+  const sorted = [...events].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  res.json(sorted);
+});
+
+app.post('/api/attendance/camera', (req, res) => {
+  try {
+    const { employeeId, eventType, siteName, timestamp, imageBase64, imageFilename } = req.body;
+    if (!employeeId || !eventType || !timestamp) {
+      return res.status(400).json({ error: 'employeeId, eventType, and timestamp are required.' });
+    }
+
+    const db = database.read();
+    const employee = (db.employees || []).find(e => e.id === employeeId);
+    if (!employee) {
+      return res.status(400).json({ error: 'Employee not found.' });
+    }
+
+    const eventDate = new Date(timestamp).toISOString().split('T')[0];
+    const cameraEvent = {
+      employeeId,
+      employeeName: employee.name,
+      eventType: eventType === 'exit' ? 'exit' : 'entry',
+      siteName: siteName || 'Office',
+      timestamp: new Date(timestamp).toISOString(),
+      date: eventDate,
+      imageBase64,
+      imageFilename,
+      status: 'recorded'
+    };
+    const savedEvent = database.saveCameraEvent(cameraEvent);
+
+    const attendanceDate = eventDate;
+    const attendanceEntry = {
+      employeeId,
+      employeeName: employee.name,
+      date: attendanceDate,
+      siteName: cameraEvent.siteName,
+      messageText: `Camera ${cameraEvent.eventType} event`,
+    };
+
+    const existingAttendance = (db.attendance || []).find(a => a.employeeId === employeeId && a.date === attendanceDate);
+    if (eventType === 'entry') {
+      attendanceEntry.checkIn = cameraEvent.timestamp;
+      if (existingAttendance && existingAttendance.checkOut) {
+        attendanceEntry.id = existingAttendance.id;
+        attendanceEntry.checkOut = existingAttendance.checkOut;
+      }
+    } else {
+      // exit event
+      if (existingAttendance && existingAttendance.checkIn) {
+        attendanceEntry.id = existingAttendance.id;
+        attendanceEntry.checkIn = existingAttendance.checkIn;
+      } else {
+        attendanceEntry.checkIn = cameraEvent.timestamp;
+      }
+      attendanceEntry.checkOut = cameraEvent.timestamp;
+    }
+
+    const savedAttendance = database.saveAttendance(attendanceEntry);
+    io.emit('attendance_updated', savedAttendance);
+    res.json({ cameraEvent: savedEvent, attendance: savedAttendance });
+  } catch (err) {
+    console.error('[API] Camera attendance save failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Face Recognition Integration (via Python service)
+const FACE_RECOGNITION_SERVICE = process.env.FACE_RECOGNITION_URL || 'http://localhost:5000';
+
+// Health check for face recognition service
+app.get('/api/face/health', async (req, res) => {
+  try {
+    const response = await fetch(`${FACE_RECOGNITION_SERVICE}/health`);
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[API] Face recognition service error:', err.message);
+    res.status(503).json({ error: 'Face recognition service unavailable' });
+  }
+});
+
+// Recognize face from camera image
+app.post('/api/face/recognize', async (req, res) => {
+  try {
+    const { imageBase64, threshold } = req.body;
+    
+    if (!imageBase64) {
+      return res.status(400).json({ error: 'imageBase64 required' });
+    }
+    
+    const formData = new URLSearchParams();
+    formData.append('image_base64', imageBase64);
+    if (threshold) formData.append('threshold', threshold);
+    
+    const response = await fetch(`${FACE_RECOGNITION_SERVICE}/api/face/recognize`, {
+      method: 'POST',
+      body: formData,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+    
+    const data = await response.json();
+    
+    if (data.success && data.matched) {
+      // Face recognized - auto-create attendance event
+      const db = database.read();
+      const employee = db.employees?.find(e => e.id === data.employee_id);
+      
+      if (employee) {
+        const now = new Date();
+        const timestamp = now.toISOString();
+        const eventDate = timestamp.split('T')[0];
+        
+        // Determine if this is check-in or check-out based on existing attendance
+        const existingAttendance = (db.attendance || []).find(
+          a => a.employeeId === employee.id && a.date === eventDate
+        );
+        
+        const eventType = existingAttendance && existingAttendance.checkIn ? 'exit' : 'entry';
+        
+        const attendanceEntry = {
+          employeeId: employee.id,
+          employeeName: employee.name,
+          date: eventDate,
+          siteName: 'Camera (Auto-recognized)',
+          messageText: `Face recognized - auto ${eventType}`,
+          facialRecognitionMatch: true,
+          matchConfidence: data.confidence
+        };
+        
+        if (eventType === 'entry') {
+          attendanceEntry.checkIn = timestamp;
+          if (existingAttendance?.checkOut) {
+            attendanceEntry.id = existingAttendance.id;
+            attendanceEntry.checkOut = existingAttendance.checkOut;
+          }
+        } else {
+          if (existingAttendance?.checkIn) {
+            attendanceEntry.id = existingAttendance.id;
+            attendanceEntry.checkIn = existingAttendance.checkIn;
+          }
+          attendanceEntry.checkOut = timestamp;
+        }
+        
+        const savedAttendance = database.saveAttendance(attendanceEntry);
+        io.emit('attendance_updated', savedAttendance);
+        
+        return res.json({
+          success: true,
+          recognized: true,
+          employee: { id: employee.id, name: employee.name },
+          confidence: data.confidence,
+          attendance: savedAttendance,
+          eventType: eventType
+        });
+      }
+    }
+    
+    return res.json(data);
+  } catch (err) {
+    console.error('[API] Face recognition error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get face recognition embeddings info
+app.get('/api/face/embeddings-info', async (req, res) => {
+  try {
+    const response = await fetch(`${FACE_RECOGNITION_SERVICE}/api/face/embeddings`);
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[API] Face embeddings info error:', err.message);
+    res.status(503).json({ error: 'Face recognition service unavailable' });
+  }
+});
+
+// Train face recognition model
+app.post('/api/face/train', async (req, res) => {
+  try {
+    const { imagesDir } = req.body;
+    
+    if (!imagesDir) {
+      return res.status(400).json({ error: 'imagesDir required' });
+    }
+    
+    const formData = new URLSearchParams();
+    formData.append('images_dir', imagesDir);
+    
+    const response = await fetch(`${FACE_RECOGNITION_SERVICE}/api/face/train`, {
+      method: 'POST',
+      body: formData,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+    
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[API] Face training error:', err.message);
+    res.status(503).json({ error: err.message });
+  }
+});
+
+// Load face embeddings
+app.post('/api/face/load-embeddings', async (req, res) => {
+  try {
+    const { filePath } = req.body;
+    
+    const formData = new URLSearchParams();
+    if (filePath) formData.append('file_path', filePath);
+    
+    const response = await fetch(`${FACE_RECOGNITION_SERVICE}/api/face/load-embeddings`, {
+      method: 'POST',
+      body: formData,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+    
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[API] Load embeddings error:', err.message);
+    res.status(503).json({ error: err.message });
+  }
+});
+
 // Resolve Exception Board (Unparsed Message)
 app.get('/api/pending', (req, res) => {
   res.json(database.getPendingMessages());
@@ -1419,8 +1647,8 @@ whatsapp.on('status', async (status) => {
 
       if (db.pending_messages) {
         for (const msg of db.pending_messages) {
-          // Check if sender looks like a LID (e.g. 15-digit number starting with 1 or 2, which corresponds to LID format)
-          if (msg.sender && msg.sender.length >= 15 && (msg.sender.startsWith('1') || msg.sender.startsWith('2'))) {
+          // Check if sender looks like a LID (e.g. 14 or 15-digit numeric string)
+          if (msg.sender && msg.sender.length >= 14 && msg.sender.length <= 15 && /^\d+$/.test(msg.sender)) {
             const lidJid = msg.sender + '@lid';
             console.log(`[Self-Healing] Resolving JID for pending message sender LID: ${lidJid}...`);
             let resolvedPhone = null;

@@ -484,6 +484,60 @@ class Database {
     return list;
   }
 
+  // Camera attendance events are kept separately from the primary attendance sheet
+  getCameraEvents() {
+    const db = this.read();
+    if (!db.cameraEvents) {
+      db.cameraEvents = [];
+      this.writeAtomic(db);
+    }
+    return db.cameraEvents;
+  }
+
+  saveCameraEvent(event) {
+    const db = this.read();
+    if (!db.cameraEvents) db.cameraEvents = [];
+
+    // Ensure event metadata
+    event.id = event.id || `cam_${Date.now()}`;
+    event.employeeName = event.employeeName || '';
+    event.eventType = event.eventType || 'entry';
+    event.siteName = event.siteName || 'Office';
+    event.timestamp = event.timestamp || new Date().toISOString();
+    event.date = event.date || event.timestamp.split('T')[0];
+    event.status = event.status || 'recorded';
+    event.createdAt = event.createdAt || new Date().toISOString();
+
+    // Save optional image bytes to a camera uploads folder
+    if (event.imageBase64 && event.imageFilename) {
+      try {
+        const uploadsDir = path.join(__dirname, 'public', 'uploads', 'camera');
+        if (!fs.existsSync(uploadsDir)) {
+          fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+
+        const cleanFilename = event.imageFilename.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        const filename = `${event.id}_${cleanFilename}`;
+        const filepath = path.join(uploadsDir, filename);
+        const buffer = Buffer.from(event.imageBase64, 'base64');
+        fs.writeFileSync(filepath, buffer);
+        event.imageUrl = `/uploads/camera/${filename}`;
+      } catch (imgErr) {
+        console.warn('[CameraEvent] Failed to save attached image:', imgErr.message);
+      }
+    }
+
+    const existingIndex = db.cameraEvents.findIndex(e => e.id === event.id);
+    if (existingIndex >= 0) {
+      db.cameraEvents[existingIndex] = { ...db.cameraEvents[existingIndex], ...event };
+    } else {
+      db.cameraEvents.push(event);
+    }
+
+    this.writeAtomic(db);
+    return event;
+  }
+
   // Save/Update attendance log
   // Handles manual adjustments and triggers shift calculations
   saveAttendance(record) {
@@ -1213,7 +1267,7 @@ class Database {
     }
 
     // 3. Match Employee
-    let emp = db.employees.find(e => e.phone === senderPhone);
+    let emp = db.employees.find(e => e.phone && e.phone.replace(/\D/g, '') === senderPhone.replace(/\D/g, ''));
     
     // If not found by phone, try to match by parsed caption name
     if (caption) {
@@ -1396,7 +1450,7 @@ class Database {
     if (!db.selfies) return null;
     
     // Find closest employee
-    let emp = db.employees.find(e => e.phone === senderPhone);
+    let emp = db.employees.find(e => e.phone && e.phone.replace(/\D/g, '') === senderPhone.replace(/\D/g, ''));
     const employeeId = emp ? emp.id : `unknown_${senderPhone}`;
     
     // Search selfies within last 5 minutes or next 5 minutes

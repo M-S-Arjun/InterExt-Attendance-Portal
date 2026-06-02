@@ -7,6 +7,7 @@ let state = {
   sites: [],
   settings: {},
   attendance: [],
+  cameraEvents: [],
   pendingMessages: [],
   canUndo: false,
   activeTab: 'dashboard',
@@ -44,6 +45,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (payrollMonthInput) {
     payrollMonthInput.value = new Date().toISOString().substring(0, 7);
   }
+  setCameraEventTimestampNow();
 
   // Render clock tick
   updateHeaderClock();
@@ -106,19 +108,31 @@ async function loadDatabaseCore() {
 function populateDropdownOptions() {
   // Manual Attendance - site selector
   const attSiteSelect = document.getElementById('att-site');
+  const cameraEmpSelect = document.getElementById('camera-emp-select');
+  const cameraSiteSelect = document.getElementById('camera-site-select');
+  const cameraFilterSite = document.getElementById('camera-filter-site');
   
   const siteOptionsHtml = state.sites.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+  const employeeOptionsHtml = state.employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('');
   
-  attSiteSelect.innerHTML = siteOptionsHtml;
+  if (attSiteSelect) attSiteSelect.innerHTML = siteOptionsHtml;
+  if (cameraSiteSelect) cameraSiteSelect.innerHTML = siteOptionsHtml;
+  if (cameraFilterSite) cameraFilterSite.innerHTML = `<option value="">-- All Sites --</option>` + siteOptionsHtml;
+  if (cameraEmpSelect) cameraEmpSelect.innerHTML = employeeOptionsHtml;
 }
 
 // Populate excel-like dropdown filters dynamically
 function populateFilterDropdowns() {
   const logSiteFilter = document.getElementById('log-filter-site');
+  const cameraSiteFilter = document.getElementById('camera-filter-site');
   
   if (logSiteFilter) {
     const siteOptionsHtml = state.sites.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
     logSiteFilter.innerHTML = `<option value="">-- All Sites --</option>` + siteOptionsHtml;
+  }
+  if (cameraSiteFilter) {
+    const siteOptionsHtml = state.sites.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+    cameraSiteFilter.innerHTML = `<option value="">-- All Sites --</option>` + siteOptionsHtml;
   }
   
   const empModeFilter = document.getElementById('emp-filter-mode');
@@ -203,6 +217,11 @@ function switchTab(tabName) {
       title.textContent = "Selfie Verification Center";
       subtitle.textContent = "Verify real-time employee geolocations, timestamps, and anti-spoofing media records";
       loadSelfieLogs();
+      break;
+    case 'camera':
+      title.textContent = "Camera Attendance";
+      subtitle.textContent = "Record office entry/exit events and map attendance to employee logs";
+      refreshCameraEvents();
       break;
     case 'sites':
       title.textContent = "Work Sites Registry";
@@ -907,6 +926,284 @@ function renderAttendanceLogsTable(r) {
 
   if (window.lucide) {
     window.lucide.createIcons();
+  }
+}
+
+// Camera Attendance Event Loaders
+async function refreshCameraEvents() {
+  try {
+    const resp = await fetch('/api/attendance/camera/events');
+    if (!resp.ok) throw new Error(`Camera events load failed (${resp.status})`);
+    state.cameraEvents = await resp.json();
+    renderCameraEventsTable(state.cameraEvents);
+    resetCameraEventForm();
+  } catch (err) {
+    console.error("Failed to refresh camera events:", err);
+  }
+}
+
+function renderCameraEventsTable(events) {
+  const tbody = document.getElementById('camera-events-table-body');
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  if (!events || events.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-tertiary);">No camera attendance events recorded yet.</td></tr>`;
+    return;
+  }
+
+  const searchQuery = document.getElementById('camera-search-input')?.value.toLowerCase().trim() || '';
+  const typeFilter = document.getElementById('camera-filter-type')?.value || '';
+  const siteFilter = document.getElementById('camera-filter-site')?.value || '';
+
+  const filtered = events.filter(event => {
+    const matchesSearch = [event.employeeName, event.siteName, event.eventType, event.status].some(value => value && value.toLowerCase().includes(searchQuery));
+    const matchesType = !typeFilter || event.eventType === typeFilter;
+    const matchesSite = !siteFilter || event.siteName === siteFilter;
+    return matchesSearch && matchesType && matchesSite;
+  });
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-tertiary);">No camera events match the filter criteria.</td></tr>`;
+    return;
+  }
+
+  filtered.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+  filtered.forEach(event => {
+    const row = document.createElement('tr');
+    const eventLabel = event.eventType === 'entry' ? 'Entry' : 'Exit';
+    const timestampText = new Date(event.timestamp).toLocaleString([], { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+    const imageCell = event.imageUrl ? `<a href="${event.imageUrl}" target="_blank">View</a>` : '—';
+
+    row.innerHTML = `
+      <td>${event.date}</td>
+      <td>${event.employeeName}</td>
+      <td><strong>${eventLabel}</strong></td>
+      <td>${event.siteName || 'Office'}</td>
+      <td>${timestampText}</td>
+      <td>${imageCell}</td>
+      <td>${event.status || 'Recorded'}</td>
+    `;
+    tbody.appendChild(row);
+  });
+
+  if (window.lucide) {
+    window.lucide.createIcons();
+  }
+}
+
+function applyCameraFilters() {
+  renderCameraEventsTable(state.cameraEvents);
+}
+
+async function handleCameraEventSubmit(event) {
+  event.preventDefault();
+  const employeeId = document.getElementById('camera-emp-select')?.value;
+  const eventType = document.getElementById('camera-event-type')?.value;
+  const siteName = document.getElementById('camera-site-select')?.value;
+  const timestampInput = document.getElementById('camera-event-timestamp')?.value;
+  const fileInput = document.getElementById('camera-image-file');
+
+  if (!employeeId || !eventType || !timestampInput) {
+    alert('Please select an employee, event type, and timestamp.');
+    return;
+  }
+
+  const payload = {
+    employeeId,
+    eventType,
+    siteName: siteName || 'Office',
+    timestamp: new Date(timestampInput).toISOString()
+  };
+
+  const file = fileInput?.files?.[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result.split(',')[1];
+      payload.imageBase64 = base64;
+      payload.imageFilename = file.name;
+      await submitCameraEvent(payload);
+    };
+    reader.readAsDataURL(file);
+  } else {
+    await submitCameraEvent(payload);
+  }
+}
+
+async function submitCameraEvent(payload) {
+  try {
+    const resp = await fetch('/api/attendance/camera', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!resp.ok) {
+      const error = await resp.json().catch(() => ({}));
+      throw new Error(error.message || `Status ${resp.status}`);
+    }
+    await refreshCameraEvents();
+    alert('Camera attendance event recorded successfully.');
+  } catch (err) {
+    console.error('Failed to save camera event:', err);
+    alert('Unable to save camera event. Check console for details.');
+  }
+}
+
+function resetCameraEventForm() {
+  const form = document.getElementById('camera-event-form');
+  if (form) form.reset();
+  const now = new Date();
+  const localValue = now.toISOString().slice(0, 16);
+  const timestampInput = document.getElementById('camera-event-timestamp');
+  if (timestampInput) timestampInput.value = localValue;
+}
+
+function setCameraEventTimestampNow() {
+  const now = new Date();
+  const localValue = now.toISOString().slice(0, 16);
+  const timestampInput = document.getElementById('camera-event-timestamp');
+  if (timestampInput) timestampInput.value = localValue;
+}
+
+// Face Recognition Integration
+async function checkFaceRecognitionService() {
+  try {
+    const resp = await fetch('/api/face/health');
+    if (resp.ok) {
+      const data = await resp.json();
+      console.log("Face recognition service status:", data);
+      return data.model_loaded && data.embeddings_count > 0;
+    }
+    return false;
+  } catch (err) {
+    console.warn("Face recognition service not available:", err.message);
+    return false;
+  }
+}
+
+async function recognizeFaceFromCamera() {
+  try {
+    // Get current video frame or image from camera attendance
+    const fileInput = document.getElementById('camera-image-file');
+    if (!fileInput || !fileInput.files.length) {
+      alert('Please select or capture an image first');
+      return;
+    }
+
+    const file = fileInput.files[0];
+    const reader = new FileReader();
+    
+    reader.onload = async (e) => {
+      const imageBase64 = e.target.result;
+      
+      try {
+        const resp = await fetch('/api/face/recognize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: imageBase64,
+            threshold: 0.6
+          })
+        });
+        
+        const result = await resp.json();
+        
+        if (result.recognized) {
+          // Face recognized - auto-populate form
+          document.getElementById('camera-emp-select').value = result.employee.id;
+          document.getElementById('camera-event-type').value = result.eventType;
+          setCameraEventTimestampNow();
+          
+          // Show recognition result
+          alert(`✓ Face recognized!\nEmployee: ${result.employee.name}\nConfidence: ${(result.confidence * 100).toFixed(1)}%`);
+          
+          // Auto-submit or show preview
+          console.log("Face recognition result:", result);
+        } else {
+          alert('No matching employee found in database\nPlease select manually or train more images');
+        }
+      } catch (err) {
+        console.error('Face recognition error:', err);
+        alert('Face recognition failed: ' + err.message);
+      }
+    };
+    
+    reader.readAsDataURL(file);
+  } catch (err) {
+    console.error('Error in recognizeFaceFromCamera:', err);
+    alert('Error processing image');
+  }
+}
+
+async function trainFaceRecognitionModel() {
+  try {
+    const imagesDir = prompt('Enter path to employee images directory:\n\nExpected structure:\n/path/to/images/\n  employee_id_1/\n    photo1.jpg\n    photo2.jpg\n  employee_id_2/\n    photo1.jpg');
+    
+    if (!imagesDir) return;
+    
+    const resp = await fetch('/api/face/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imagesDir: imagesDir })
+    });
+    
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    
+    const result = await resp.json();
+    
+    if (result.success) {
+      alert(`✓ Training complete!\n\nEmployees trained: ${result.employees.length}\n\n${result.message}`);
+      console.log("Training result:", result);
+    } else {
+      alert('Training failed: ' + (result.error || 'Unknown error'));
+    }
+  } catch (err) {
+    console.error('Training error:', err);
+    alert('Training error: ' + err.message);
+  }
+}
+
+async function loadFaceEmbeddings() {
+  try {
+    const resp = await fetch('/api/face/load-embeddings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    
+    const result = await resp.json();
+    
+    if (result.success) {
+      alert(`✓ Embeddings loaded!\n\nEmployees: ${result.employees.length}\n${result.message}`);
+      console.log("Loaded embeddings:", result);
+    } else {
+      alert('Error loading embeddings: ' + (result.error || 'Unknown error'));
+    }
+  } catch (err) {
+    console.error('Load embeddings error:', err);
+    alert('Error: ' + err.message);
+  }
+}
+
+async function getFaceRecognitionStatus() {
+  try {
+    const resp = await fetch('/api/face/embeddings-info');
+    if (resp.ok) {
+      const data = await resp.json();
+      return {
+        employeesCount: data.employees_count,
+        modelName: data.model_name,
+        employees: data.employee_ids
+      };
+    }
+    return null;
+  } catch (err) {
+    console.warn("Error getting face recognition status:", err.message);
+    return null;
   }
 }
 

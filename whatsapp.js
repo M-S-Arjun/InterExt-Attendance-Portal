@@ -50,6 +50,7 @@ class WhatsAppManager extends EventEmitter {
     super();
     this.client = null;
     this.status = 'disconnected'; // 'disconnected', 'connecting', 'qr', 'authenticated', 'ready'
+    this.isInitializing = false;
     this.qrCodeDataUrl = null;
     this.activeChats = [];
     this.authReadyTimeout = null;
@@ -91,6 +92,11 @@ class WhatsAppManager extends EventEmitter {
 
   // Initialize the WhatsApp Web Client with self-healing lock release
   async initialize() {
+    if (this.isInitializing) {
+      console.log("[Startup] Already initializing. Skipping duplicate request.");
+      return;
+    }
+    this.isInitializing = true;
     console.log("Initializing WhatsApp Client...");
     this.status = 'connecting';
     this.emit('status', this.status);
@@ -139,10 +145,16 @@ class WhatsAppManager extends EventEmitter {
       });
 
       this.registerEvents();
-      this.client.initialize();
+      this.client.initialize().catch(err => {
+        console.error("[Startup] Client initialization promise rejected:", err);
+        this.status = 'disconnected';
+        this.isInitializing = false;
+        this.emit('status', this.status);
+      });
     } catch (err) {
       console.error("Failed to initialize WhatsApp Client:", err);
       this.status = 'disconnected';
+      this.isInitializing = false;
       this.emit('status', this.status);
     }
   }
@@ -201,6 +213,7 @@ class WhatsAppManager extends EventEmitter {
         }
 
         console.log("[Watchdog] Re-initializing fresh client...");
+        this.isInitializing = false;
         this.initialize();
       }, 180000);
     });
@@ -216,6 +229,7 @@ class WhatsAppManager extends EventEmitter {
       }
 
       this.status = 'disconnected';
+      this.isInitializing = false;
       this.qrCodeDataUrl = null;
       this.emit('status', this.status);
 
@@ -243,6 +257,7 @@ class WhatsAppManager extends EventEmitter {
       }
 
       this.status = 'ready';
+      this.isInitializing = false;
       this.qrCodeDataUrl = null;
       this.emit('status', this.status);
 
@@ -276,6 +291,7 @@ class WhatsAppManager extends EventEmitter {
       }
 
       this.status = 'disconnected';
+      this.isInitializing = false;
       this.qrCodeDataUrl = null;
       this.emit('status', this.status);
       
@@ -326,6 +342,16 @@ class WhatsAppManager extends EventEmitter {
         : (groupName && configuredGroupName && groupName.toLowerCase() === configuredGroupName.trim().toLowerCase());
 
       if (isMatchingGroup) {
+        // Filter out system messages or messages with empty body that aren't media/locations
+        const isPhoto = message.hasMedia && (message.type === 'image' || message.type === 'document');
+        const isLocation = message.type === 'location';
+        const hasEmptyBody = !message.body || message.body.trim().length === 0;
+        const isSystem = message.isSystem || !message.author;
+
+        if (isSystem || (hasEmptyBody && !isPhoto && !isLocation)) {
+          return; // Skip system messages and empty messages
+        }
+
         const msgId = message.id._serialized;
         
         // De-duplicate check
@@ -385,9 +411,6 @@ class WhatsAppManager extends EventEmitter {
         }
 
         console.log(`Processing group message from ${rawSenderJid} (resolved PN: ${senderPhone}): "${message.body || ''}"`);
-        
-        const isPhoto = message.hasMedia && (message.type === 'image' || message.type === 'document');
-        const isLocation = message.type === 'location';
         
         if (isPhoto) {
           console.log(`[Selfie Verifier] Media check-in received from +${senderPhone}`);
@@ -568,6 +591,7 @@ class WhatsAppManager extends EventEmitter {
     
     this.client = null;
     this.status = 'disconnected';
+    this.isInitializing = false;
     this.emit('status', this.status);
     
     // Reinitialize after short delay
@@ -583,6 +607,7 @@ class WhatsAppManager extends EventEmitter {
     try {
       await this.client.logout();
       this.status = 'disconnected';
+      this.isInitializing = false;
       this.qrCodeDataUrl = null;
       this.emit('status', this.status);
     } catch (err) {
@@ -650,6 +675,31 @@ class WhatsAppManager extends EventEmitter {
           this.lidToPhoneMap[id] = id;
         }
       });
+
+      // Dump the group members list to whatsapp_group_members.json
+      try {
+        const membersList = participants.map(p => {
+          const serialized = p.id._serialized;
+          const cleanId = p.id.user;
+          const resolvedPhone = this.lidToPhoneMap[cleanId] || (serialized.endsWith('@lid') ? null : cleanId);
+          return {
+            id: cleanId,
+            serialized: serialized,
+            resolvedPhone: resolvedPhone,
+            isAdmin: p.isAdmin || false,
+            isSuperAdmin: p.isSuperAdmin || false
+          };
+        });
+
+        fs.writeFileSync(
+          path.join(__dirname, 'whatsapp_group_members.json'),
+          JSON.stringify(membersList, null, 2),
+          'utf8'
+        );
+        console.log(`[LID Resolver] Successfully saved whatsapp_group_members.json with ${membersList.length} participants.`);
+      } catch (dumpErr) {
+        console.error("[LID Resolver] Failed to save group members dump:", dumpErr.message);
+      }
 
       // Self-heal database and memory cache
       this.emit('lid_mappings_updated', this.lidToPhoneMap);

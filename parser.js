@@ -697,7 +697,8 @@ class AttendanceParser {
         extractedAction: 'in',
         extractedName: "",
         extractedSite: "—",
-        confidence: 0
+        confidence: 0,
+        rawSender: senderPhone
       };
     }
 
