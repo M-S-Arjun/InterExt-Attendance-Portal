@@ -49,6 +49,8 @@ const DEFAULT_DB = {
 class Database {
   constructor() {
     this.init();
+    this.isSyncingExcel = false;
+    this.pendingExcelSync = false;
   }
 
   // Initialize DB file
@@ -200,7 +202,7 @@ class Database {
     }
     
     this.writeAtomic(db);
-    this.syncToExcel();
+    this.syncToExcelAsync();
     return employee;
   }
 
@@ -208,7 +210,7 @@ class Database {
     const db = this.read();
     db.employees = db.employees.filter(e => e.id !== id);
     this.writeAtomic(db);
-    this.syncToExcel();
+    this.syncToExcelAsync();
   }
 
   // --- Sites Table ---
@@ -229,7 +231,7 @@ class Database {
     }
     
     this.writeAtomic(db);
-    this.syncToExcel();
+    this.syncToExcelAsync();
     return site;
   }
 
@@ -237,7 +239,7 @@ class Database {
     const db = this.read();
     db.sites = db.sites.filter(s => s.id !== id);
     this.writeAtomic(db);
-    this.syncToExcel();
+    this.syncToExcelAsync();
   }
 
   // --- Settings Table ---
@@ -247,6 +249,12 @@ class Database {
 
   saveSettings(newSettings) {
     const db = this.read();
+    
+    // If the group name has changed, clear the stale group ID
+    if (newSettings.whatsappGroupName !== undefined && newSettings.whatsappGroupName !== db.settings.whatsappGroupName) {
+      db.settings.whatsappGroupId = "";
+    }
+    
     db.settings = { ...db.settings, ...newSettings };
     // Coerce settings numbers
     db.settings.standardFullDayHours = Number(db.settings.standardFullDayHours) || 8.0;
@@ -261,7 +269,7 @@ class Database {
     db.settings.esicContributionRate = Number(db.settings.esicContributionRate) !== undefined && !isNaN(Number(db.settings.esicContributionRate)) ? Number(db.settings.esicContributionRate) : 0.75;
     db.settings.ptDeductionStandard = Number(db.settings.ptDeductionStandard) !== undefined && !isNaN(Number(db.settings.ptDeductionStandard)) ? Number(db.settings.ptDeductionStandard) : 200.00;
     this.writeAtomic(db);
-    this.syncToExcel();
+    this.syncToExcelAsync();
     return db.settings;
   }
 
@@ -530,7 +538,7 @@ class Database {
     }
 
     this.writeAtomic(db);
-    this.syncToExcel();
+    this.syncToExcelAsync();
     return record;
   }
 
@@ -539,79 +547,8 @@ class Database {
   recordSingleFromWhatsApp(parsedData, rawText, messageTimestamp = null) {
     let db = this.read();
     
-    // Auto-registration feature: 
-    // If we don't have a matched employee but we have an extracted name from the message!
-    // Safeguard: Do not auto-register if the extracted site is unrecognized/empty ("—") to prevent site names from being registered as workers.
-    if (!parsedData.matchedEmployeeId && parsedData.extractedName && parsedData.extractedSite && parsedData.extractedSite !== "—") {
-      // Clean and title-case the extracted name (e.g. "arjun" -> "Arjun")
-      let cleanName = parsedData.extractedName.trim();
-      // Remove any numbers, list headers, or symbols from the name
-      cleanName = cleanName.replace(/[^a-zA-Z\s]/g, '').trim();
-      
-      // Basic formatting to capitalize first letters
-      cleanName = cleanName.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
-      
-      const INDIAN_PLACES = new Set([
-        'kochi', 'kottayam', 'thodupuzha', 'muvattupuzha', 'vazhakulam', 'vengalloor', 
-        'kothamangalam', 'thrissur', 'ernakulam', 'idukki', 'wayanad', 'malappuram',
-        'kannur', 'kasaragod', 'kollam', 'pathanamthitta', 'alappuzha', 'thiruvananthapuram',
-        'palakkad', 'cochin', 'trivandrum', 'coimbatore', 'bangalore'
-      ]);
-      
-      const BLACKLIST_WORDS = new Set([
-        'camera', 'photo', 'image', 'video', 'selfie', 'location', 'checkin', 'checkout',
-        'attendance', 'group', 'admin', 'supervisor', 'site', 'office', 'staff', 'worker',
-        'employee', 'present', 'absent', 'leave', 'wages', 'salary', 'pay', 'payroll',
-        'work', 'duty', 'shift', 'date', 'time', 'hours', 'mins', 'minutes', 'secs',
-        'seconds', 'hour', 'day', 'month', 'year', 'week', 'sunday', 'monday',
-        'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'in', 'out'
-      ]);
-      
-      const lowerCleanName = cleanName.toLowerCase();
-      const isPlace = INDIAN_PLACES.has(lowerCleanName);
-      const isBlacklisted = BLACKLIST_WORDS.has(lowerCleanName) || 
-                            lowerCleanName.split(/\s+/).some(w => BLACKLIST_WORDS.has(w));
-      
-      if (cleanName.length >= 2 && !isPlace && !isBlacklisted) {
-        const cleanPhone = (parsedData.rawSender || "").replace(/\D/g, '');
-        
-        // Find existing employee strictly by name to prevent duplicates
-        let existingEmp = (db.employees || []).find(e => e && e.name && e.name.toLowerCase() === cleanName.toLowerCase());
-        
-        if (existingEmp) {
-          // Employee exists - link the parsed match!
-          parsedData.matchedEmployeeId = existingEmp.id;
-          parsedData.isSuccess = true;
-          parsedData.reason = "";
-        } else {
-          // Register new employee dynamically!
-          const newEmpId = "emp_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
-          const defaultSiteId = parsedData.matchedSiteId || (db.sites[0] ? db.sites[0].id : "Site A (Main Yard)");
-          
-          const newEmployee = {
-            id: newEmpId,
-            name: cleanName,
-            phone: "", // Keep phone empty, do not map phone to individual worker profile
-            status: "active",
-            dailyRate: 120.00, // standard default
-            hourlyRate: 20.00, // standard default
-            siteId: defaultSiteId,
-            createdAt: new Date().toISOString()
-          };
-          
-          db.employees.push(newEmployee);
-          this.writeAtomic(db);
-          
-          parsedData.matchedEmployeeId = newEmpId;
-          parsedData.isSuccess = true;
-          parsedData.reason = "";
-          console.log(`[Auto-Registration] Registered new employee: ${cleanName}`);
-          
-          // Refresh our db handle
-          db = this.read();
-        }
-      }
-    }
+    // Auto-registration from text messages is disabled to prevent message text/phrases (e.g., "Good morning") from creating garbage employee profiles.
+    // Any unrecognized names will go to the Exception Resolution Board for manual review and mapping.
 
     if (!parsedData.isSuccess) {
       // Flag message for manual admin review
@@ -816,6 +753,30 @@ class Database {
       console.log(`[Auto-Closeout] Successfully finalized ${closedCount} active check-ins from previous days.`);
     }
     return closedCount;
+  }
+
+  // --- Asynchronous Background Excel Sync Queue ---
+  syncToExcelAsync() {
+    if (this.isSyncingExcel) {
+      this.pendingExcelSync = true;
+      return;
+    }
+    
+    this.isSyncingExcel = true;
+    
+    setTimeout(() => {
+      try {
+        this.syncToExcel();
+      } catch (err) {
+        console.error("[Excel Sync Async] Background compilation failed:", err);
+      } finally {
+        this.isSyncingExcel = false;
+        if (this.pendingExcelSync) {
+          this.pendingExcelSync = false;
+          this.syncToExcelAsync();
+        }
+      }
+    }, 50);
   }
 
   // --- Live Excel Compile Engine ---
@@ -1132,7 +1093,7 @@ class Database {
     db.holidays.sort((a, b) => a.date.localeCompare(b.date));
     
     this.writeAtomic(db);
-    this.syncToExcel();
+    this.syncToExcelAsync();
     return holiday;
   }
 
@@ -1142,7 +1103,7 @@ class Database {
     
     db.holidays = db.holidays.filter(h => h.date !== date);
     this.writeAtomic(db);
-    this.syncToExcel();
+    this.syncToExcelAsync();
   }
 
   // --- Selfie Verification Array ---
@@ -1423,7 +1384,7 @@ class Database {
         dbRead.attendance[recIndex].notes = warningNote;
         dbRead.attendance[recIndex].isManualOverride = false; // still alert admin
         this.writeAtomic(dbRead);
-        this.syncToExcel();
+        this.syncToExcelAsync();
       }
     }
 
@@ -1529,7 +1490,7 @@ class Database {
         dbRead.attendance[recIndex].notes = `[SELFIE VERIFIED] GPS match via location pin (Distance: ${Math.round(distance)}m)`;
         dbRead.attendance[recIndex].isManualOverride = true; // verified
         this.writeAtomic(dbRead);
-        this.syncToExcel();
+        this.syncToExcelAsync();
       }
     } else if (emp) {
       // If flagged, update matching attendance notes
@@ -1539,7 +1500,7 @@ class Database {
         db.attendance[recIndex].notes = `[FLAGGED SELFIE] Location Mismatch via Location Pin (${Math.round(distance)}m)`;
         db.attendance[recIndex].isManualOverride = false;
         this.writeAtomic(db);
-        this.syncToExcel();
+        this.syncToExcelAsync();
       }
     }
     

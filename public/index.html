@@ -219,8 +219,18 @@
             <!-- Exception Resolve Panel -->
             <div class="glass-card exception-panel" id="exception-panel" style="display: none;">
               <div class="card-header border-amber">
-                <h3 class="text-amber"><i data-lucide="alert-circle"></i> Exception Resolution Board</h3>
-                <span class="badge badge-amber" id="exception-count-badge">0 pending</span>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <h3 class="text-amber"><i data-lucide="alert-circle"></i> Exception Resolution Board</h3>
+                  <span class="badge badge-amber" id="exception-count-badge">0 pending</span>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <button id="btn-undo-exception" class="btn-undo" disabled onclick="triggerUndoException()">
+                    <i data-lucide="rotate-ccw"></i> Undo
+                  </button>
+                  <button id="btn-redo-exception" class="btn-redo" disabled onclick="triggerRedoException()">
+                    <i data-lucide="rotate-cw"></i> Redo
+                  </button>
+                </div>
               </div>
               <div class="card-body">
                 <div class="pending-list" id="pending-messages-list">

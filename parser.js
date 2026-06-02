@@ -349,6 +349,22 @@ class AttendanceParser {
       }
     }
 
+    // Check sender phone mapping if rawSender is provided
+    if (rawSender) {
+      const cleanSender = rawSender.replace(/\D/g, '');
+      if (cleanSender) {
+        const phoneMatchedEmployee = validEmployees.find(e => e.phone && e.phone.replace(/\D/g, '') === cleanSender);
+        if (phoneMatchedEmployee) {
+          // If no employee was matched in the text, or if the text match is weak (confidence < 0.95)
+          if (!matchedEmployee || employeeConfidence < 0.95) {
+            matchedEmployee = phoneMatchedEmployee;
+            employeeConfidence = 1.0;
+            extractedName = phoneMatchedEmployee.name;
+          }
+        }
+      }
+    }
+
     if (!matchedSite && parts.length > 0) {
       let bestSite = null;
       let bestSiteScore = 0.0;

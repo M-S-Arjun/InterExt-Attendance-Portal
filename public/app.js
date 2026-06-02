@@ -8,6 +8,7 @@ let state = {
   settings: {},
   attendance: [],
   pendingMessages: [],
+  canUndo: false,
   activeTab: 'dashboard',
   selectedFilterDate: new Date().toISOString().split('T')[0],
   selectedRangeStart: '',
@@ -62,6 +63,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Load statistical values & active attendance logs
   await refreshDashboardData();
+
+  // Load historical recent messages for the WhatsApp feed
+  await loadRecentMessages();
   
   // Create icons
   if (window.lucide) {
@@ -138,7 +142,8 @@ async function refreshDashboardData() {
   await Promise.all([
     fetchStats(),
     loadAttendanceLogs(),
-    fetchPendingMessages()
+    fetchPendingMessages(),
+    checkUndoStatus()
   ]);
   
   updateCharts();
@@ -329,6 +334,39 @@ function registerSocketEvents() {
   });
 }
 
+// Load recent rolling cache of WhatsApp messages from backend
+async function loadRecentMessages() {
+  try {
+    const messages = await fetch('/api/messages/recent').then(r => r.json());
+    const feed = document.getElementById('ticker-feed');
+    if (!feed) return;
+
+    if (messages.length > 0) {
+      const empty = feed.querySelector('.ticker-empty');
+      if (empty) empty.remove();
+    } else {
+      return; // Keep "no messages" placeholder if empty
+    }
+
+    // Clear any existing ticker items to prevent duplication on reload/reconnect
+    feed.querySelectorAll('.ticker-item').forEach(el => el.remove());
+
+    // Sort by timestamp ascending (oldest first) so that as we prepend/insertBefore, 
+    // the newest message ends up at the very top of the feed
+    messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    messages.forEach(msg => {
+      if (msg.type === 'parsed') {
+        appendLiveTickerMessage(msg);
+      } else {
+        appendRawTickerMessage(msg);
+      }
+    });
+  } catch (err) {
+    console.error("Failed to load recent messages cache:", err);
+  }
+}
+
 // Append a minimal raw message to the ticker (used when parsing hasn't run yet)
 function appendRawTickerMessage(data) {
   const feed = document.getElementById('ticker-feed');
@@ -340,7 +378,7 @@ function appendRawTickerMessage(data) {
   item.style.animation = 'fadeIn 0.4s ease forwards';
 
   const formattedTime = new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const senderLabel = data.sender ? `+${data.sender}` : (data.chatId || 'unknown');
+  const senderLabel = data.sender ? (/^\d+$/.test(data.sender) ? `+${data.sender}` : data.sender) : (data.chatId || 'unknown');
   const siteLabel = data.groupName || '—';
 
   item.innerHTML = `
@@ -405,11 +443,12 @@ function appendLiveTickerMessage(data) {
     actionLabel = (data.parseResult.extractedAction || 'in').toUpperCase();
     siteLabel = data.parseResult.extractedSite || '—';
   }
+  const senderLabel = data.sender ? (/^\d+$/.test(data.sender) ? `+${data.sender}` : data.sender) : 'unknown';
   
   item.innerHTML = `
     <div class="ticker-meta">
       <span class="ticker-sender">
-        <i data-lucide="message-square"></i> +${data.sender}
+        <i data-lucide="message-square"></i> ${senderLabel}
       </span>
       <span class="ticker-time">${formattedTime}</span>
     </div>
@@ -452,7 +491,7 @@ async function fetchStats() {
 
     // Toggle resolving Exception Box
     const exPanel = document.getElementById('exception-panel');
-    if (r.pendingExceptions > 0) {
+    if (r.pendingExceptions > 0 || state.canUndo) {
       exPanel.style.display = 'block';
       document.getElementById('exception-count-badge').textContent = `${r.pendingExceptions} pending`;
     } else {
@@ -619,6 +658,103 @@ async function deleteException(id) {
     refreshDashboardData();
   } catch (err) {
     console.error("Dismiss failed:", err);
+  }
+}
+
+// Check if undo/redo is available and toggle the button states
+async function checkUndoStatus() {
+  try {
+    const r = await fetch('/api/pending/undo/status').then(res => res.json());
+    state.canUndo = r.canUndo;
+    state.canRedo = r.canRedo;
+    
+    const ubtn = document.getElementById('btn-undo-exception');
+    if (ubtn) {
+      ubtn.disabled = !r.canUndo;
+      if (r.canUndo) {
+        ubtn.title = `Undo last exception resolution/dismiss action`;
+      } else {
+        ubtn.title = `No actions to undo`;
+      }
+    }
+    
+    const rbtn = document.getElementById('btn-redo-exception');
+    if (rbtn) {
+      rbtn.disabled = !r.canRedo;
+      if (r.canRedo) {
+        rbtn.title = `Redo last undone action`;
+      } else {
+        rbtn.title = `No actions to redo`;
+      }
+    }
+  } catch (err) {
+    console.error("Failed to check undo/redo status:", err);
+  }
+}
+
+// Trigger undo action on the backend
+async function triggerUndoException() {
+  try {
+    const btn = document.getElementById('btn-undo-exception');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `<i data-lucide="loader" class="animate-spin" style="width: 14px; height: 14px;"></i> Undoing...`;
+      if (window.lucide) window.lucide.createIcons();
+    }
+    
+    const res = await fetch('/api/pending/undo', {
+      method: 'POST'
+    }).then(r => r.json());
+    
+    if (res.success) {
+      console.log(`Successfully undone action: ${res.undoneAction}`);
+      await refreshDashboardData();
+    } else {
+      alert(`Undo failed: ${res.error}`);
+    }
+  } catch (err) {
+    console.error("Error triggering undo:", err);
+    alert("An error occurred while attempting to undo.");
+  } finally {
+    const btn = document.getElementById('btn-undo-exception');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<i data-lucide="rotate-ccw" style="width: 14px; height: 14px;"></i> Undo`;
+      if (window.lucide) window.lucide.createIcons();
+    }
+  }
+}
+
+// Trigger redo action on the backend
+async function triggerRedoException() {
+  try {
+    const btn = document.getElementById('btn-redo-exception');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `<i data-lucide="loader" class="animate-spin" style="width: 14px; height: 14px;"></i> Redoing...`;
+      if (window.lucide) window.lucide.createIcons();
+    }
+    
+    const res = await fetch('/api/pending/redo', {
+      method: 'POST'
+    }).then(r => r.json());
+    
+    if (res.success) {
+      console.log(`Successfully redone action: ${res.redoneAction}`);
+      await refreshDashboardData();
+    } else {
+      alert(`Redo failed: ${res.error}`);
+    }
+  } catch (err) {
+    console.error("Error triggering redo:", err);
+    alert("An error occurred while attempting to redo.");
+  } finally {
+    const btn = document.getElementById('btn-redo-exception');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<i data-lucide="rotate-cw" style="width: 14px; height: 14px;"></i> Redo`;
+      if (window.lucide) window.lucide.createIcons();
+    }
   }
 }
 

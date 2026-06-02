@@ -22,6 +22,100 @@ const XLSX = require('xlsx');
 const database = require('./database');
 const whatsapp = require('./whatsapp');
 
+// In-memory stack to store resolved/deleted exception actions for the undo function
+const undoStack = [];
+const redoStack = [];
+
+// In-memory rolling cache of the last 20 messages for the realtime dashboard feed
+const recentMessages = [];
+
+function addToRecentMessages(type, data) {
+  if (type === 'parsed') {
+    // Attempt to locate and upgrade the corresponding raw message in the cache
+    const existing = recentMessages.find(m => 
+      m.sender === data.sender && 
+      m.timestamp === data.timestamp &&
+      m.messageText === data.messageText
+    );
+    if (existing) {
+      existing.type = 'parsed';
+      existing.parseResult = data.parseResult;
+      existing.loggedRecord = data.loggedRecord;
+      return;
+    }
+  }
+
+  // Otherwise, push new
+  const msgObj = {
+    type: type,
+    ...data
+  };
+  
+  // Prevent duplicate raw insertions
+  const isDuplicateRaw = type === 'raw' && recentMessages.some(m =>
+    m.sender === data.sender &&
+    m.timestamp === data.timestamp &&
+    m.messageText === data.messageText
+  );
+  if (isDuplicateRaw) return;
+
+  recentMessages.push(msgObj);
+  if (recentMessages.length > 20) {
+    recentMessages.shift();
+  }
+}
+
+// Seed recent messages from database (pending messages and recent attendance logs) on startup
+try {
+  const db = database.read();
+  const seeded = [];
+  
+  // 1. Add pending messages
+  if (db.pending_messages) {
+    db.pending_messages.forEach(msg => {
+      seeded.push({
+        type: 'raw',
+        sender: msg.sender,
+        messageText: msg.messageText,
+        timestamp: msg.timestamp || new Date().toISOString()
+      });
+    });
+  }
+
+  // 2. Add attendance logs that have source messages
+  if (db.attendance) {
+    db.attendance.forEach(log => {
+      if (log.messageText) {
+        const emp = (db.employees || []).find(e => e && (e.id === log.employeeId || e.name === log.employeeName));
+        const senderPhone = emp && emp.phone ? emp.phone : (log.employeeName || 'System');
+        seeded.push({
+          type: 'parsed',
+          sender: senderPhone,
+          messageText: log.messageText,
+          timestamp: log.checkIn || log.checkOut || (log.date + 'T12:00:00.000Z'),
+          parseResult: {
+            isSuccess: true,
+            extractedAction: log.checkOut ? 'out' : 'in',
+            extractedSite: log.siteName || 'Main Site'
+          }
+        });
+      }
+    });
+  }
+
+  // Sort by timestamp descending
+  seeded.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  
+  // Take the last 20 messages and push them (oldest first to preserve rolling push order)
+  const initialBatch = seeded.slice(0, 20).reverse();
+  initialBatch.forEach(msg => {
+    recentMessages.push(msg);
+  });
+  console.log(`[Recent Cache] Seeded rolling cache with ${recentMessages.length} messages from database history.`);
+} catch (err) {
+  console.error("[Recent Cache] Failed to seed recent messages from DB:", err);
+}
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -59,6 +153,25 @@ app.get('/api/status', (req, res) => {
     qr: whatsapp.qrCodeDataUrl,
     activeChats: whatsapp.activeChats
   });
+});
+
+// Debug endpoint to capture a screenshot of the WhatsApp Web page running in Puppeteer
+app.get('/api/debug/whatsapp-screenshot', async (req, res) => {
+  try {
+    if (!whatsapp.client) {
+      return res.status(400).send("WhatsApp client is not initialized.");
+    }
+    if (!whatsapp.client.pupPage) {
+      return res.status(400).send("WhatsApp Puppeteer page (pupPage) is not available.");
+    }
+    const screenshotPath = path.join(__dirname, 'whatsapp_screenshot.png');
+    await whatsapp.client.pupPage.screenshot({ path: screenshotPath, fullPage: true });
+    console.log(`[Debug] WhatsApp Web page screenshot saved to: ${screenshotPath}`);
+    res.send(`Screenshot successfully saved to: ${screenshotPath}`);
+  } catch (err) {
+    console.error("[Debug] Failed to capture WhatsApp screenshot:", err);
+    res.status(500).send(`Error capturing screenshot: ${err.message}`);
+  }
 });
 
 // System General Analytics
@@ -121,6 +234,9 @@ app.get('/api/settings', (req, res) => {
 
 app.post('/api/settings', (req, res) => {
   const settings = database.saveSettings(req.body);
+  if (whatsapp && typeof whatsapp.resolveGroupId === 'function') {
+    whatsapp.resolveGroupId().catch(err => console.error("Error resolving group ID live:", err));
+  }
   res.json(settings);
 });
 
@@ -217,6 +333,9 @@ app.post('/api/pending/resolve', (req, res) => {
   try {
     const { messageId, employeeId, employeeName, siteId, siteName, action, time, date } = req.body;
 
+    let createdEmployeeId = null;
+    let createdSiteId = null;
+
     const db = database.read();
     let emp = employeeId ? db.employees.find(e => e.id === employeeId) : null;
     const normalizedEmployeeName = employeeName ? employeeName.trim() : "";
@@ -237,6 +356,7 @@ app.post('/api/pending/resolve', (req, res) => {
         hourlyRate: 20,
         siteId: defaultSiteId || "site_a"
       });
+      createdEmployeeId = emp.id;
     }
 
     let site = siteId ? db.sites.find(s => s.id === siteId) : null;
@@ -248,6 +368,7 @@ app.post('/api/pending/resolve', (req, res) => {
         name: normalizedSiteName,
         description: "Custom site created via exception resolver"
       });
+      createdSiteId = site.id;
     }
 
     const pendingMsg = db.pending_messages.find(m => m.id === messageId);
@@ -259,6 +380,14 @@ app.post('/api/pending/resolve', (req, res) => {
 
     let record = {};
     const existingIndex = db.attendance.findIndex(a => a.employeeId === emp.id && a.date === targetDate);
+    
+    let originalAttendanceRecord = null;
+    let attendanceRevertType = 'create';
+
+    if (existingIndex >= 0) {
+      originalAttendanceRecord = JSON.parse(JSON.stringify(db.attendance[existingIndex]));
+      attendanceRevertType = 'update';
+    }
 
     if (action === 'in') {
       record = {
@@ -294,6 +423,35 @@ app.post('/api/pending/resolve', (req, res) => {
     const saved = database.saveAttendance(record);
     database.deletePendingMessage(messageId);
 
+    // Track resolve action for undo
+    undoStack.push({
+      type: 'resolve',
+      payload: {
+        messageId,
+        employeeId,
+        employeeName,
+        siteId,
+        siteName,
+        action,
+        time,
+        date: targetDate
+      },
+      pendingMessage: pendingMsg ? { ...pendingMsg } : null,
+      createdEmployeeId,
+      createdSiteId,
+      attendanceRevert: {
+        type: attendanceRevertType,
+        date: targetDate,
+        employeeId: emp.id,
+        originalRecord: originalAttendanceRecord
+      }
+    });
+    if (undoStack.length > 10) {
+      undoStack.shift();
+    }
+    // Clear redoStack on any new action
+    redoStack.length = 0;
+
     io.emit('attendance_updated', saved);
     io.emit('pending_updated');
 
@@ -304,9 +462,302 @@ app.post('/api/pending/resolve', (req, res) => {
 });
 
 app.delete('/api/pending/:id', (req, res) => {
-  database.deletePendingMessage(req.params.id);
-  io.emit('pending_updated');
-  res.json({ success: true });
+  try {
+    const db = database.read();
+    const pendingMsg = db.pending_messages.find(m => m.id === req.params.id);
+    if (pendingMsg) {
+      undoStack.push({
+        type: 'delete',
+        payload: { id: req.params.id },
+        pendingMessage: { ...pendingMsg },
+        createdEmployeeId: null,
+        createdSiteId: null,
+        attendanceRevert: null
+      });
+      if (undoStack.length > 10) {
+        undoStack.shift();
+      }
+      // Clear redoStack on any new action
+      redoStack.length = 0;
+    }
+    database.deletePendingMessage(req.params.id);
+    io.emit('pending_updated');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint to undo the last resolved or deleted exception
+app.post('/api/pending/undo', (req, res) => {
+  try {
+    if (undoStack.length === 0) {
+      return res.status(400).json({ error: "No actions to undo." });
+    }
+
+    const lastAction = undoStack.pop();
+    const db = database.read();
+
+    // 1. Restore the pending message
+    if (lastAction.pendingMessage) {
+      const exists = db.pending_messages.some(m => m.id === lastAction.pendingMessage.id);
+      if (!exists) {
+        db.pending_messages.push(lastAction.pendingMessage);
+      }
+    }
+
+    // 2. Revert employee auto-registration if created during this action
+    if (lastAction.createdEmployeeId) {
+      db.employees = db.employees.filter(e => e.id !== lastAction.createdEmployeeId);
+    }
+
+    // 3. Revert site auto-registration if created during this action
+    if (lastAction.createdSiteId) {
+      db.sites = db.sites.filter(s => s.id !== lastAction.createdSiteId);
+    }
+
+    // 4. Revert attendance record changes
+    if (lastAction.attendanceRevert) {
+      const { type, date, employeeId, originalRecord } = lastAction.attendanceRevert;
+      if (type === 'create') {
+        db.attendance = db.attendance.filter(a => !(a.employeeId === employeeId && a.date === date));
+      } else if (type === 'update') {
+        const index = db.attendance.findIndex(a => a.employeeId === employeeId && a.date === date);
+        if (index >= 0) {
+          if (originalRecord) {
+            db.attendance[index] = originalRecord;
+          } else {
+            db.attendance.splice(index, 1);
+          }
+        }
+      }
+    }
+
+    // Save changes back to database
+    database.writeAtomic(db);
+    database.syncToExcelAsync();
+
+    // Push the undone action onto the redo stack
+    redoStack.push(lastAction);
+    if (redoStack.length > 10) {
+      redoStack.shift();
+    }
+
+    // Emit live socket updates to refresh UI immediately
+    io.emit('attendance_updated');
+    io.emit('pending_updated');
+
+    res.json({ success: true, undoneAction: lastAction.type });
+  } catch (err) {
+    console.error("[Undo Engine] Failed to undo action:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint to redo the last undone action
+app.post('/api/pending/redo', (req, res) => {
+  try {
+    if (redoStack.length === 0) {
+      return res.status(400).json({ error: "No actions to redo." });
+    }
+
+    const lastAction = redoStack.pop();
+
+    if (lastAction.type === 'resolve') {
+      const { messageId, employeeId, employeeName, siteId, siteName, action, time, date } = lastAction.payload;
+
+      let createdEmployeeId = null;
+      let createdSiteId = null;
+
+      const db = database.read();
+      let emp = employeeId ? db.employees.find(e => e.id === employeeId) : null;
+      const normalizedEmployeeName = employeeName ? employeeName.trim() : "";
+      const normalizedSiteName = siteName ? siteName.trim() : "";
+
+      if (!emp && normalizedEmployeeName) {
+        emp = db.employees.find(e => e.name.toLowerCase() === normalizedEmployeeName.toLowerCase());
+      }
+
+      if (!emp && normalizedEmployeeName) {
+        // Auto-register new custom worker if not found
+        const defaultSiteId = siteId || (db.sites[0] ? db.sites[0].id : null);
+        emp = database.saveEmployee({
+          name: normalizedEmployeeName,
+          phone: "",
+          status: "active",
+          dailyRate: 120,
+          hourlyRate: 20,
+          siteId: defaultSiteId || "site_a"
+        });
+        createdEmployeeId = emp.id;
+      }
+
+      let site = siteId ? db.sites.find(s => s.id === siteId) : null;
+      if (!site && normalizedSiteName) {
+        site = db.sites.find(s => s.name.toLowerCase() === normalizedSiteName.toLowerCase());
+      }
+      if (!site && normalizedSiteName) {
+        site = database.saveSite({
+          name: normalizedSiteName,
+          description: "Custom site created via exception resolver"
+        });
+        createdSiteId = site.id;
+      }
+
+      const pendingMsg = db.pending_messages.find(m => m.id === messageId);
+      if (!emp) return res.status(400).json({ error: "Employee name is required." });
+
+      const targetSiteName = site ? site.name : (normalizedSiteName || "Main Site");
+      const targetDate = date || new Date().toISOString().split('T')[0];
+      const timestamp = time ? new Date(`${targetDate}T${time}`).toISOString() : new Date().toISOString();
+
+      let record = {};
+      const existingIndex = db.attendance.findIndex(a => a.employeeId === emp.id && a.date === targetDate);
+      
+      let originalAttendanceRecord = null;
+      let attendanceRevertType = 'create';
+
+      if (existingIndex >= 0) {
+        originalAttendanceRecord = JSON.parse(JSON.stringify(db.attendance[existingIndex]));
+        attendanceRevertType = 'update';
+      }
+
+      if (action === 'in') {
+        record = {
+          employeeId: emp.id,
+          employeeName: emp.name,
+          siteName: targetSiteName,
+          date: targetDate,
+          checkIn: timestamp,
+          checkOut: null,
+          messageText: pendingMsg ? `[RESOLVED] ${pendingMsg.messageText}` : "Manual check-in",
+          status: "checked-in"
+        };
+      } else {
+        if (existingIndex >= 0) {
+          record = db.attendance[existingIndex];
+          record.checkOut = timestamp;
+          record.messageText += pendingMsg ? ` | [RESOLVED] ${pendingMsg.messageText}` : " | Manual check-out";
+        } else {
+          const defaultCheckIn = new Date(`${targetDate}T08:00:00`).toISOString();
+          record = {
+            employeeId: emp.id,
+            employeeName: emp.name,
+            siteName: targetSiteName,
+            date: targetDate,
+            checkIn: defaultCheckIn,
+            checkOut: timestamp,
+            messageText: pendingMsg ? `[RESOLVED OUT ONLY] ${pendingMsg.messageText}` : "Manual out-only",
+            status: "completed"
+          };
+        }
+      }
+
+      const saved = database.saveAttendance(record);
+      database.deletePendingMessage(messageId);
+
+      // Push back to undoStack
+      undoStack.push({
+        type: 'resolve',
+        payload: lastAction.payload,
+        pendingMessage: pendingMsg ? { ...pendingMsg } : (lastAction.pendingMessage ? { ...lastAction.pendingMessage } : null),
+        createdEmployeeId,
+        createdSiteId,
+        attendanceRevert: {
+          type: attendanceRevertType,
+          date: targetDate,
+          employeeId: emp.id,
+          originalRecord: originalAttendanceRecord
+        }
+      });
+      if (undoStack.length > 10) {
+        undoStack.shift();
+      }
+
+      io.emit('attendance_updated', saved);
+      io.emit('pending_updated');
+
+      res.json({ success: true, redoneAction: 'resolve' });
+
+    } else if (lastAction.type === 'delete') {
+      const messageId = lastAction.payload.id;
+      database.deletePendingMessage(messageId);
+
+      // Push back to undoStack
+      undoStack.push(lastAction);
+      if (undoStack.length > 10) {
+        undoStack.shift();
+      }
+
+      io.emit('pending_updated');
+      res.json({ success: true, redoneAction: 'delete' });
+    } else {
+      res.status(400).json({ error: "Unknown action type" });
+    }
+  } catch (err) {
+    console.error("[Redo Engine] Failed to redo action:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint to check if undo/redo is available
+app.get('/api/pending/undo/status', (req, res) => {
+  res.json({
+    canUndo: undoStack.length > 0,
+    canRedo: redoStack.length > 0,
+    lastActionType: undoStack.length > 0 ? undoStack[undoStack.length - 1].type : null
+  });
+});
+
+// Endpoint to retrieve recent messages rolling cache
+app.get('/api/messages/recent', (req, res) => {
+  res.json(recentMessages);
+});
+
+// Temporary endpoint to debug contact resolution from the WhatsApp client
+app.get('/api/debug-contacts', async (req, res) => {
+  try {
+    const client = whatsapp.client;
+    if (!client) return res.status(500).json({ error: "WhatsApp client not running" });
+    
+    const chats = await client.getChats();
+    const attendanceChat = chats.find(c => c.isGroup && c.name.toLowerCase() === 'attendance');
+    if (!attendanceChat) return res.json({ error: "ATTENDANCE group not found in active chats" });
+    
+    const participants = attendanceChat.groupMetadata.participants || [];
+    const details = [];
+    for (const p of participants) {
+      const jid = p.id._serialized;
+      try {
+        const contact = await client.getContactById(jid);
+        let phoneNum = contact.number || "";
+        
+        // Try getContactLidAndPhone if JID is @lid
+        let phoneFromLidMethod = null;
+        if (jid.endsWith('@lid') && typeof client.getContactLidAndPhone === 'function') {
+          const mapping = await client.getContactLidAndPhone([jid]);
+          if (mapping && mapping.length > 0 && mapping[0].pn) {
+            phoneFromLidMethod = mapping[0].pn;
+          }
+        }
+
+        details.push({
+          id: jid,
+          number: phoneNum,
+          phoneFromLidMethod: phoneFromLidMethod,
+          name: contact.name || "",
+          pushname: contact.pushname || "",
+          isMyContact: contact.isMyContact
+        });
+      } catch (err) {
+        details.push({ id: jid, error: err.message });
+      }
+    }
+    
+    res.json(details);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- Selfie Verification Board APIs ---
@@ -379,7 +830,7 @@ app.post('/api/selfies/reject', (req, res) => {
       if (recIndex >= 0) {
         db.attendance[recIndex].notes = `[REJECTED SELFIE] ${adminNotes || 'Location invalid'}`;
         database.writeAtomic(db);
-        database.syncToExcel();
+        database.syncToExcelAsync();
         io.emit('attendance_updated', db.attendance[recIndex]);
       }
     }
@@ -616,7 +1067,7 @@ app.post('/api/checkin/web', async (req, res) => {
         dbRead.attendance[recIndex].notes = warningNote;
         dbRead.attendance[recIndex].isManualOverride = false;
         database.writeAtomic(dbRead);
-        database.syncToExcel();
+        database.syncToExcelAsync();
         io.emit('attendance_updated', dbRead.attendance[recIndex]);
       }
     }
@@ -1003,8 +1454,73 @@ io.on('connection', (socket) => {
 });
 
 // Connect WhatsApp Client manager events to socket streamer
-whatsapp.on('status', (status) => {
+whatsapp.on('status', async (status) => {
   io.emit('whatsapp_status', status);
+  
+  if (status === 'ready') {
+    try {
+      const client = whatsapp.client;
+      const db = database.read();
+      let dbUpdated = false;
+
+      if (db.pending_messages) {
+        for (const msg of db.pending_messages) {
+          // Check if sender looks like a LID (e.g. 15-digit number starting with 1 or 2, which corresponds to LID format)
+          if (msg.sender && msg.sender.length >= 15 && (msg.sender.startsWith('1') || msg.sender.startsWith('2'))) {
+            const lidJid = msg.sender + '@lid';
+            console.log(`[Self-Healing] Resolving JID for pending message sender LID: ${lidJid}...`);
+            let resolvedPhone = null;
+
+            try {
+              if (client && typeof client.getContactLidAndPhone === 'function') {
+                const mappings = await client.getContactLidAndPhone([lidJid]);
+                if (mappings && mappings.length > 0 && mappings[0].pn) {
+                  resolvedPhone = mappings[0].pn.split('@')[0];
+                }
+              }
+            } catch (e) {}
+
+            if (!resolvedPhone) {
+              try {
+                const contact = await client.getContactById(lidJid);
+                if (contact && contact.number) {
+                  resolvedPhone = contact.number;
+                }
+              } catch (e) {}
+            }
+
+            if (resolvedPhone) {
+              console.log(`[Self-Healing] Resolved pending sender LID ${msg.sender} -> ${resolvedPhone}`);
+              
+              // Map in server memory cache mapping table
+              whatsapp.lidToPhoneMap[msg.sender] = resolvedPhone;
+              
+              msg.sender = resolvedPhone;
+              dbUpdated = true;
+            }
+          }
+        }
+      }
+
+      if (dbUpdated) {
+        database.writeAtomic(db);
+        database.syncToExcelAsync();
+        
+        // Update memory cache
+        recentMessages.forEach(msg => {
+          if (whatsapp.lidToPhoneMap[msg.sender]) {
+            msg.sender = whatsapp.lidToPhoneMap[msg.sender];
+          }
+        });
+
+        io.emit('pending_updated');
+        io.emit('attendance_updated');
+        console.log("[Self-Healing] Completed resolution and database sync for pending LIDs.");
+      }
+    } catch (err) {
+      console.error("[Self-Healing] Error resolving pending message LIDs on ready:", err);
+    }
+  }
 });
 
 whatsapp.on('qr', (dataUrl) => {
@@ -1016,6 +1532,7 @@ whatsapp.on('chats_updated', (chats) => {
 });
 
 whatsapp.on('message_received', (data) => {
+  addToRecentMessages('parsed', data);
   io.emit('whatsapp_message', data);
   // Broadcast update metrics
   io.emit('stats_updated');
@@ -1035,6 +1552,7 @@ whatsapp.on('raw_message', (data) => {
     // Prefer matching by explicit groupId if the admin has saved it (robust against renames)
     if (settings.whatsappGroupId && data.groupId) {
       if (settings.whatsappGroupId === data.groupId) {
+        addToRecentMessages('raw', data);
         io.emit('whatsapp_raw', data);
       }
       return;
@@ -1043,12 +1561,51 @@ whatsapp.on('raw_message', (data) => {
     // Fallback: match by group name (case-insensitive)
     if (settings.whatsappGroupName && data.groupName) {
       if (data.groupName.trim().toLowerCase() === settings.whatsappGroupName.trim().toLowerCase()) {
+        addToRecentMessages('raw', data);
         io.emit('whatsapp_raw', data);
       }
     }
     // Otherwise ignore (personal chats or other groups)
   } catch (err) {
     console.error('Error while filtering raw_message for broadcast:', err);
+  }
+});
+
+// Self-healing LID resolver listener to clean database and memory cache
+whatsapp.on('lid_mappings_updated', (mappings) => {
+  try {
+    console.log("[Self-Healing] Received updated LID mappings. Healing database and cache...");
+    const db = database.read();
+    let dbUpdated = false;
+
+    // 1. Heal pending messages
+    if (db.pending_messages) {
+      db.pending_messages.forEach(msg => {
+        if (mappings[msg.sender]) {
+          console.log(`[Self-Healing] Healing pending message sender: ${msg.sender} -> ${mappings[msg.sender]}`);
+          msg.sender = mappings[msg.sender];
+          dbUpdated = true;
+        }
+      });
+    }
+
+    if (dbUpdated) {
+      database.writeAtomic(db);
+      database.syncToExcelAsync();
+    }
+
+    // 2. Heal recentMessages memory cache
+    recentMessages.forEach(msg => {
+      if (mappings[msg.sender]) {
+        msg.sender = mappings[msg.sender];
+      }
+    });
+
+    // Notify clients to refresh
+    io.emit('pending_updated');
+    io.emit('attendance_updated');
+  } catch (err) {
+    console.error("[Self-Healing] Error running database healing:", err);
   }
 });
 

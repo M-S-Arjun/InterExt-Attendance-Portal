@@ -55,6 +55,7 @@ class WhatsAppManager extends EventEmitter {
     this.authReadyTimeout = null;
     this.groupNameCache = {};
     this.groupIdCache = {};
+    this.lidToPhoneMap = {};
     this.lastMessageTime = Date.now();
     this.lastHealthCheckTime = Date.now();
     
@@ -117,9 +118,11 @@ class WhatsAppManager extends EventEmitter {
         }),
         authTimeoutMs: 120000, // 2 minutes timeout for auth
         qrTimeoutMs: 120000,   // 2 minutes timeout for QR scanning
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
         webVersionCache: {
           type: 'remote',
-          remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
+          remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
+          strict: false
         },
         puppeteer: {
           headless: true,
@@ -128,12 +131,9 @@ class WhatsAppManager extends EventEmitter {
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--disable-gpu',
-            '--disable-extensions',
-            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            '--disable-extensions'
           ]
         }
       });
@@ -246,27 +246,22 @@ class WhatsAppManager extends EventEmitter {
       this.qrCodeDataUrl = null;
       this.emit('status', this.status);
 
+      // Build LID to Phone mapping from group participants
+      try {
+        await this.buildLidMapping();
+      } catch (e) {
+        console.error("[LID Resolver] Failed to build initial LID mappings:", e);
+      }
+
       // Auto-resolve stable WhatsApp Group ID by configured Group Name
       try {
-        const settings = database.getSettings();
-        if (settings.whatsappGroupName) {
-          console.log(`[Startup] Resolving stable Group ID for "${settings.whatsappGroupName}"...`);
-          const chats = await this.client.getChats();
-          const matchedGroup = chats.find(c => c.isGroup && c.name.trim().toLowerCase() === settings.whatsappGroupName.trim().toLowerCase());
-          if (matchedGroup) {
-            const gid = matchedGroup.id._serialized;
-            if (settings.whatsappGroupId !== gid) {
-              console.log(`[Startup] Group resolved. Saving stable ID to settings: ${gid}`);
-              database.saveSettings({ ...settings, whatsappGroupId: gid });
-            }
-            // Trigger recovery of missed messages on startup
-            await this.recoverMissedMessages(matchedGroup);
-          } else {
-            console.warn(`[Startup] Active WhatsApp group named "${settings.whatsappGroupName}" not found in chat directory.`);
-          }
+        const matchedGroup = await this.resolveGroupId();
+        if (matchedGroup) {
+          // Trigger recovery of missed messages on startup
+          await this.recoverMissedMessages(matchedGroup);
         }
       } catch (err) {
-        console.error("[Startup] Failed to auto-resolve WhatsApp Group ID:", err);
+        console.error("[Startup] Failed during group auto-resolution / recovery:", err);
       }
     });
 
@@ -325,9 +320,10 @@ class WhatsAppManager extends EventEmitter {
       const configuredGroupId = settings.whatsappGroupId || null;
       const configuredGroupName = settings.whatsappGroupName || null;
 
-      // Match by groupId if configured, otherwise fall back to case-insensitive name match
-      const isMatchingGroup = (configuredGroupId && groupId && configuredGroupId === groupId)
-        || (groupName && configuredGroupName && groupName.toLowerCase() === configuredGroupName.trim().toLowerCase());
+      // Match strictly by groupId if configured, otherwise fall back to case-insensitive name match
+      const isMatchingGroup = configuredGroupId 
+        ? (groupId && configuredGroupId === groupId)
+        : (groupName && configuredGroupName && groupName.toLowerCase() === configuredGroupName.trim().toLowerCase());
 
       if (isMatchingGroup) {
         const msgId = message.id._serialized;
@@ -340,9 +336,42 @@ class WhatsAppManager extends EventEmitter {
 
         const msgTimestampISO = new Date(message.timestamp * 1000).toISOString();
 
+        // Get clean phone number of sender, resolving LID if necessary
+        const rawSenderJid = message.author || message.from;
+        let senderPhone = rawSenderJid.split('@')[0];
+        
+        if (this.lidToPhoneMap[senderPhone]) {
+          senderPhone = this.lidToPhoneMap[senderPhone];
+        } else if (rawSenderJid.endsWith('@lid')) {
+          try {
+            if (this.client && typeof this.client.getContactLidAndPhone === 'function') {
+              const mappings = await this.client.getContactLidAndPhone([rawSenderJid]);
+              if (mappings && mappings.length > 0 && mappings[0].pn) {
+                console.log(`[LID Resolver] Resolved ${rawSenderJid} -> ${mappings[0].pn} via getContactLidAndPhone`);
+                senderPhone = mappings[0].pn;
+                this.lidToPhoneMap[rawSenderJid.split('@')[0]] = senderPhone;
+              }
+            }
+          } catch (lidErr) {
+            console.warn("[LID Resolver] getContactLidAndPhone failed:", lidErr.message);
+          }
+
+          if (senderPhone === rawSenderJid.split('@')[0]) {
+            try {
+              const contact = await message.getContact();
+              if (contact && contact.number) {
+                console.log(`[LID Resolver] Resolved ${rawSenderJid} -> ${contact.number} via contact.number`);
+                senderPhone = contact.number;
+                this.lidToPhoneMap[rawSenderJid.split('@')[0]] = senderPhone;
+              }
+            } catch (contactErr) {
+              console.warn("[LID Resolver] getContact failed:", contactErr.message);
+            }
+          }
+        }
+
         // Emit a lightweight raw message event for real-time UI feed only for the configured group
         try {
-          const senderPhone = (message.author || message.from).split('@')[0];
           this.emit('raw_message', {
             chatId,
             groupId,
@@ -355,10 +384,7 @@ class WhatsAppManager extends EventEmitter {
           // Non-fatal - continue
         }
 
-        console.log(`Processing group message from ${message.author || message.from}: "${message.body || ''}"`);
-        
-        // Get clean phone number of sender
-        const senderPhone = (message.author || message.from).split('@')[0];
+        console.log(`Processing group message from ${rawSenderJid} (resolved PN: ${senderPhone}): "${message.body || ''}"`);
         
         const isPhoto = message.hasMedia && (message.type === 'image' || message.type === 'document');
         const isLocation = message.type === 'location';
@@ -435,19 +461,8 @@ class WhatsAppManager extends EventEmitter {
       console.log(`[Recovery Engine] Fetched ${messages.length} historical messages from WhatsApp.`);
 
       const processedIds = database.getProcessedMessageIds();
-      const isInitialSync = processedIds.length === 0;
 
-      if (isInitialSync) {
-        console.log("[Recovery Engine] Initial startup sync: Seeding existing message IDs to establish baseline...");
-        const idsToSeed = messages.map(msg => msg.id._serialized);
-        
-        // Save the baseline IDs to database so they are never processed in the future
-        database.saveProcessedMessageIds(idsToSeed);
-        console.log(`[Recovery Engine] Initial baseline seeded with ${idsToSeed.length} message IDs. Future boots will parse missed messages.`);
-        return;
-      }
-
-      // If not initial sync, process any message that has not been processed yet
+      // Process any message that has not been processed yet
       let processedCount = 0;
       
       // Chronological sort (oldest to newest) to process check-ins and check-outs sequentially
@@ -468,6 +483,32 @@ class WhatsAppManager extends EventEmitter {
       console.error("[Recovery Engine] Failed to recover missed messages:", err);
     }
   }
+
+  // Live resolve stable Group ID by configured Group Name
+  async resolveGroupId() {
+    if (this.status !== 'ready') return null;
+    try {
+      const settings = database.getSettings();
+      if (!settings.whatsappGroupName) return null;
+      
+      console.log(`[Startup] Resolving stable Group ID for "${settings.whatsappGroupName}"...`);
+      const chats = await this.client.getChats();
+      const matchedGroup = chats.find(c => c.isGroup && c.name.trim().toLowerCase() === settings.whatsappGroupName.trim().toLowerCase());
+      if (matchedGroup) {
+        const gid = matchedGroup.id._serialized;
+        if (settings.whatsappGroupId !== gid) {
+          console.log(`[Startup] Group resolved. Saving stable ID to settings: ${gid}`);
+          database.saveSettings({ ...settings, whatsappGroupId: gid });
+        }
+        return matchedGroup;
+      } else {
+        console.warn(`[Startup] Active WhatsApp group named "${settings.whatsappGroupName}" not found in chat directory.`);
+        return null;
+      }
+    } catch (err) {
+      console.error("[Startup] Failed to resolve stable Group ID:", err);
+      return null;
+    }
   }
 
   // Refresh and fetch all available group chat names
@@ -546,6 +587,74 @@ class WhatsAppManager extends EventEmitter {
       this.emit('status', this.status);
     } catch (err) {
       console.error("Failed during WhatsApp logout:", err);
+    }
+  }
+
+  // Build LID to Phone mapping from group participants
+  async buildLidMapping() {
+    if (!this.client) return;
+    try {
+      const settings = database.getSettings();
+      if (!settings.whatsappGroupName) return;
+
+      const chats = await this.client.getChats();
+      const attendanceChat = chats.find(c => c.isGroup && c.name.toLowerCase() === settings.whatsappGroupName.toLowerCase());
+      if (!attendanceChat) return;
+
+      const participants = attendanceChat.groupMetadata.participants || [];
+      const lids = participants.map(p => p.id._serialized).filter(id => id.endsWith('@lid'));
+      
+      if (lids.length > 0) {
+        console.log(`[LID Resolver] Resolving ${lids.length} LIDs from group participants...`);
+        
+        // Try getContactLidAndPhone first
+        if (typeof this.client.getContactLidAndPhone === 'function') {
+          try {
+            const mappings = await this.client.getContactLidAndPhone(lids);
+            if (mappings && mappings.length > 0) {
+              mappings.forEach(m => {
+                if (m.lid && m.pn) {
+                  const cleanLid = m.lid.split('@')[0];
+                  const cleanPn = m.pn.split('@')[0];
+                  this.lidToPhoneMap[cleanLid] = cleanPn;
+                  console.log(`[LID Resolver] Mapped ${cleanLid} -> ${cleanPn}`);
+                }
+              });
+            }
+          } catch (err) {
+            console.warn("[LID Resolver] getContactLidAndPhone failed during bulk map:", err.message);
+          }
+        }
+
+        // Fallback for any unmapped LIDs
+        for (const lidJid of lids) {
+          const cleanLid = lidJid.split('@')[0];
+          if (!this.lidToPhoneMap[cleanLid]) {
+            try {
+              const contact = await this.client.getContactById(lidJid);
+              if (contact && contact.number) {
+                this.lidToPhoneMap[cleanLid] = contact.number;
+                console.log(`[LID Resolver] Mapped ${cleanLid} -> ${contact.number} via contact.number`);
+              }
+            } catch (err) {
+              // Ignore individual failures
+            }
+          }
+        }
+      }
+
+      // Also scan all participants to map standard numbers to their own IDs (no-op map just in case)
+      participants.forEach(p => {
+        const id = p.id._serialized.split('@')[0];
+        if (!p.id._serialized.endsWith('@lid')) {
+          this.lidToPhoneMap[id] = id;
+        }
+      });
+
+      // Self-heal database and memory cache
+      this.emit('lid_mappings_updated', this.lidToPhoneMap);
+    } catch (err) {
+      console.error("[LID Resolver] Error building LID mapping:", err);
     }
   }
 

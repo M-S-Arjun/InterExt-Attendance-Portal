@@ -994,6 +994,82 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
 .border-amber { border-bottom-color: rgba(245, 158, 11, 0.2); }
 .text-amber { color: var(--color-warning); }
 
+/* Undo button in Exception Resolution Board */
+.btn-undo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  height: 30px;
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: var(--color-warning);
+  background-color: rgba(245, 158, 11, 0.05);
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.05);
+  transition: all 0.2s ease;
+}
+
+.btn-undo:hover {
+  background-color: rgba(245, 158, 11, 0.15);
+  border-color: var(--color-warning);
+  transform: translateY(-1px);
+}
+
+.btn-undo:active {
+  transform: translateY(0);
+}
+
+.btn-undo:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--glass-border);
+  color: var(--text-secondary);
+  background-color: transparent;
+  box-shadow: none;
+  transform: none !important;
+}
+
+/* Redo button in Exception Resolution Board */
+.btn-redo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  height: 30px;
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  border: 1px solid rgba(14, 165, 233, 0.3);
+  color: var(--color-info);
+  background-color: rgba(14, 165, 233, 0.05);
+  box-shadow: 0 2px 8px rgba(14, 165, 233, 0.05);
+  transition: all 0.2s ease;
+}
+
+.btn-redo:hover {
+  background-color: rgba(14, 165, 233, 0.15);
+  border-color: var(--color-info);
+  transform: translateY(-1px);
+}
+
+.btn-redo:active {
+  transform: translateY(0);
+}
+
+.btn-redo:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--glass-border);
+  color: var(--text-secondary);
+  background-color: transparent;
+  box-shadow: none;
+  transform: none !important;
+}
+
 .pending-list {
   display: flex;
   flex-direction: column;
