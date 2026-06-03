@@ -419,8 +419,9 @@ app.post('/api/face/recognize', async (req, res) => {
     }
     
     const formData = new URLSearchParams();
-    formData.append('image_base_64', imageBase64);
+    formData.append('image_base64', imageBase64);
     if (threshold) formData.append('threshold', threshold);
+
     
     let data;
     try {

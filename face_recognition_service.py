@@ -71,21 +71,28 @@ class FaceRecognitionModel:
             Face embedding vector (512-dim) or None if no face detected
         """
         try:
+            from PIL import Image, ImageOps
+            import io
+            
             # Load image
             if image_path_or_data.startswith('data:image'):
                 # Handle base64 encoded image
                 image_data = image_path_or_data.split(',')[1]
                 image_bytes = base64.b64decode(image_data)
-                import io
-                from PIL import Image
                 image = Image.open(io.BytesIO(image_bytes))
-                image_array = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
             else:
                 # Load from file path
-                image_array = cv2.imread(image_path_or_data)
-                if image_array is None:
-                    logger.error(f"Failed to load image: {image_path_or_data}")
+                if not os.path.exists(image_path_or_data):
+                    logger.error(f"Image file does not exist: {image_path_or_data}")
                     return None
+                image = Image.open(image_path_or_data)
+            
+            # Apply EXIF transpose to automatically rotate photos based on orientation metadata
+            image = ImageOps.exif_transpose(image)
+            
+            # Convert RGB PIL Image to BGR OpenCV array
+            image_array = cv2.cvtColor(np.array(image.convert('RGB')), cv2.COLOR_RGB2BGR)
+
             
             # Downscale large images for faster face detection and embedding extraction
             h, w = image_array.shape[:2]
