@@ -233,7 +233,10 @@ app.get('/api/settings', (req, res) => {
 });
 
 app.post('/api/settings', (req, res) => {
-  const settings = database.saveSettings(req.body);
+  const settingsData = { ...req.body };
+  // Enforce and lock the WhatsApp group name strictly to "ATTENDANCE"
+  settingsData.whatsappGroupName = "ATTENDANCE";
+  const settings = database.saveSettings(settingsData);
   if (whatsapp && typeof whatsapp.resolveGroupId === 'function') {
     whatsapp.resolveGroupId().catch(err => console.error("Error resolving group ID live:", err));
   }

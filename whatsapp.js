@@ -380,15 +380,24 @@ class WhatsAppManager extends EventEmitter {
   async processMessage(message) {
     this.lastMessageTime = Date.now(); // Update activity timestamp
     try {
-      const settings = database.getSettings();
-      if (!settings.whatsappGroupName) return; // No group selected yet
+      // Resolve the chat ID (accounting for outgoing messages from the client itself)
+      const chatId = message.fromMe ? message.to : message.from;
+      
+      // Strictly ignore direct messages (individual chats) to protect privacy.
+      // Group chat JIDs in WhatsApp always end with @g.us.
+      if (!chatId || !chatId.endsWith('@g.us')) {
+        return;
+      }
 
-      const chatId = message.from;
+      const settings = database.getSettings();
+      // Ensure the system only monitors the group named "ATTENDANCE"
+      const targetGroupName = 'ATTENDANCE';
+
       let groupName = this.groupNameCache[chatId];
       let groupId = this.groupIdCache[chatId];
 
       if (!groupName) {
-        console.log(`[Message Processor] Resolving chat for ID: ${chatId}...`);
+        console.log(`[Message Processor] Resolving group chat for ID: ${chatId}...`);
         const chat = await message.getChat();
         if (chat.isGroup) {
           groupName = chat.name.trim();
@@ -399,11 +408,16 @@ class WhatsAppManager extends EventEmitter {
         }
       }
 
+      // Enforce matching strictly the "ATTENDANCE" group (case-insensitive)
+      if (!groupName || groupName.toLowerCase() !== targetGroupName.toLowerCase()) {
+        return;
+      }
+
       // Filter messages belonging only to our selected Attendance Group
       const configuredGroupId = settings.whatsappGroupId || null;
       const configuredGroupName = settings.whatsappGroupName || null;
 
-      // Match strictly by groupId if configured, otherwise fall back to case-insensitive name match
+      // Match strictly by groupId if configured, otherwise fall back to name match
       const isMatchingGroup = configuredGroupId 
         ? (groupId && configuredGroupId === groupId)
         : (groupName && configuredGroupName && groupName.toLowerCase() === configuredGroupName.trim().toLowerCase());
@@ -579,20 +593,20 @@ class WhatsAppManager extends EventEmitter {
     if (this.status !== 'ready') return null;
     try {
       const settings = database.getSettings();
-      if (!settings.whatsappGroupName) return null;
+      const targetGroupName = 'ATTENDANCE';
       
-      console.log(`[Startup] Resolving stable Group ID for "${settings.whatsappGroupName}"...`);
+      console.log(`[Startup] Resolving stable Group ID strictly for "${targetGroupName}"...`);
       const chats = await this.client.getChats();
-      const matchedGroup = chats.find(c => c.isGroup && c.name.trim().toLowerCase() === settings.whatsappGroupName.trim().toLowerCase());
+      const matchedGroup = chats.find(c => c.isGroup && c.name && c.name.trim().toLowerCase() === targetGroupName.toLowerCase());
       if (matchedGroup) {
         const gid = matchedGroup.id._serialized;
-        if (settings.whatsappGroupId !== gid) {
-          console.log(`[Startup] Group resolved. Saving stable ID to settings: ${gid}`);
-          database.saveSettings({ ...settings, whatsappGroupId: gid });
+        if (settings.whatsappGroupId !== gid || settings.whatsappGroupName !== targetGroupName) {
+          console.log(`[Startup] Group resolved. Saving stable ID and name to settings: ${gid}`);
+          database.saveSettings({ ...settings, whatsappGroupId: gid, whatsappGroupName: targetGroupName });
         }
         return matchedGroup;
       } else {
-        console.warn(`[Startup] Active WhatsApp group named "${settings.whatsappGroupName}" not found in chat directory.`);
+        console.warn(`[Startup] Active WhatsApp group named "${targetGroupName}" not found in chat directory.`);
         return null;
       }
     } catch (err) {
@@ -606,9 +620,10 @@ class WhatsAppManager extends EventEmitter {
     if (this.status !== 'ready') return [];
     try {
       const chats = await this.client.getChats();
-      // Filter out only groups to keep the dashboard clean
+      // Filter strictly to the group named "ATTENDANCE" to protect personal chat privacy
+      const targetGroupName = 'ATTENDANCE';
       this.activeChats = chats
-        .filter(c => c.isGroup)
+        .filter(c => c.isGroup && c.name && c.name.trim().toLowerCase() === targetGroupName.toLowerCase())
         .map(c => ({
           id: c.id._serialized,
           name: c.name,
@@ -686,11 +701,9 @@ class WhatsAppManager extends EventEmitter {
   async buildLidMapping() {
     if (!this.client) return;
     try {
-      const settings = database.getSettings();
-      if (!settings.whatsappGroupName) return;
-
       const chats = await this.client.getChats();
-      const attendanceChat = chats.find(c => c.isGroup && c.name.toLowerCase() === settings.whatsappGroupName.toLowerCase());
+      // Strictly resolve the LID mapping only from the group named "ATTENDANCE"
+      const attendanceChat = chats.find(c => c.isGroup && c.name && c.name.trim().toLowerCase() === 'attendance');
       if (!attendanceChat) return;
 
       const participants = attendanceChat.groupMetadata.participants || [];
