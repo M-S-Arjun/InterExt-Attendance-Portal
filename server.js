@@ -412,23 +412,32 @@ app.get('/api/face/health', async (req, res) => {
 // Recognize face from camera image
 app.post('/api/face/recognize', async (req, res) => {
   try {
-    const { imageBase64, threshold } = req.body;
+    const { imageBase64, threshold, latitude, longitude } = req.body;
     
     if (!imageBase64) {
-      return res.status(400).json({ error: 'imageBase64 required' });
+      return res.status(400).json({ success: false, status: "rejected", message: 'imageBase64 required' });
     }
     
     const formData = new URLSearchParams();
-    formData.append('image_base64', imageBase64);
+    formData.append('image_base_64', imageBase64);
     if (threshold) formData.append('threshold', threshold);
     
-    const response = await fetch(`${FACE_RECOGNITION_SERVICE}/api/face/recognize`, {
-      method: 'POST',
-      body: formData,
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-    });
-    
-    const data = await response.json();
+    let data;
+    try {
+      const response = await fetch(`${FACE_RECOGNITION_SERVICE}/api/face/recognize`, {
+        method: 'POST',
+        body: formData,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      });
+      data = await response.json();
+    } catch (fetchErr) {
+      console.error('[API] Face recognition service fetch failed:', fetchErr.message);
+      return res.status(503).json({
+        success: false,
+        status: "rejected",
+        message: "Face recognition service unavailable"
+      });
+    }
     
     if (data.success && data.matched) {
       // Face recognized - auto-create attendance event
@@ -457,7 +466,59 @@ app.post('/api/face/recognize', async (req, res) => {
           a => a.employeeId === employee.id && a.date === eventDate
         );
         
+        // Duplicate attendance prevention
+        if (existingAttendance) {
+          if (existingAttendance.status === 'completed' || existingAttendance.status === 'leave') {
+            return res.status(400).json({
+              success: false,
+              status: "rejected",
+              message: "Attendance already completed or marked leave for today"
+            });
+          }
+          // If check-in exists, we're performing a check-out. Prevent duplicate double-clicks within 30s.
+          if (existingAttendance.checkIn) {
+            const checkInTime = new Date(existingAttendance.checkIn);
+            const diffSeconds = (now - checkInTime) / 1000;
+            if (diffSeconds < 30) {
+              return res.status(400).json({
+                success: false,
+                status: "rejected",
+                message: "Duplicate scan detected. Please wait 30 seconds."
+              });
+            }
+          }
+        }
+        
         const eventType = existingAttendance && existingAttendance.checkIn ? 'exit' : 'entry';
+        
+        // Geofencing verification
+        let siteName = 'Webcam Scan';
+        let siteId = '';
+        let distance = null;
+        let closestSite = null;
+        
+        if (latitude && longitude && db.sites && db.sites.length > 0) {
+          let minDistance = Infinity;
+          db.sites.forEach(site => {
+            if (site.latitude && site.longitude) {
+              const dist = database.getHaversineDistance(latitude, longitude, site.latitude, site.longitude);
+              if (dist < minDistance) {
+                minDistance = dist;
+                closestSite = site;
+              }
+            }
+          });
+          
+          if (closestSite) {
+            distance = minDistance;
+            if (minDistance <= 200) {
+              siteId = closestSite.id;
+              siteName = closestSite.name;
+            } else {
+              siteName = `Off-Site (${closestSite.name})`;
+            }
+          }
+        }
         
         // Save webcam recognition as a camera event log
         const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
@@ -465,22 +526,33 @@ app.post('/api/face/recognize', async (req, res) => {
           employeeId: employee.id,
           employeeName: employee.name,
           eventType: eventType,
-          siteName: 'Webcam Scan',
+          siteName: siteName,
           timestamp: timestamp,
           date: eventDate,
           imageBase64: cleanBase64,
           imageFilename: 'webcam_scan.jpg',
-          status: 'recognized'
+          status: 'recognized',
+          latitude: latitude ? Number(latitude) : undefined,
+          longitude: longitude ? Number(longitude) : undefined,
+          adminNotes: distance !== null && distance > 200 
+            ? `[FLAGGED LOCATION] Off-Site Scan (${Math.round(distance)}m away from ${closestSite?.name})`
+            : `Face recognized on site. Distance: ${distance ? Math.round(distance) : 0}m`
         });
         
         const attendanceEntry = {
           employeeId: employee.id,
           employeeName: employee.name,
           date: eventDate,
-          siteName: 'Webcam Scan',
+          siteName: siteName,
           messageText: `Face recognized - auto ${eventType}`,
           facialRecognitionMatch: true,
-          matchConfidence: data.confidence
+          matchConfidence: data.confidence,
+          latitude: latitude ? Number(latitude) : undefined,
+          longitude: longitude ? Number(longitude) : undefined,
+          verificationMethod: 'Face Recognition',
+          notes: distance !== null && distance > 200 
+            ? `[FLAGGED LOCATION] Off-Site Scan (${Math.round(distance)}m)` 
+            : `Face recognized`
         };
         
         if (eventType === 'entry') {
@@ -503,6 +575,10 @@ app.post('/api/face/recognize', async (req, res) => {
         
         return res.json({
           success: true,
+          status: "accepted",
+          employee_id: employee.id,
+          message: "Attendance marked successfully",
+          // Keep compatibility fields
           recognized: true,
           employee: { id: employee.id, name: employee.name },
           confidence: data.confidence,
@@ -512,10 +588,16 @@ app.post('/api/face/recognize', async (req, res) => {
       }
     }
     
-    return res.json(data);
+    // Handle specific validation/model errors returned by python Flask service
+    const errorMessage = data.error || "Face not recognized";
+    return res.json({
+      success: false,
+      status: "rejected",
+      message: errorMessage
+    });
   } catch (err) {
     console.error('[API] Face recognition error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ success: false, status: "rejected", message: err.message });
   }
 });
 

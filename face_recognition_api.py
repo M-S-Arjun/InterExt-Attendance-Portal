@@ -176,6 +176,13 @@ def recognize_face():
                 'message': 'No matching employee found'
             })
     
+    except ValueError as val_err:
+        logger.warning(f"Validation error: {val_err}")
+        return jsonify({
+            'success': False,
+            'matched': False,
+            'error': str(val_err)
+        }), 400
     except Exception as e:
         logger.error(f"Recognition error: {e}")
         traceback.print_exc()

@@ -59,12 +59,13 @@ class FaceRecognitionModel:
             logger.error(f"Failed to load model: {e}")
             raise
     
-    def extract_face_embedding(self, image_path_or_data: str) -> Optional[np.ndarray]:
+    def extract_face_embedding(self, image_path_or_data: str, raise_errors: bool = False) -> Optional[np.ndarray]:
         """
         Extract face embedding from image
         
         Args:
             image_path_or_data: Path to image or base64 encoded image data
+            raise_errors: If True, raise ValueError for validation failures
             
         Returns:
             Face embedding vector (512-dim) or None if no face detected
@@ -99,7 +100,14 @@ class FaceRecognitionModel:
             
             if len(faces) == 0:
                 logger.warning("No face detected in image")
+                if raise_errors:
+                    raise ValueError("No face detected")
                 return None
+            
+            if len(faces) > 1:
+                logger.warning("Multiple faces detected in image")
+                if raise_errors:
+                    raise ValueError("Multiple faces detected")
             
             # Use the largest/most prominent face
             face = max(faces, key=lambda x: x.bbox[2] * x.bbox[3])  # Sort by area
@@ -109,6 +117,8 @@ class FaceRecognitionModel:
             return embedding
             
         except Exception as e:
+            if isinstance(e, ValueError) and raise_errors:
+                raise e
             logger.error(f"Error extracting face embedding: {e}")
             traceback.print_exc()
             return None
@@ -238,7 +248,7 @@ class FaceRecognitionModel:
             return None
         
         # Extract embedding from input image
-        input_embedding = self.extract_face_embedding(image_path_or_data)
+        input_embedding = self.extract_face_embedding(image_path_or_data, raise_errors=True)
         if input_embedding is None:
             logger.warning("Could not extract embedding from input image")
             return None

@@ -313,9 +313,9 @@
     <form id="checkin-form" onsubmit="handleCheckin(event)">
       <!-- Name Select -->
       <div class="form-group">
-        <label for="worker-select">Select Your Name</label>
-        <select id="worker-select" class="form-control" required>
-          <option value="">-- Loading Active Workers --</option>
+        <label for="worker-select">Select Your Name (Optional - Face Recognition Auto-Identifies)</label>
+        <select id="worker-select" class="form-control">
+          <option value="">-- Auto-Identify via Face Scan --</option>
         </select>
       </div>
 
@@ -331,18 +331,29 @@
             <span style="font-size: 0.75rem; color: var(--text-tertiary);">Opens front camera automatically</span>
           </div>
         </div>
+        
+        <!-- Take Selfie button for explicit click -->
+        <button type="button" class="btn btn-secondary" id="take-selfie-btn" onclick="snapPhoto()" style="display: none; margin-top: 10px; margin-bottom: 5px; justify-content: center; align-items: center; gap: 8px;">
+          <i data-lucide="camera" style="width: 16px; height: 16px;"></i> Take Selfie Attendance
+        </button>
       </div>
 
       <!-- Native camera capture helper -->
       <input type="file" id="native-camera-input" accept="image/*" capture="user" onchange="loadCapturedPhoto(event)">
 
       <button type="submit" class="btn" id="submit-btn" disabled>
-        <i data-lucide="log-in" style="width: 18px; height: 18px;"></i> Submit On-Site Check-In
+        <i data-lucide="log-in" style="width: 18px; height: 18px;"></i> Submit Face Attendance
       </button>
 
-      <button type="button" class="btn btn-secondary" onclick="resetForm()" style="display: none;" id="reset-btn">
+      <button type="button" class="btn btn-secondary" onclick="resetForm()" style="display: none; justify-content: center; align-items: center; gap: 8px;" id="reset-btn">
         <i data-lucide="refresh-cw" style="width: 16px; height: 16px;"></i> Retake Photo
       </button>
+
+      <!-- Result message area -->
+      <div id="result-message" class="status-alert" style="display: none; margin-top: 15px;">
+        <i id="result-icon" data-lucide="info" style="width: 18px; height: 18px; flex-shrink: 0;"></i>
+        <span id="result-text"></span>
+      </div>
     </form>
 
     <div class="footer">
@@ -458,6 +469,9 @@
         img.style.display = 'none';
         isWebcamActive = true;
         
+        // Show take selfie button
+        document.getElementById('take-selfie-btn').style.display = 'flex';
+        
         console.log("Webcam stream started successfully!");
       } catch (err) {
         console.warn("Webcam access failed or denied. Using native file picker fallback:", err.message);
@@ -465,6 +479,18 @@
         placeholder.style.display = 'flex';
         img.style.display = 'none';
         isWebcamActive = false;
+        
+        document.getElementById('take-selfie-btn').style.display = 'none';
+        
+        // Show camera permission denied error inside result area
+        const resultMsg = document.getElementById('result-message');
+        const resultText = document.getElementById('result-text');
+        const resultIcon = document.getElementById('result-icon');
+        resultMsg.style.display = 'flex';
+        resultMsg.className = 'status-alert error';
+        resultText.textContent = "Camera access denied. Please allow camera permissions in your browser settings to proceed.";
+        resultIcon.setAttribute('data-lucide', 'video-off');
+        if (window.lucide) window.lucide.createIcons();
       }
     }
 
@@ -500,6 +526,7 @@
       
       stopWebcam();
       
+      document.getElementById('take-selfie-btn').style.display = 'none';
       document.getElementById('reset-btn').style.display = 'flex';
       enableSubmitIfReady();
     }
@@ -701,6 +728,10 @@
       document.getElementById('native-camera-input').value = '';
       document.getElementById('reset-btn').style.display = 'none';
       
+      // Hide result message
+      const resultMsg = document.getElementById('result-message');
+      if (resultMsg) resultMsg.style.display = 'none';
+      
       startWebcam().then(() => {
         if (!isWebcamActive) {
           document.getElementById('placeholder-box').style.display = 'flex';
@@ -716,23 +747,31 @@
       submitBtn.disabled = !isReady;
     }
 
-    // 4. Submit form payload to /api/checkin/web
+    // 4. Submit form payload to /api/face/recognize for Face Attendance
     async function handleCheckin(event) {
       event.preventDefault();
       
-      const empId = document.getElementById('worker-select').value;
-      if (!empId) {
-        alert("Please select your name first!");
-        return;
-      }
-
       if (latitude === null || longitude === null) {
-        alert("GPS Location is required! Please refresh and allow location permissions.");
+        const resultMsg = document.getElementById('result-message');
+        const resultText = document.getElementById('result-text');
+        const resultIcon = document.getElementById('result-icon');
+        resultMsg.style.display = 'flex';
+        resultMsg.className = 'status-alert error';
+        resultText.textContent = "GPS Location is required! Please allow location permissions and wait for GPS lock.";
+        resultIcon.setAttribute('data-lucide', 'map-pin-off');
+        if (window.lucide) window.lucide.createIcons();
         return;
       }
 
       if (!base64Photo) {
-        alert("Please snap a selfie first!");
+        const resultMsg = document.getElementById('result-message');
+        const resultText = document.getElementById('result-text');
+        const resultIcon = document.getElementById('result-icon');
+        resultMsg.style.display = 'flex';
+        resultMsg.className = 'status-alert error';
+        resultText.textContent = "Please snap a selfie first!";
+        resultIcon.setAttribute('data-lucide', 'camera');
+        if (window.lucide) window.lucide.createIcons();
         return;
       }
 
@@ -743,38 +782,65 @@
 
       try {
         const payload = {
-          employeeId: empId,
-          base64Data: base64Photo.split(',')[1], // strip data URL prefix
+          imageBase64: base64Photo,
           latitude: Number(latitude),
           longitude: Number(longitude),
-          mimetype: base64Photo.split(';')[0].split(':')[1] || 'image/jpeg'
+          threshold: 0.6
         };
 
-        const res = await fetch('/api/checkin/web', {
+        const res = await fetch('/api/face/recognize', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
 
-        if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.error || "Check-in failed");
-        }
-
         const data = await res.json();
         
-        // Show stunning success alert
-        alert(`Check-in Successful!\n\nName: ${data.employeeName}\nSite: ${data.siteName}\nStatus: ${data.status.replace('_', ' ').toUpperCase()}`);
+        const resultMsg = document.getElementById('result-message');
+        const resultText = document.getElementById('result-text');
+        const resultIcon = document.getElementById('result-icon');
+        resultMsg.style.display = 'flex';
+
+        if (!res.ok || !data.success) {
+          resultMsg.className = 'status-alert error';
+          resultText.textContent = data.message || "Face not recognized. Please try again.";
+          resultIcon.setAttribute('data-lucide', 'x-circle');
+          if (window.lucide) window.lucide.createIcons();
+          return;
+        }
+
+        // Success!
+        resultMsg.className = 'status-alert success';
+        resultText.innerHTML = `<strong>Attendance Accepted!</strong><br>Name: ${data.employee?.name || 'Employee'}<br>ID: ${data.employee_id || ''}<br>${data.message}`;
+        resultIcon.setAttribute('data-lucide', 'check-circle');
+        if (window.lucide) window.lucide.createIcons();
         
-        // Clear photo, keep select/location or reset completely
-        resetForm();
+        // Keep submit button disabled after successful check-in
+        submitBtn.disabled = true;
+        
+        // Wait 5 seconds, then reset form and hide result message
+        setTimeout(() => {
+          resetForm();
+          resultMsg.style.display = 'none';
+        }, 5000);
       } catch (err) {
         console.error("Submission error:", err);
-        alert(`Check-in Failed: ${err.message}`);
+        const resultMsg = document.getElementById('result-message');
+        const resultText = document.getElementById('result-text');
+        const resultIcon = document.getElementById('result-icon');
+        resultMsg.style.display = 'flex';
+        resultMsg.className = 'status-alert error';
+        resultText.textContent = `Server error: ${err.message || "Unable to reach server"}`;
+        resultIcon.setAttribute('data-lucide', 'alert-triangle');
+        if (window.lucide) window.lucide.createIcons();
       } finally {
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = '<i data-lucide="log-in" style="width: 18px; height: 18px;"></i> Submit On-Site Check-In';
-        lucide.createIcons();
+        // Re-enable and reset button label only if not successful (if successful it's disabled & resetForm handles it)
+        const resultMsg = document.getElementById('result-message');
+        if (resultMsg && !resultMsg.className.includes('success')) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i data-lucide="log-in" style="width: 18px; height: 18px;"></i> Submit Face Attendance';
+          lucide.createIcons();
+        }
       }
     }
 
