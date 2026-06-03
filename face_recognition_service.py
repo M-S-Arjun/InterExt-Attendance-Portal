@@ -52,12 +52,17 @@ class FaceRecognitionModel:
             logger.info(f"Loading InsightFace model: {self.model_name}")
             # Enable GPU execution provider if available, with CPU fallback
             providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-            self.app = FaceAnalysis(name=self.model_name, providers=providers)
-            self.app.prepare(ctx_id=0, det_size=(640, 640))
+            self.app = FaceAnalysis(
+                name=self.model_name, 
+                allowed_modules=['detection', 'recognition'], 
+                providers=providers
+            )
+            self.app.prepare(ctx_id=0, det_size=(480, 480))
             logger.info("InsightFace model loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
+
     
     def extract_face_embedding(self, image_path_or_data: str, raise_errors: bool = False) -> Optional[np.ndarray]:
         """
@@ -93,14 +98,14 @@ class FaceRecognitionModel:
             # Convert RGB PIL Image to BGR OpenCV array
             image_array = cv2.cvtColor(np.array(image.convert('RGB')), cv2.COLOR_RGB2BGR)
 
-            
             # Downscale large images for faster face detection and embedding extraction
             h, w = image_array.shape[:2]
-            max_size = 1024
+            max_size = 480
             if max(h, w) > max_size:
                 scale = max_size / max(h, w)
                 image_array = cv2.resize(image_array, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
                 logger.info(f"Downscaled image from {w}x{h} to {int(w*scale)}x{int(h*scale)}")
+
             
             # Detect faces and get embeddings
             faces = self.app.get(image_array)
