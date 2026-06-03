@@ -1139,7 +1139,8 @@ async function recognizeFaceFromCamera() {
           // Auto-submit or show preview
           console.log("Face recognition result:", result);
         } else {
-          alert('No matching employee found in database\nPlease select manually or train more images');
+          const errMsg = result.message || 'No matching employee found in database\nPlease select manually or train more images';
+          alert(`✗ Face Match Rejected:\n${errMsg}`);
         }
       } catch (err) {
         console.error('Face recognition error:', err);
@@ -3196,7 +3197,12 @@ async function captureAndRecognizeFace() {
       
       alert(`✓ Face recognized successfully!\n\nEmployee: ${result.employee.name}\nConfidence: ${(result.confidence * 100).toFixed(1)}%\nAction Type: ${result.eventType.toUpperCase()}`);
     } else {
-      alert('✗ Face match not recognized.\nPlease adjust your positioning, lighting, or select the employee manually.');
+      const errMsg = result.message || 'Face match not recognized.';
+      if (errMsg === 'Face not recognized' || errMsg === 'No matching employee found' || errMsg === 'No face detected') {
+        alert('✗ Face match not recognized.\nPlease adjust your positioning, lighting, or select the employee manually.');
+      } else {
+        alert(`✗ Face Match Rejected:\n${errMsg}`);
+      }
     }
   } catch (err) {
     console.error("Webcam face recognition failed:", err);
@@ -3315,6 +3321,16 @@ async function captureAndRecognizeFaceAuto() {
       lastScanTime = now;
       
       showFloatingNotification(result.employee.name, result.confidence, result.eventType);
+    } else if (result.message && result.message !== 'Face not recognized' && result.message !== 'No matching employee found' && result.message !== 'No face detected') {
+      const now = Date.now();
+      const rejectionKey = `${result.message}`;
+      if (window.lastRejectionKey === rejectionKey && (now - (window.lastRejectionTime || 0) < 15000)) {
+        return;
+      }
+      window.lastRejectionKey = rejectionKey;
+      window.lastRejectionTime = now;
+      
+      showFloatingRejectionNotification(result.message);
     }
   } catch (err) {
     console.warn("Auto-scan frame skipped:", err.message);
@@ -3386,6 +3402,63 @@ function showFloatingNotification(employeeName, confidence, eventType) {
       toast.remove();
     }, 400);
   }, 4000);
+  
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function showFloatingRejectionNotification(message) {
+  let container = document.getElementById('notification-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'notification-container';
+    container.style.position = 'fixed';
+    container.style.bottom = '24px';
+    container.style.right = '24px';
+    container.style.zIndex = '9999';
+    container.style.display = 'flex';
+    container.style.flexDirection = 'column';
+    container.style.gap = '12px';
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement('div');
+  toast.className = 'toast-card glass-card warning';
+  toast.style.display = 'flex';
+  toast.style.alignItems = 'center';
+  toast.style.gap = '14px';
+  toast.style.padding = '14px 20px';
+  toast.style.background = 'rgba(35, 15, 15, 0.9)';
+  toast.style.backdropFilter = 'blur(12px)';
+  toast.style.border = '1px solid rgba(255, 71, 87, 0.3)';
+  toast.style.borderRadius = 'var(--border-radius-md)';
+  toast.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.4)';
+  toast.style.transform = 'translateX(120%)';
+  toast.style.transition = 'transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+  toast.style.color = '#fff';
+  toast.style.minWidth = '280px';
+  
+  toast.innerHTML = `
+    <div style="background: rgba(255, 71, 87, 0.1); border-radius: 50%; padding: 8px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(255, 71, 87, 0.25);">
+      <i data-lucide="alert-triangle" style="color: #ff4757; width: 22px; height: 22px;"></i>
+    </div>
+    <div style="flex: 1;">
+      <h4 style="margin: 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">Scan Rejected</h4>
+      <p style="margin: 2px 0 0 0; font-size: 0.75rem; color: var(--text-secondary);">${message}</p>
+    </div>
+  `;
+  
+  container.appendChild(toast);
+  
+  setTimeout(() => {
+    toast.style.transform = 'translateX(0)';
+  }, 100);
+  
+  setTimeout(() => {
+    toast.style.transform = 'translateX(120%)';
+    setTimeout(() => {
+      toast.remove();
+    }, 400);
+  }, 5000);
   
   if (window.lucide) window.lucide.createIcons();
 }
