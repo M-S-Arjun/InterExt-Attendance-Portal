@@ -2200,5 +2200,62 @@ textarea.form-control {
   transform: translateY(-1px);
 }
 
+/* ==========================================================================
+   WIDGET: CCTV & WEBCAM AUTO-SCAN STYLES
+   ========================================================================== */
+#notification-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 320px;
+}
+
+.toast-card {
+  animation: slideIn 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(120%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.cctv-list-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.cctv-camera-card {
+  transition: all var(--transition-normal);
+  background: var(--glass-bg);
+}
+
+.cctv-camera-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--glass-highlight);
+  box-shadow: var(--shadow-lg);
+}
+
+:root.light-theme .toast-card {
+  background: rgba(255, 255, 255, 0.95) !important;
+  color: #18181b !important;
+  border-color: rgba(46, 213, 115, 0.4) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15) !important;
+}
+
+:root.light-theme .toast-card h4 {
+  color: #18181b !important;
+}
+
+:root.light-theme .toast-card p {
+  color: #52525b !important;
+}
+
 
 

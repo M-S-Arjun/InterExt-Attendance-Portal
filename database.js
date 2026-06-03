@@ -43,7 +43,8 @@ const DEFAULT_DB = {
   pending_messages: [],
   selfies: [],
   holidays: [],
-  processed_message_ids: []
+  processed_message_ids: [],
+  cctvCameras: []
 };
 
 class Database {
@@ -536,6 +537,54 @@ class Database {
 
     this.writeAtomic(db);
     return event;
+  }
+
+  // CCTV camera management
+  getCctvCameras() {
+    const db = this.read();
+    if (!db.cctvCameras) {
+      db.cctvCameras = [];
+      this.writeAtomic(db);
+    }
+    return db.cctvCameras;
+  }
+
+  saveCctvCamera(camera) {
+    const db = this.read();
+    if (!db.cctvCameras) db.cctvCameras = [];
+
+    camera.id = camera.id || `cctv_${Date.now()}`;
+    camera.name = camera.name || 'CCTV Camera';
+    camera.source = camera.source || '';
+    camera.siteId = camera.siteId || '';
+    camera.eventType = camera.eventType || 'auto'; // 'entry', 'exit', or 'auto'
+    camera.status = camera.status !== undefined ? camera.status : 'inactive'; // 'active' or 'inactive'
+    camera.updatedAt = new Date().toISOString();
+
+    const existingIndex = db.cctvCameras.findIndex(c => c.id === camera.id);
+    if (existingIndex >= 0) {
+      db.cctvCameras[existingIndex] = { ...db.cctvCameras[existingIndex], ...camera };
+    } else {
+      camera.createdAt = new Date().toISOString();
+      db.cctvCameras.push(camera);
+    }
+
+    this.writeAtomic(db);
+    return camera;
+  }
+
+  deleteCctvCamera(id) {
+    const db = this.read();
+    if (!db.cctvCameras) return false;
+
+    const initialLength = db.cctvCameras.length;
+    db.cctvCameras = db.cctvCameras.filter(c => c.id !== id);
+    
+    if (db.cctvCameras.length !== initialLength) {
+      this.writeAtomic(db);
+      return true;
+    }
+    return false;
   }
 
   // Save/Update attendance log

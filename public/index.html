@@ -527,6 +527,8 @@
 
       <!-- TAB 3.75: CAMERA ATTENDANCE VIEW -->
       <div id="tab-camera" class="tab-view">
+        <!-- Audio chime for successful auto scans -->
+        <audio id="sound-success" src="https://assets.mixkit.co/active_storage/sfx/911/911-84.wav" preload="auto"></audio>
         <div class="glass-card log-panel">
           <div class="card-header flex-header">
             <div class="header-left">
@@ -644,9 +646,17 @@
               </div>
 
               <!-- Camera selector and controls -->
-              <div class="form-group" style="margin-bottom: 0;">
-                <label for="webcam-select" style="font-size: 0.8rem; margin-bottom: 6px; display: block; font-weight: 600; color: var(--text-secondary);">Select Video Source</label>
-                <select id="webcam-select" class="form-control" style="background: var(--bg-primary); border-color: var(--glass-border); font-size: 0.85rem; height: 36px; padding: 0 10px; width: 100%; color: var(--text-primary);"></select>
+              <div class="form-row" style="display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 12px; margin-bottom: 0; align-items: flex-end;">
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label for="webcam-select" style="font-size: 0.8rem; margin-bottom: 6px; display: block; font-weight: 600; color: var(--text-secondary);">Select Video Source</label>
+                  <select id="webcam-select" class="form-control" style="background: var(--bg-primary); border-color: var(--glass-border); font-size: 0.85rem; height: 36px; padding: 0 10px; width: 100%; color: var(--text-primary);"></select>
+                </div>
+                <div class="form-group" style="margin-bottom: 0; display: flex; align-items: center; height: 36px;">
+                  <label class="checkbox-container" style="font-size: 0.8rem; display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-secondary); margin: 0; font-weight: 600;">
+                    <input type="checkbox" id="webcam-autoscan" onchange="toggleAutoScan()" style="cursor: pointer; accent-color: var(--color-primary); width: 16px; height: 16px;">
+                    Auto-Scan Mode
+                  </label>
+                </div>
               </div>
 
               <div style="display: flex; gap: 12px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--glass-border);">
@@ -662,6 +672,34 @@
               <canvas id="webcam-canvas" style="display: none;"></canvas>
             </div>
 
+          </div>
+
+          <!-- CCTV Cameras Management Section -->
+          <div class="glass-card cctv-management-card" style="padding: 24px; margin-bottom: 24px;">
+            <div class="card-header flex-header" style="padding: 0 0 16px 0; margin-bottom: 16px; border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; align-items: center;">
+              <div class="header-left">
+                <h3 style="font-size: 0.95rem; margin: 0; display: flex; align-items: center; gap: 8px; font-weight: 700;">
+                  <i data-lucide="cctv" style="color: var(--color-primary); width: 18px; height: 18px;"></i>
+                  CCTV Camera Stream Integration
+                </h3>
+                <p style="font-size: 0.75rem; color: var(--text-tertiary); margin: 4px 0 0 0;">
+                  Configure office CCTV RTSP cameras (or video feeds) to automatically recognize and record employee attendance.
+                </p>
+              </div>
+              <div class="header-right">
+                <button type="button" class="btn btn-primary btn-sm btn-icon" onclick="openAddCctvModal()" style="padding: 6px 12px; font-size: 0.8rem; height: 32px;">
+                  <i data-lucide="plus"></i> Add CCTV Camera
+                </button>
+              </div>
+            </div>
+
+            <!-- CCTV list layout -->
+            <div id="cctv-list-container" class="cctv-list-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
+              <div class="loading-state" style="grid-column: 1 / -1; text-align: center; padding: 20px; color: var(--text-tertiary);">
+                <i data-lucide="loader" class="animate-spin" style="margin-bottom: 8px;"></i>
+                <p style="margin: 0; font-size: 0.85rem;">Loading CCTV configurations...</p>
+              </div>
+            </div>
           </div>
 
           <div class="overflow-x">
@@ -1328,6 +1366,63 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" onclick="closeSelfieModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CCTV Configuration Modal -->
+  <div class="modal" id="cctv-modal">
+    <div class="modal-content glass-card">
+      <div class="modal-header">
+        <h3 id="cctv-modal-title">Configure CCTV Camera</h3>
+        <button class="btn-close" onclick="closeCctvModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="cctv-form" onsubmit="handleCctvSubmit(event)">
+          <input type="hidden" id="cctv-id">
+          
+          <div class="form-group">
+            <label for="cctv-name">Camera Name</label>
+            <input type="text" id="cctv-name" class="form-control" placeholder="e.g. Warehouse Entrance CCTV" required>
+          </div>
+          
+          <div class="form-group">
+            <label for="cctv-source">Stream Source (RTSP URL, Video File Path, or Webcam Index)</label>
+            <input type="text" id="cctv-source" class="form-control" placeholder="e.g. rtsp://admin:password@192.168.1.100:554/h264, or 0, or uploads/test.mp4" required>
+            <span style="font-size: 0.7rem; color: var(--text-tertiary); margin-top: 4px; display: block;">
+              Use <strong>0</strong> or <strong>1</strong> to test with other webcams, or specify a video file path to simulate a CCTV feed.
+            </span>
+          </div>
+
+          <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div class="form-group">
+              <label for="cctv-site">Target Location / Site</label>
+              <select id="cctv-site" class="form-control" required></select>
+            </div>
+            <div class="form-group">
+              <label for="cctv-event-type">Attendance Action Mode</label>
+              <select id="cctv-event-type" class="form-control">
+                <option value="auto">Auto (Toggle Entry/Exit)</option>
+                <option value="entry">Entry Only</option>
+                <option value="exit">Exit Only</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="cctv-status">Status</label>
+            <select id="cctv-status" class="form-control">
+              <option value="active">Active (Processing Stream)</option>
+              <option value="inactive">Inactive (Disabled)</option>
+            </select>
+          </div>
+
+          <div class="modal-footer" style="padding-top: 12px; margin-top: 16px; border-top: 1px solid var(--glass-border); display: flex; justify-content: flex-end; gap: 8px;">
+            <button type="button" class="btn btn-secondary" onclick="closeCctvModal()">Cancel</button>
+            <button type="button" class="btn btn-secondary" onclick="testCctvConnection()" style="background: rgba(255, 107, 0, 0.1); color: var(--color-primary); border-color: rgba(255, 107, 0, 0.2);">Test Connection</button>
+            <button type="submit" class="btn btn-primary">Save Camera</button>
+          </div>
+        </form>
       </div>
     </div>
   </div>

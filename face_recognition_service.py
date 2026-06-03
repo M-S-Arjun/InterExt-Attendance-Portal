@@ -50,7 +50,9 @@ class FaceRecognitionModel:
         """Load the InsightFace model"""
         try:
             logger.info(f"Loading InsightFace model: {self.model_name}")
-            self.app = FaceAnalysis(name=self.model_name, providers=['CPUExecutionProvider'])
+            # Enable GPU execution provider if available, with CPU fallback
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            self.app = FaceAnalysis(name=self.model_name, providers=providers)
             self.app.prepare(ctx_id=0, det_size=(640, 640))
             logger.info("InsightFace model loaded successfully")
         except Exception as e:
@@ -84,6 +86,14 @@ class FaceRecognitionModel:
                     logger.error(f"Failed to load image: {image_path_or_data}")
                     return None
             
+            # Downscale large images for faster face detection and embedding extraction
+            h, w = image_array.shape[:2]
+            max_size = 1024
+            if max(h, w) > max_size:
+                scale = max_size / max(h, w)
+                image_array = cv2.resize(image_array, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+                logger.info(f"Downscaled image from {w}x{h} to {int(w*scale)}x{int(h*scale)}")
+            
             # Detect faces and get embeddings
             faces = self.app.get(image_array)
             
@@ -103,26 +113,28 @@ class FaceRecognitionModel:
             traceback.print_exc()
             return None
     
-    def train_employee_embeddings(self, employee_images_dir: str) -> Dict[str, np.ndarray]:
+    def train_employee_embeddings(self, employee_images_dir: str, force_retrain: bool = False, save_callback=None) -> Dict[str, np.ndarray]:
         """
         Train/build embeddings database from employee images
         
         Directory structure expected:
         employee_images_dir/
-            employee_id_1/
-                photo1.jpg
-                photo2.jpg
-            employee_id_2/
-                photo1.jpg
+        employee_id_1/
+        photo1.jpg
+        photo2.jpg
+        employee_id_2/
+        photo1.jpg
         
         Args:
-            employee_images_dir: Directory containing employee image folders
-            
+        employee_images_dir: Directory containing employee image folders
+        force_retrain: If True, retrain all employees; otherwise skip existing ones
+        save_callback: Function to call to save intermediate progress
+        
         Returns:
-            Dictionary mapping employee_id to average embedding vector
+        Dictionary mapping employee_id to average embedding vector
         """
-        embeddings_db = {}
-        embeddings_list = {}  # {employee_id: [embedding1, embedding2, ...]}
+        # Maintain existing loaded database, only adding new ones or overwriting if forced
+        embeddings_db = self.embeddings_db.copy()
         
         if not os.path.exists(employee_images_dir):
             logger.warning(f"Employee images directory not found: {employee_images_dir}")
@@ -131,9 +143,14 @@ class FaceRecognitionModel:
         employee_dirs = [d for d in os.listdir(employee_images_dir) 
                         if os.path.isdir(os.path.join(employee_images_dir, d))]
         
-        logger.info(f"Training embeddings for {len(employee_dirs)} employees")
+        logger.info(f"Training embeddings for {len(employee_dirs)} employees (force_retrain={force_retrain})")
         
         for employee_id in employee_dirs:
+            # Skip if already trained and not forcing a retrain
+            if employee_id in embeddings_db and not force_retrain:
+                logger.info(f"Skipping already trained employee: {employee_id}")
+                continue
+                
             employee_path = os.path.join(employee_images_dir, employee_id)
             image_files = [f for f in os.listdir(employee_path) 
                           if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))]
@@ -142,22 +159,30 @@ class FaceRecognitionModel:
                 logger.warning(f"No images found for employee {employee_id}")
                 continue
             
-            embeddings_list[employee_id] = []
+            employee_embeddings = []
             
             for image_file in image_files:
                 image_path = os.path.join(employee_path, image_file)
                 embedding = self.extract_face_embedding(image_path)
                 
                 if embedding is not None:
-                    embeddings_list[employee_id].append(embedding)
+                    employee_embeddings.append(embedding)
                 else:
                     logger.warning(f"Failed to extract embedding from {image_path}")
             
             # Average embeddings for the employee
-            if embeddings_list[employee_id]:
-                avg_embedding = np.mean(embeddings_list[employee_id], axis=0)
+            if employee_embeddings:
+                avg_embedding = np.mean(employee_embeddings, axis=0)
                 embeddings_db[employee_id] = avg_embedding / np.linalg.norm(avg_embedding)  # L2 normalize
-                logger.info(f"Trained {len(embeddings_list[employee_id])} images for employee {employee_id}")
+                logger.info(f"Trained {len(employee_embeddings)} images for employee {employee_id}")
+                
+                # Save dynamically after each employee is trained to preserve progress
+                self.embeddings_db = embeddings_db
+                if save_callback:
+                    try:
+                        save_callback()
+                    except Exception as callback_err:
+                        logger.error(f"Error in save_callback: {callback_err}")
             else:
                 logger.warning(f"No valid embeddings for employee {employee_id}")
         

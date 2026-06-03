@@ -223,6 +223,7 @@ function switchTab(tabName) {
       subtitle.textContent = "Record office entry/exit events and map attendance to employee logs";
       refreshCameraEvents();
       initWebcamList();
+      loadCctvCameras();
       break;
     case 'sites':
       title.textContent = "Work Sites Registry";
@@ -337,9 +338,24 @@ function registerSocketEvents() {
 
   // 4. Update broadcasts
   socket.on('stats_updated', () => refreshDashboardData());
-  socket.on('attendance_updated', () => refreshDashboardData());
+  socket.on('attendance_updated', () => {
+    refreshDashboardData();
+    if (state.activeTab === 'camera') {
+      refreshCameraEvents();
+    }
+  });
   socket.on('pending_updated', () => refreshDashboardData());
   socket.on('whatsapp_chats', (chats) => populateGroupChatsDropdown(chats));
+  
+  socket.on('camera_event_recorded', (event) => {
+    if (state.activeTab === 'camera') {
+      refreshCameraEvents();
+    }
+    // Render visual floating toast for background CCTV matches
+    if (event.status === 'recognized') {
+      showFloatingNotification(event.employeeName, event.matchConfidence || 0.8, event.eventType);
+    }
+  });
   
   socket.on('selfie_received', (selfie) => {
     if (state.activeTab === 'selfies') {
@@ -3190,5 +3206,381 @@ async function captureAndRecognizeFace() {
     scanBtn.disabled = false;
     scanBtn.innerHTML = originalHtml;
     if (window.lucide) window.lucide.createIcons();
+  }
+}
+
+// Webcam Auto-Scanning Loops & Chimes
+let autoScanInterval = null;
+let lastScannedEmployee = null;
+let lastScanTime = 0;
+
+function toggleAutoScan() {
+  const checkbox = document.getElementById('webcam-autoscan');
+  const scanBtn = document.getElementById('btn-capture-scan');
+  
+  if (!checkbox || !scanBtn) return;
+  
+  if (checkbox.checked) {
+    if (!webcamStream) {
+      toggleWebcam().then(() => {
+        if (webcamStream) {
+          startAutoScanLoop();
+        } else {
+          checkbox.checked = false;
+        }
+      });
+    } else {
+      startAutoScanLoop();
+    }
+    
+    scanBtn.disabled = true;
+    scanBtn.style.opacity = '0.5';
+    scanBtn.style.pointerEvents = 'none';
+  } else {
+    stopAutoScanLoop();
+    if (webcamStream) {
+      scanBtn.disabled = false;
+      scanBtn.style.opacity = '1';
+      scanBtn.style.pointerEvents = 'auto';
+    }
+  }
+}
+
+function startAutoScanLoop() {
+  stopAutoScanLoop();
+  
+  const statusBadge = document.getElementById('camera-status-badge');
+  if (statusBadge) {
+    statusBadge.textContent = "AUTO SCAN ACTIVE";
+    statusBadge.style.background = "rgba(46, 213, 115, 0.1)";
+    statusBadge.style.color = "#2ed573";
+    statusBadge.style.borderColor = "rgba(46, 213, 115, 0.2)";
+  }
+  
+  autoScanInterval = setInterval(async () => {
+    if (!webcamStream) {
+      stopAutoScanLoop();
+      return;
+    }
+    await captureAndRecognizeFaceAuto();
+  }, 2500);
+}
+
+function stopAutoScanLoop() {
+  if (autoScanInterval) {
+    clearInterval(autoScanInterval);
+    autoScanInterval = null;
+  }
+  
+  const statusBadge = document.getElementById('camera-status-badge');
+  if (statusBadge && webcamStream) {
+    statusBadge.textContent = "ACTIVE SCANNING";
+    statusBadge.style.background = "rgba(255, 107, 0, 0.1)";
+    statusBadge.style.color = "var(--color-primary)";
+    statusBadge.style.borderColor = "rgba(255, 107, 0, 0.2)";
+  }
+}
+
+async function captureAndRecognizeFaceAuto() {
+  const video = document.getElementById('webcam-feed');
+  const canvas = document.getElementById('webcam-canvas');
+  if (!video || !canvas || !webcamStream) return;
+
+  try {
+    const ctx = canvas.getContext('2d');
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imageBase64 = canvas.toDataURL('image/jpeg');
+
+    const resp = await fetch('/api/face/recognize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        imageBase64: imageBase64,
+        threshold: 0.58
+      })
+    });
+    
+    const result = await resp.json();
+    
+    if (result.recognized) {
+      const now = Date.now();
+      // Deduplicate scans within 15 seconds
+      if (lastScannedEmployee === result.employee.id && (now - lastScanTime < 15000)) {
+        return;
+      }
+      
+      lastScannedEmployee = result.employee.id;
+      lastScanTime = now;
+      
+      showFloatingNotification(result.employee.name, result.confidence, result.eventType);
+    }
+  } catch (err) {
+    console.warn("Auto-scan frame skipped:", err.message);
+  }
+}
+
+function showFloatingNotification(employeeName, confidence, eventType) {
+  let container = document.getElementById('notification-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'notification-container';
+    container.style.position = 'fixed';
+    container.style.bottom = '24px';
+    container.style.right = '24px';
+    container.style.zIndex = '9999';
+    container.style.display = 'flex';
+    container.style.flexDirection = 'column';
+    container.style.gap = '12px';
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement('div');
+  toast.className = 'toast-card glass-card success';
+  toast.style.display = 'flex';
+  toast.style.alignItems = 'center';
+  toast.style.gap = '14px';
+  toast.style.padding = '14px 20px';
+  toast.style.background = 'rgba(10, 25, 15, 0.9)';
+  toast.style.backdropFilter = 'blur(12px)';
+  toast.style.border = '1px solid rgba(46, 213, 115, 0.3)';
+  toast.style.borderRadius = 'var(--border-radius-md)';
+  toast.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.4)';
+  toast.style.transform = 'translateX(120%)';
+  toast.style.transition = 'transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+  toast.style.color = '#fff';
+  toast.style.minWidth = '280px';
+  
+  const iconColor = eventType === 'entry' ? '#2ed573' : '#ff4757';
+  const titleText = eventType === 'entry' ? 'Checked In' : 'Checked Out';
+  
+  toast.innerHTML = `
+    <div style="background: rgba(46, 213, 115, 0.1); border-radius: 50%; padding: 8px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(46, 213, 115, 0.25);">
+      <i data-lucide="check-circle" style="color: #2ed573; width: 22px; height: 22px;"></i>
+    </div>
+    <div style="flex: 1;">
+      <h4 style="margin: 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">${employeeName}</h4>
+      <p style="margin: 2px 0 0 0; font-size: 0.75rem; color: var(--text-secondary); display: flex; align-items: center; gap: 4px;">
+        <span style="display:inline-block; width: 6px; height: 6px; border-radius: 50%; background: ${iconColor};"></span>
+        ${titleText} (${(confidence * 100).toFixed(0)}% Match)
+      </p>
+    </div>
+  `;
+  
+  container.appendChild(toast);
+  
+  setTimeout(() => {
+    toast.style.transform = 'translateX(0)';
+  }, 100);
+  
+  const chime = document.getElementById('sound-success');
+  if (chime) {
+    chime.currentTime = 0;
+    chime.play().catch(e => console.log('Audio chime delayed:', e));
+  }
+  
+  setTimeout(() => {
+    toast.style.transform = 'translateX(120%)';
+    setTimeout(() => {
+      toast.remove();
+    }, 400);
+  }, 4000);
+  
+  if (window.lucide) window.lucide.createIcons();
+}
+
+// CCTV Cameras CRUD Integration
+async function loadCctvCameras() {
+  const container = document.getElementById('cctv-list-container');
+  if (!container) return;
+
+  try {
+    const resp = await fetch('/api/cctv');
+    const cameras = await resp.json();
+    
+    const sitesResp = await fetch('/api/sites');
+    const sites = await sitesResp.json();
+    
+    const modalSiteSelect = document.getElementById('cctv-site');
+    if (modalSiteSelect) {
+      modalSiteSelect.innerHTML = '';
+      sites.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name;
+        modalSiteSelect.appendChild(opt);
+      });
+    }
+
+    if (cameras.length === 0) {
+      container.innerHTML = `
+        <div style="grid-column: 1 / -1; text-align: center; padding: 30px; border: 1px dashed var(--glass-border); border-radius: var(--border-radius-md); background: rgba(255,255,255,0.01); color: var(--text-secondary);">
+          <i data-lucide="cctv" style="width: 32px; height: 32px; stroke-width: 1.5; margin-bottom: 8px; color: var(--text-tertiary);"></i>
+          <p style="margin: 0; font-size: 0.85rem;">No CCTV cameras configured yet.</p>
+          <p style="margin: 4px 0 0 0; font-size: 0.75rem; color: var(--text-tertiary);">Click 'Add CCTV Camera' to set up your first stream.</p>
+        </div>
+      `;
+      if (window.lucide) window.lucide.createIcons();
+      return;
+    }
+
+    container.innerHTML = '';
+    cameras.forEach(cam => {
+      const site = sites.find(s => s.id === cam.siteId);
+      const siteName = site ? site.name : 'Unknown Site';
+      
+      const isRunning = cam.running && cam.status === 'active';
+      const statusBadge = isRunning 
+        ? `<span class="badge" style="background: rgba(46, 213, 115, 0.1); color: #2ed573; border-color: rgba(46, 213, 115, 0.2);">ACTIVE</span>`
+        : `<span class="badge" style="background: rgba(113, 113, 122, 0.1); color: var(--text-tertiary); border-color: var(--glass-border);">${cam.status.toUpperCase()}</span>`;
+      
+      const statusIndicator = isRunning 
+        ? `<span style="width: 8px; height: 8px; border-radius: 50%; background: #2ed573; display: inline-block; box-shadow: 0 0 6px #2ed573;"></span>`
+        : `<span style="width: 8px; height: 8px; border-radius: 50%; background: #71717a; display: inline-block;"></span>`;
+
+      const card = document.createElement('div');
+      card.className = 'glass-card cctv-camera-card';
+      card.style.padding = '16px';
+      card.style.display = 'flex';
+      card.style.flexDirection = 'column';
+      card.style.gap = '12px';
+      card.style.border = isRunning ? '1px solid rgba(46, 213, 115, 0.2)' : '1px solid var(--glass-border)';
+      
+      const escapedCam = JSON.stringify(cam).replace(/'/g, "&apos;").replace(/"/g, '&quot;');
+      
+      card.innerHTML = `
+        <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--glass-border); padding-bottom: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            ${statusIndicator}
+            <strong style="font-size: 0.85rem; color: var(--text-primary);">${cam.name}</strong>
+          </div>
+          ${statusBadge}
+        </div>
+        <div style="font-size: 0.75rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 4px;">
+          <div style="text-overflow: ellipsis; overflow: hidden; white-space: nowrap;"><span style="color: var(--text-tertiary);">Source:</span> <code style="color: var(--color-primary);">${cam.source}</code></div>
+          <div><span style="color: var(--text-tertiary);">Target Location:</span> ${siteName}</div>
+          <div><span style="color: var(--text-tertiary);">Action Mode:</span> ${cam.eventType.toUpperCase()}</div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--glass-border); justify-content: flex-end;">
+          <button class="btn btn-secondary btn-xs" onclick="openEditCctvModal(JSON.parse('${escapedCam}'))" style="font-size: 0.7rem; padding: 4px 8px; height: 26px;">Edit</button>
+          <button class="btn btn-danger btn-xs" onclick="deleteCctvCamera('${cam.id}')" style="font-size: 0.7rem; padding: 4px 8px; height: 26px; background: rgba(255, 71, 87, 0.1); color: #ff4757; border-color: rgba(255, 71, 87, 0.2);">Delete</button>
+        </div>
+      `;
+      container.appendChild(card);
+    });
+
+  } catch (err) {
+    console.error("Failed to load CCTV camera configurations:", err);
+    container.innerHTML = `<div style="grid-column:1/-1; text-align:center; color:#ff4757; padding:20px;">Failed to load CCTV cameras: ${err.message}</div>`;
+  }
+  
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function openAddCctvModal() {
+  document.getElementById('cctv-modal-title').textContent = "Add New CCTV Camera";
+  document.getElementById('cctv-id').value = '';
+  document.getElementById('cctv-name').value = '';
+  document.getElementById('cctv-source').value = '';
+  document.getElementById('cctv-event-type').value = 'auto';
+  document.getElementById('cctv-status').value = 'active';
+  
+  const modal = document.getElementById('cctv-modal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function openEditCctvModal(cam) {
+  document.getElementById('cctv-modal-title').textContent = "Edit CCTV Camera Configuration";
+  document.getElementById('cctv-id').value = cam.id;
+  document.getElementById('cctv-name').value = cam.name;
+  document.getElementById('cctv-source').value = cam.source;
+  document.getElementById('cctv-site').value = cam.siteId;
+  document.getElementById('cctv-event-type').value = cam.eventType;
+  document.getElementById('cctv-status').value = cam.status;
+  
+  const modal = document.getElementById('cctv-modal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeCctvModal() {
+  const modal = document.getElementById('cctv-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function handleCctvSubmit(event) {
+  event.preventDefault();
+  
+  const camera = {
+    id: document.getElementById('cctv-id').value || undefined,
+    name: document.getElementById('cctv-name').value,
+    source: document.getElementById('cctv-source').value,
+    siteId: document.getElementById('cctv-site').value,
+    eventType: document.getElementById('cctv-event-type').value,
+    status: document.getElementById('cctv-status').value
+  };
+
+  try {
+    const resp = await fetch('/api/cctv', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(camera)
+    });
+    
+    if (resp.ok) {
+      closeCctvModal();
+      loadCctvCameras();
+    } else {
+      const err = await resp.json();
+      alert(`Save failed: ${err.error || 'Server error'}`);
+    }
+  } catch (err) {
+    alert("Connection error: " + err.message);
+  }
+}
+
+async function deleteCctvCamera(id) {
+  if (!confirm("Are you sure you want to delete this CCTV camera?")) {
+    return;
+  }
+
+  try {
+    const resp = await fetch(`/api/cctv/${id}`, {
+      method: 'DELETE'
+    });
+    
+    if (resp.ok) {
+      loadCctvCameras();
+    } else {
+      const err = await resp.json();
+      alert(`Delete failed: ${err.error || 'Server error'}`);
+    }
+  } catch (err) {
+    alert("Connection error: " + err.message);
+  }
+}
+
+async function testCctvConnection() {
+  const source = document.getElementById('cctv-source').value;
+  if (!source) {
+    alert("Please enter a stream source to test.");
+    return;
+  }
+
+  try {
+    const resp = await fetch('/api/cctv/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source })
+    });
+    
+    const result = await resp.json();
+    if (result.success) {
+      alert("✓ Connection configuration is valid. You can save this camera.");
+    } else {
+      alert("✗ Connection test failed: " + (result.error || "Unknown error"));
+    }
+  } catch (err) {
+    alert("Connection error: " + err.message);
   }
 }

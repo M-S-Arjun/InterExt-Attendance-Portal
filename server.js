@@ -459,11 +459,25 @@ app.post('/api/face/recognize', async (req, res) => {
         
         const eventType = existingAttendance && existingAttendance.checkIn ? 'exit' : 'entry';
         
+        // Save webcam recognition as a camera event log
+        const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+        const savedEvent = database.saveCameraEvent({
+          employeeId: employee.id,
+          employeeName: employee.name,
+          eventType: eventType,
+          siteName: 'Webcam Scan',
+          timestamp: timestamp,
+          date: eventDate,
+          imageBase64: cleanBase64,
+          imageFilename: 'webcam_scan.jpg',
+          status: 'recognized'
+        });
+        
         const attendanceEntry = {
           employeeId: employee.id,
           employeeName: employee.name,
           date: eventDate,
-          siteName: 'Camera (Auto-recognized)',
+          siteName: 'Webcam Scan',
           messageText: `Face recognized - auto ${eventType}`,
           facialRecognitionMatch: true,
           matchConfidence: data.confidence
@@ -485,6 +499,7 @@ app.post('/api/face/recognize', async (req, res) => {
         
         const savedAttendance = database.saveAttendance(attendanceEntry);
         io.emit('attendance_updated', savedAttendance);
+        io.emit('camera_event_recorded', savedEvent);
         
         return res.json({
           success: true,
@@ -559,8 +574,203 @@ app.post('/api/face/load-embeddings', async (req, res) => {
     const data = await response.json();
     res.json(data);
   } catch (err) {
-    console.error('[API] Load embeddings error:', err.message);
+    console.error('[API] Face load embeddings error:', err.message);
     res.status(503).json({ error: err.message });
+  }
+});
+
+// GET CCTV Cameras list
+app.get('/api/cctv', (req, res) => {
+  try {
+    const cameras = database.getCctvCameras();
+    res.json(cameras);
+  } catch (err) {
+    console.error('[API] Get CCTV cameras failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST Add/Edit CCTV Camera config
+app.post('/api/cctv', async (req, res) => {
+  try {
+    const cameraData = req.body;
+    if (!cameraData.name || !cameraData.source) {
+      return res.status(400).json({ error: 'Camera Name and Stream Source are required.' });
+    }
+    
+    const savedCamera = database.saveCctvCamera(cameraData);
+    
+    // If active, sync start to python microservice background thread
+    if (savedCamera.status === 'active') {
+      try {
+        const db = database.read();
+        const site = (db.sites || []).find(s => s.id === savedCamera.siteId);
+        const siteName = site ? site.name : 'Office';
+        
+        await fetch(`${FACE_RECOGNITION_SERVICE}/api/cctv/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            camera_id: savedCamera.id,
+            name: savedCamera.name,
+            source: savedCamera.source,
+            site_name: siteName,
+            event_type: savedCamera.eventType,
+            threshold: 0.55
+          })
+        });
+      } catch (err) {
+        console.warn(`[API] Failed to start CCTV stream thread in python: ${err.message}`);
+      }
+    } else {
+      // Stop background thread
+      try {
+        await fetch(`${FACE_RECOGNITION_SERVICE}/api/cctv/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ camera_id: savedCamera.id })
+        });
+      } catch (err) {
+        console.warn(`[API] Failed to stop CCTV stream thread in python: ${err.message}`);
+      }
+    }
+    
+    res.json(savedCamera);
+  } catch (err) {
+    console.error('[API] Save CCTV camera failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE CCTV Camera config
+app.delete('/api/cctv/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Stop thread in python service
+    try {
+      await fetch(`${FACE_RECOGNITION_SERVICE}/api/cctv/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera_id: id })
+      });
+    } catch (err) {
+      console.warn(`[API] Failed to stop CCTV stream thread in python on deletion: ${err.message}`);
+    }
+    
+    const success = database.deleteCctvCamera(id);
+    if (success) {
+      res.json({ success: true, message: 'CCTV camera deleted.' });
+    } else {
+      res.status(404).json({ error: 'CCTV camera not found.' });
+    }
+  } catch (err) {
+    console.error('[API] Delete CCTV camera failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST CCTV Stream test source
+app.post('/api/cctv/test', async (req, res) => {
+  try {
+    const { source } = req.body;
+    if (!source) {
+      return res.status(400).json({ error: 'Stream Source is required to test connection.' });
+    }
+    res.json({ success: true, message: 'Stream connection configuration accepted.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST CCTV Event Webhook (called by python thread)
+app.post('/api/face/cctv-event', async (req, res) => {
+  try {
+    const { employee_id, confidence, camera_id, camera_name, site_name, event_type, image_base64 } = req.body;
+    
+    const db = database.read();
+    let employee = db.employees?.find(e => e.id === employee_id);
+    if (!employee) {
+      // Fallback fuzzy resolver
+      employee = db.employees?.find(e => {
+        if (!e.name) return false;
+        const cleanDbName = e.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
+        const cleanInputName = employee_id.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
+        return cleanDbName === cleanInputName || 
+               cleanDbName.replace(/_/g, '') === cleanInputName.replace(/_/g, '') || 
+               cleanDbName.includes(cleanInputName) || 
+               cleanInputName.includes(cleanDbName);
+      });
+    }
+    
+    if (!employee) {
+      console.warn(`[CCTV Event] Match "${employee_id}" not found in database.`);
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+    
+    const now = new Date();
+    const timestamp = now.toISOString();
+    const eventDate = timestamp.split('T')[0];
+    
+    // Determine action check-in or check-out
+    const existingAttendance = (db.attendance || []).find(
+      a => a.employeeId === employee.id && a.date === eventDate
+    );
+    
+    let resolvedEventType = event_type;
+    if (resolvedEventType === 'auto') {
+      resolvedEventType = existingAttendance && existingAttendance.checkIn ? 'exit' : 'entry';
+    }
+    
+    // 1. Record camera event log
+    const cameraEvent = {
+      id: `cctv_log_${Date.now()}`,
+      employeeId: employee.id,
+      employeeName: employee.name,
+      eventType: resolvedEventType,
+      siteName: site_name || 'CCTV Camera',
+      timestamp: timestamp,
+      date: eventDate,
+      imageBase64: image_base64,
+      imageFilename: 'cctv_frame.jpg',
+      status: 'recognized'
+    };
+    
+    const savedEvent = database.saveCameraEvent(cameraEvent);
+    
+    // 2. Record attendance entry
+    const attendanceEntry = {
+      employeeId: employee.id,
+      employeeName: employee.name,
+      date: eventDate,
+      siteName: site_name || 'CCTV Camera',
+      messageText: `CCTV Face recognized - auto ${resolvedEventType}`,
+      facialRecognitionMatch: true,
+      matchConfidence: confidence
+    };
+    
+    if (resolvedEventType === 'entry') {
+      attendanceEntry.checkIn = timestamp;
+      if (existingAttendance?.checkOut) {
+        attendanceEntry.id = existingAttendance.id;
+        attendanceEntry.checkOut = existingAttendance.checkOut;
+      }
+    } else {
+      if (existingAttendance?.checkIn) {
+        attendanceEntry.id = existingAttendance.id;
+        attendanceEntry.checkIn = existingAttendance.checkIn;
+      }
+      attendanceEntry.checkOut = timestamp;
+    }
+    
+    const savedAttendance = database.saveAttendance(attendanceEntry);
+    io.emit('attendance_updated', savedAttendance);
+    io.emit('camera_event_recorded', savedEvent);
+    
+    res.json({ success: true, cameraEvent: savedEvent, attendance: savedAttendance });
+  } catch (err) {
+    console.error('[API] CCTV event webhook failed:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 

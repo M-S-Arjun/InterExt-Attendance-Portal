@@ -65,6 +65,7 @@ def train_embeddings():
     Expected request: 
     - Form data with 'images_dir' (path to employee images) or
     - Files uploaded in multipart form
+    - Optional: 'force' (boolean string, 'true' to force retrain all)
     """
     try:
         if not model:
@@ -72,6 +73,8 @@ def train_embeddings():
         
         # Get images directory from request
         images_dir = request.form.get('images_dir')
+        force_val = request.form.get('force', 'false').lower()
+        force_retrain = force_val in ('true', '1', 'yes')
         
         if not images_dir:
             return jsonify({'error': 'images_dir parameter required'}), 400
@@ -79,14 +82,22 @@ def train_embeddings():
         if not os.path.exists(images_dir):
             return jsonify({'error': f'Directory not found: {images_dir}'}), 404
         
-        logger.info(f"Training embeddings from {images_dir}")
+        logger.info(f"Training embeddings from {images_dir} (force: {force_retrain})")
         
-        # Train model
-        embeddings = model.train_employee_embeddings(images_dir)
+        # Callback to save intermediate embeddings dynamically
+        def save_cb():
+            os.makedirs(os.path.dirname(EMBEDDINGS_FILE), exist_ok=True)
+            model.save_embeddings(EMBEDDINGS_FILE)
+            
+        # Train model with incremental resume capability
+        embeddings = model.train_employee_embeddings(
+            images_dir, 
+            force_retrain=force_retrain, 
+            save_callback=save_cb
+        )
         
-        # Save embeddings
-        os.makedirs(os.path.dirname(EMBEDDINGS_FILE), exist_ok=True)
-        model.save_embeddings(EMBEDDINGS_FILE)
+        # Final save
+        save_cb()
         
         return jsonify({
             'success': True,
@@ -229,6 +240,63 @@ def load_embeddings():
     
     except Exception as e:
         logger.error(f"Error loading embeddings: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cctv/start', methods=['POST'])
+def cctv_start():
+    try:
+        # Support both JSON and Form parameters
+        data = request.get_json() if request.is_json else {}
+        camera_id = data.get('camera_id') or request.form.get('camera_id')
+        name = data.get('name') or request.form.get('name')
+        source = data.get('source') or request.form.get('source')
+        site_name = data.get('site_name') or request.form.get('site_name', 'Office')
+        event_type = data.get('event_type') or request.form.get('event_type', 'auto')
+        threshold = float(data.get('threshold') or request.form.get('threshold', 0.55))
+        
+        node_server = os.environ.get('NODE_SERVER_URL', 'http://localhost:3000')
+        
+        if not camera_id or not name or not source:
+            return jsonify({'error': 'camera_id, name, and source are required'}), 400
+            
+        import cctv_processor
+        success = cctv_processor.start_cctv_thread(
+            camera_id, name, source, site_name, event_type, threshold, node_server
+        )
+        
+        return jsonify({'success': success, 'message': f'CCTV thread started for camera {name}'})
+    except Exception as e:
+        logger.error(f"Error starting CCTV stream: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cctv/stop', methods=['POST'])
+def cctv_stop():
+    try:
+        data = request.get_json() if request.is_json else {}
+        camera_id = data.get('camera_id') or request.form.get('camera_id')
+        
+        if not camera_id:
+            return jsonify({'error': 'camera_id is required'}), 400
+            
+        import cctv_processor
+        success = cctv_processor.stop_cctv_thread(camera_id)
+        
+        return jsonify({'success': success, 'message': f'CCTV thread stopped for camera {camera_id}'})
+    except Exception as e:
+        logger.error(f"Error stopping CCTV stream: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cctv/status', methods=['GET'])
+def cctv_status():
+    try:
+        import cctv_processor
+        status = cctv_processor.get_cctv_status()
+        return jsonify({'success': True, 'cameras': status})
+    except Exception as e:
+        logger.error(f"Error getting CCTV status: {e}")
         return jsonify({'error': str(e)}), 500
 
 

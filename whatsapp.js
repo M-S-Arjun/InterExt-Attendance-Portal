@@ -139,7 +139,8 @@ class WhatsAppManager extends EventEmitter {
             '--disable-dev-shm-usage',
             '--no-first-run',
             '--no-zygote',
-            '--disable-extensions'
+            '--disable-extensions',
+            '--disable-gpu'
           ]
         }
       });
