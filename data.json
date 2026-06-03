@@ -1,6 +1,34 @@
 {
   "employees": [
     {
+      "id": "keerthana_vinod",
+      "name": "Keerthana Vinod",
+      "phone": "",
+      "status": "active",
+      "dailyRate": 800,
+      "hourlyRate": 100,
+      "siteId": "site_a",
+      "userId": "keerthana_vinod",
+      "modeOfWork": "Office Staff",
+      "createdAt": "2026-06-03T12:00:00.000Z",
+      "shiftStart": "09:00",
+      "shiftEnd": "18:00"
+    },
+    {
+      "id": "m_s_arjun",
+      "name": "M-S-Arjun",
+      "phone": "",
+      "status": "active",
+      "dailyRate": 1000,
+      "hourlyRate": 125,
+      "siteId": "site_a",
+      "userId": "m_s_arjun",
+      "modeOfWork": "Office Staff",
+      "createdAt": "2026-06-03T12:00:00.000Z",
+      "shiftStart": "09:00",
+      "shiftEnd": "18:00"
+    },
+    {
       "id": "emp_2050",
       "name": "Maya Sunil",
       "phone": "236906319224888",
@@ -3484,6 +3512,25 @@
       "travelHours": 0,
       "duration": 0,
       "status": "checked-in"
+    },
+    {
+      "employeeId": "emp_2014",
+      "employeeName": "NIJI MANOJ",
+      "siteName": "INTEREXT OFFICE",
+      "date": "2026-06-03",
+      "checkIn": "2026-06-03T06:29:00.000Z",
+      "checkOut": null,
+      "messageText": "[RESOLVED] Iam on half day leave",
+      "status": "checked-in",
+      "id": "att_1780468166009",
+      "regularHours": 0,
+      "otHours": 0,
+      "extraHours": 0,
+      "isHalfDay": false,
+      "isFullDay": false,
+      "calculatedWage": 0,
+      "travelHours": 0,
+      "duration": 0
     }
   ],
   "settings": {
@@ -3615,26 +3662,6 @@
       "timestamp": "2026-06-02T03:52:02.393Z"
     },
     {
-      "sender": "917907932036",
-      "messageText": "I am 1 hour late to reach the office today",
-      "reason": "Worker name unrecognized",
-      "extractedName": "i am hour late to reach the today",
-      "extractedSite": "INTEREXT OFFICE",
-      "extractedAction": "in",
-      "id": "msg_1780372324551",
-      "timestamp": "2026-06-02T03:52:04.551Z"
-    },
-    {
-      "sender": "919633603478",
-      "messageText": "Iam on half day leave",
-      "reason": "Worker name unrecognized",
-      "extractedName": "iam on half day",
-      "extractedSite": "INTEREXT OFFICE",
-      "extractedAction": "leave",
-      "id": "msg_1780372326487",
-      "timestamp": "2026-06-02T03:52:06.487Z"
-    },
-    {
       "sender": "919847229996",
       "messageText": "Site  BMH Ernakulam",
       "reason": "Worker name unrecognized",
@@ -3743,16 +3770,6 @@
       "extractedAction": "completed",
       "id": "msg_1780051896214",
       "timestamp": "2026-05-29T10:51:36.214Z"
-    },
-    {
-      "sender": "919999999999",
-      "messageText": "Akhil, —, (9-6 pm provision house)",
-      "reason": "Work site not specified/recognized",
-      "extractedName": "Akhil",
-      "extractedSite": "—",
-      "extractedAction": "completed",
-      "id": "msg_1780051896217",
-      "timestamp": "2026-05-29T10:51:36.217Z"
     },
     {
       "sender": "918848969464@c.us",
