@@ -4,8 +4,63 @@ const QRCode = require('qrcode');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const https = require('https');
 const database = require('./database');
 const parser = require('./parser');
+
+function getLatestWWebVersion() {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.github.com',
+      path: '/repos/wppconnect-team/wa-version/contents/html',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)'
+      },
+      timeout: 8000
+    };
+
+    const req = https.get(options, (res) => {
+      let body = '';
+      res.on('data', (chunk) => body += chunk);
+      res.on('end', () => {
+        try {
+          if (res.statusCode !== 200) {
+            return reject(new Error(`HTTP status ${res.statusCode}`));
+          }
+          const files = JSON.parse(body);
+          if (!Array.isArray(files) || files.length === 0) {
+            return reject(new Error('Invalid response structure from GitHub API'));
+          }
+          const htmlFiles = files
+            .map(f => f.name)
+            .filter(name => name.endsWith('.html'))
+            .map(name => name.replace('.html', ''));
+          
+          if (htmlFiles.length === 0) {
+            return reject(new Error('No HTML files found in repository'));
+          }
+
+          // Sort alphabetically/semver-wise to find the latest
+          htmlFiles.sort((a, b) => {
+            return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+          });
+
+          const latest = htmlFiles[htmlFiles.length - 1];
+          resolve(latest);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+
+    req.on('error', (err) => reject(err));
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Request timed out'));
+    });
+  });
+}
+
 
 function cleanupChromeProcesses() {
   try {
@@ -117,6 +172,16 @@ class WhatsAppManager extends EventEmitter {
     // Always scan and terminate orphan Chrome processes to release wwebjs_auth session locks
     cleanupChromeProcesses();
 
+    let webVersion = '2.3000.1040735178-alpha';
+    try {
+      console.log("[WhatsApp Cache] Resolving latest WhatsApp Web version from wppconnect-team/wa-version...");
+      const resolved = await getLatestWWebVersion();
+      webVersion = resolved;
+      console.log(`[WhatsApp Cache] Successfully resolved latest remote version: ${webVersion}`);
+    } catch (err) {
+      console.warn(`[WhatsApp Cache] Could not dynamically resolve latest version: ${err.message}. Using fallback: ${webVersion}`);
+    }
+
     try {
       this.client = new Client({
         authStrategy: new LocalAuth({
@@ -125,6 +190,7 @@ class WhatsAppManager extends EventEmitter {
         authTimeoutMs: 120000, // 2 minutes timeout for auth
         qrTimeoutMs: 120000,   // 2 minutes timeout for QR scanning
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+        webVersion: webVersion,
         webVersionCache: {
           type: 'remote',
           remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
