@@ -3167,15 +3167,28 @@ async function captureAndRecognizeFace() {
 
   try {
     const ctx = canvas.getContext('2d');
-    // Set canvas dimensions to match the video feed
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    
+    // Downscale canvas to max 480px for faster transfer and processing
+    const originalWidth = video.videoWidth || 640;
+    const originalHeight = video.videoHeight || 480;
+    const maxDimension = 480;
+    let targetWidth = originalWidth;
+    let targetHeight = originalHeight;
+    
+    if (Math.max(originalWidth, originalHeight) > maxDimension) {
+      const scale = maxDimension / Math.max(originalWidth, originalHeight);
+      targetWidth = Math.round(originalWidth * scale);
+      targetHeight = Math.round(originalHeight * scale);
+    }
+    
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
 
-    // Draw the current video frame to the canvas
+    // Draw and automatically scale the video frame to the canvas
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     // Convert to Base64 image data url
-    const imageBase64 = canvas.toDataURL('image/jpeg');
+    const imageBase64 = canvas.toDataURL('image/jpeg', 0.8);
 
     // Call face recognition API
     const resp = await fetch('/api/face/recognize', {
@@ -3269,7 +3282,7 @@ function startAutoScanLoop() {
       return;
     }
     await captureAndRecognizeFaceAuto();
-  }, 2500);
+  }, 800);
 }
 
 function stopAutoScanLoop() {
@@ -3294,10 +3307,25 @@ async function captureAndRecognizeFaceAuto() {
 
   try {
     const ctx = canvas.getContext('2d');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    
+    // Downscale canvas to max 480px for faster transfer and processing
+    const originalWidth = video.videoWidth || 640;
+    const originalHeight = video.videoHeight || 480;
+    const maxDimension = 480;
+    let targetWidth = originalWidth;
+    let targetHeight = originalHeight;
+    
+    if (Math.max(originalWidth, originalHeight) > maxDimension) {
+      const scale = maxDimension / Math.max(originalWidth, originalHeight);
+      targetWidth = Math.round(originalWidth * scale);
+      targetHeight = Math.round(originalHeight * scale);
+    }
+    
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const imageBase64 = canvas.toDataURL('image/jpeg');
+    const imageBase64 = canvas.toDataURL('image/jpeg', 0.8);
 
     const resp = await fetch('/api/face/recognize', {
       method: 'POST',

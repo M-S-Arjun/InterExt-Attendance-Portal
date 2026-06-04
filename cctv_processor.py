@@ -72,20 +72,22 @@ class CCTVStreamProcessor(threading.Thread):
 
         while self.running:
             try:
-                # Process every 1.5 seconds to conserve CPU
-                time.sleep(1.5)
+                # Process every 0.3 seconds to match fast-passing employees
+                time.sleep(0.3)
                 
                 frame = self.latest_frame
                 if frame is None:
                     continue
                 
-                # Convert the cv2 frame to base64 for the recognition method
-                _, buffer = cv2.imencode('.jpg', frame)
-                jpg_as_text = base64.b64encode(buffer).decode('utf-8')
-                image_base64 = f"data:image/jpeg;base64,{jpg_as_text}"
+                # Downscale the frame to a max dimension of 480px for faster processing
+                h, w = frame.shape[:2]
+                max_size = 480
+                if max(h, w) > max_size:
+                    scale = max_size / max(h, w)
+                    frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
                 
-                # Perform face recognition directly via the local model instance
-                result = model.recognize_face(image_base64, threshold=self.threshold)
+                # Perform face recognition directly using the raw numpy BGR frame array
+                result = model.recognize_face(frame, threshold=self.threshold)
                 
                 if result:
                     employee_id, confidence = result
@@ -100,6 +102,10 @@ class CCTVStreamProcessor(threading.Thread):
                     # Update cool-down
                     self.cooldowns[employee_id] = now
                     logger.info(f"[{self.name}] Face recognized: {employee_id} (confidence: {confidence:.3f})")
+                    
+                    # Convert the matching frame to base64 ONLY when reporting
+                    _, buffer = cv2.imencode('.jpg', frame)
+                    jpg_as_text = base64.b64encode(buffer).decode('utf-8')
                     
                     # Post recognized CCTV event to the Node.js server
                     self.report_attendance(employee_id, confidence, jpg_as_text)

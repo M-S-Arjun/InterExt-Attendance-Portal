@@ -64,12 +64,12 @@ class FaceRecognitionModel:
             raise
 
     
-    def extract_face_embedding(self, image_path_or_data: str, raise_errors: bool = False) -> Optional[np.ndarray]:
+    def extract_face_embedding(self, image_path_or_data, raise_errors: bool = False) -> Optional[np.ndarray]:
         """
         Extract face embedding from image
         
         Args:
-            image_path_or_data: Path to image or base64 encoded image data
+            image_path_or_data: Path to image, base64 encoded image data, or numpy BGR image array
             raise_errors: If True, raise ValueError for validation failures
             
         Returns:
@@ -79,24 +79,30 @@ class FaceRecognitionModel:
             from PIL import Image, ImageOps
             import io
             
-            # Load image
-            if image_path_or_data.startswith('data:image'):
+            image_array = None
+            if isinstance(image_path_or_data, np.ndarray):
+                # Input is already a BGR OpenCV numpy array
+                image_array = image_path_or_data.copy()
+            elif isinstance(image_path_or_data, str) and image_path_or_data.startswith('data:image'):
                 # Handle base64 encoded image
                 image_data = image_path_or_data.split(',')[1]
                 image_bytes = base64.b64decode(image_data)
                 image = Image.open(io.BytesIO(image_bytes))
-            else:
+                # Apply EXIF transpose to automatically rotate photos based on orientation metadata
+                image = ImageOps.exif_transpose(image)
+                image_array = cv2.cvtColor(np.array(image.convert('RGB')), cv2.COLOR_RGB2BGR)
+            elif isinstance(image_path_or_data, str):
                 # Load from file path
                 if not os.path.exists(image_path_or_data):
                     logger.error(f"Image file does not exist: {image_path_or_data}")
                     return None
                 image = Image.open(image_path_or_data)
-            
-            # Apply EXIF transpose to automatically rotate photos based on orientation metadata
-            image = ImageOps.exif_transpose(image)
-            
-            # Convert RGB PIL Image to BGR OpenCV array
-            image_array = cv2.cvtColor(np.array(image.convert('RGB')), cv2.COLOR_RGB2BGR)
+                # Apply EXIF transpose to automatically rotate photos based on orientation metadata
+                image = ImageOps.exif_transpose(image)
+                image_array = cv2.cvtColor(np.array(image.convert('RGB')), cv2.COLOR_RGB2BGR)
+            else:
+                logger.error("Unsupported image input type")
+                return None
 
             # Downscale large images for faster face detection and embedding extraction
             h, w = image_array.shape[:2]
@@ -244,12 +250,12 @@ class FaceRecognitionModel:
         except Exception as e:
             logger.error(f"Failed to load embeddings: {e}")
     
-    def recognize_face(self, image_path_or_data: str, threshold: float = 0.6) -> Optional[Tuple[str, float]]:
+    def recognize_face(self, image_path_or_data, threshold: float = 0.6) -> Optional[Tuple[str, float]]:
         """
         Recognize employee from image
         
         Args:
-            image_path_or_data: Path to image or base64 data
+            image_path_or_data: Path to image, base64 data, or numpy BGR image array
             threshold: Cosine similarity threshold (0-1). Higher = stricter matching
             
         Returns:
