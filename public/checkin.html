@@ -811,7 +811,27 @@
 
         // Success!
         resultMsg.className = 'status-alert success';
-        resultText.innerHTML = `<strong>Attendance Accepted!</strong><br>Name: ${data.employee?.name || 'Employee'}<br>ID: ${data.employee_id || ''}<br>${data.message}`;
+        
+        const matches = data.matches || [
+          {
+            success: true,
+            employee: data.employee,
+            employee_id: data.employee_id,
+            message: data.message
+          }
+        ];
+        
+        let htmlContent = `<strong>Attendance Scan Result:</strong><br><ul style="margin: 5px 0 0 15px; padding: 0; text-align: left;">`;
+        matches.forEach(match => {
+          if (match.success) {
+            htmlContent += `<li><span style="color: #2ed573;">✔ ${match.employee?.name || 'Employee'}:</span> Attendance accepted (${match.eventType === 'entry' ? 'Checked In' : 'Checked Out'})</li>`;
+          } else {
+            htmlContent += `<li><span style="color: #ff4757;">✗ ${match.employee ? match.employee.name : match.employee_id}:</span> ${match.message}</li>`;
+          }
+        });
+        htmlContent += `</ul>`;
+        
+        resultText.innerHTML = htmlContent;
         resultIcon.setAttribute('data-lucide', 'check-circle');
         if (window.lucide) window.lucide.createIcons();
         

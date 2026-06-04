@@ -1128,15 +1128,40 @@ async function recognizeFaceFromCamera() {
         const result = await resp.json();
         
         if (result.recognized) {
-          // Face recognized - auto-populate form
-          document.getElementById('camera-emp-select').value = result.employee.id;
-          document.getElementById('camera-event-type').value = result.eventType;
-          setCameraEventTimestampNow();
+          const matches = result.matches || [
+            {
+              success: true,
+              employee: result.employee,
+              confidence: result.confidence,
+              eventType: result.eventType
+            }
+          ];
           
-          // Show recognition result as a floating toast notification (hands-free)
-          showFloatingNotification(result.employee.name, result.confidence, result.eventType);
+          let firstSuccess = null;
+          let errorMessages = [];
           
-          // Auto-submit or show preview
+          matches.forEach(match => {
+            if (match.success && match.employee) {
+              if (!firstSuccess) firstSuccess = match;
+              showFloatingNotification(match.employee.name, match.confidence, match.eventType);
+            } else {
+              errorMessages.push(`${match.employee ? match.employee.name : match.employee_id}: ${match.message}`);
+            }
+          });
+          
+          if (firstSuccess) {
+            // Auto-populate form
+            document.getElementById('camera-emp-select').value = firstSuccess.employee.id;
+            document.getElementById('camera-event-type').value = firstSuccess.eventType;
+            setCameraEventTimestampNow();
+          }
+          
+          if (errorMessages.length > 0) {
+            setTimeout(() => {
+              alert(`Some scans were rejected:\n\n${errorMessages.join('\n')}`);
+            }, 800);
+          }
+          
           console.log("Face recognition result:", result);
         } else {
           const errMsg = result.message || 'No matching employee found in database\nPlease select manually or train more images';
@@ -3203,13 +3228,39 @@ async function captureAndRecognizeFace() {
     const result = await resp.json();
     
     if (result.recognized) {
-      // Auto-populate form
-      document.getElementById('camera-emp-select').value = result.employee.id;
-      document.getElementById('camera-event-type').value = result.eventType;
-      setCameraEventTimestampNow();
+      const matches = result.matches || [
+        {
+          success: true,
+          employee: result.employee,
+          confidence: result.confidence,
+          eventType: result.eventType
+        }
+      ];
       
-      // Show recognition result as a floating toast notification (hands-free)
-      showFloatingNotification(result.employee.name, result.confidence, result.eventType);
+      let firstSuccess = null;
+      let errorMessages = [];
+      
+      matches.forEach(match => {
+        if (match.success && match.employee) {
+          if (!firstSuccess) firstSuccess = match;
+          showFloatingNotification(match.employee.name, match.confidence, match.eventType);
+        } else {
+          errorMessages.push(`${match.employee ? match.employee.name : match.employee_id}: ${match.message}`);
+        }
+      });
+      
+      if (firstSuccess) {
+        // Auto-populate form
+        document.getElementById('camera-emp-select').value = firstSuccess.employee.id;
+        document.getElementById('camera-event-type').value = firstSuccess.eventType;
+        setCameraEventTimestampNow();
+      }
+      
+      if (errorMessages.length > 0) {
+        setTimeout(() => {
+          alert(`Some scans were rejected:\n\n${errorMessages.join('\n')}`);
+        }, 800);
+      }
     } else {
       const errMsg = result.message || 'Face match not recognized.';
       if (errMsg === 'Face not recognized' || errMsg === 'No matching employee found' || errMsg === 'No face detected') {
@@ -3233,6 +3284,7 @@ async function captureAndRecognizeFace() {
 let autoScanInterval = null;
 let lastScannedEmployee = null;
 let lastScanTime = 0;
+const lastScannedEmployees = {}; // Track per-employee scan timestamps to support multiple faces
 
 function toggleAutoScan() {
   const checkbox = document.getElementById('webcam-autoscan');
@@ -3341,15 +3393,33 @@ async function captureAndRecognizeFaceAuto() {
     
     if (result.recognized) {
       const now = Date.now();
-      // Deduplicate scans within 15 seconds
-      if (lastScannedEmployee === result.employee.id && (now - lastScanTime < 15000)) {
-        return;
-      }
+      const matches = result.matches || [
+        {
+          success: true,
+          employee: result.employee,
+          confidence: result.confidence,
+          eventType: result.eventType
+        }
+      ];
       
-      lastScannedEmployee = result.employee.id;
-      lastScanTime = now;
-      
-      showFloatingNotification(result.employee.name, result.confidence, result.eventType);
+      matches.forEach(match => {
+        if (!match.success || !match.employee) return;
+        
+        const empId = match.employee.id;
+        const lastTime = lastScannedEmployees[empId] || 0;
+        if (now - lastTime < 15000) {
+          // Already scanned recently, skip toast
+          return;
+        }
+        
+        lastScannedEmployees[empId] = now;
+        
+        // Also keep legacy single-employee compatibility variables updated
+        lastScannedEmployee = empId;
+        lastScanTime = now;
+        
+        showFloatingNotification(match.employee.name, match.confidence, match.eventType);
+      });
     } else if (result.message && result.message !== 'Face not recognized' && result.message !== 'No matching employee found' && result.message !== 'No face detected') {
       const now = Date.now();
       const rejectionKey = `${result.message}`;

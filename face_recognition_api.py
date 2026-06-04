@@ -158,22 +158,25 @@ def recognize_face():
         
         logger.info(f"Recognizing face (threshold: {threshold})")
         
-        # Recognize face
-        result = model.recognize_face(image_data, threshold=threshold)
+        # Recognize faces
+        results = model.recognize_faces(image_data, threshold=threshold)
         
-        if result:
-            emp_id, confidence = result
+        if results:
+            first_emp, first_conf = results[0]
+            matches_list = [{'employee_id': emp_id, 'confidence': conf} for emp_id, conf in results]
             return jsonify({
                 'success': True,
-                'employee_id': emp_id,
-                'confidence': confidence,
-                'matched': True
+                'employee_id': first_emp,
+                'confidence': first_conf,
+                'matched': True,
+                'matches': matches_list
             })
         else:
             return jsonify({
                 'success': True,
                 'matched': False,
-                'message': 'No matching employee found'
+                'message': 'No matching employee found',
+                'matches': []
             })
     
     except ValueError as val_err:

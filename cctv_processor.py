@@ -87,29 +87,33 @@ class CCTVStreamProcessor(threading.Thread):
                     frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
                 
                 # Perform face recognition directly using the raw numpy BGR frame array
-                result = model.recognize_face(frame, threshold=self.threshold)
+                results = model.recognize_faces(frame, threshold=self.threshold)
                 
-                if result:
-                    employee_id, confidence = result
-                    
-                    # Check cool-down per employee
-                    now = time.time()
-                    last_seen = self.cooldowns.get(employee_id, 0)
-                    if now - last_seen < self.cooldown_seconds:
-                        logger.debug(f"[{self.name}] Matched {employee_id} but cool-down is active")
-                        continue
-                    
-                    # Update cool-down
-                    self.cooldowns[employee_id] = now
-                    logger.info(f"[{self.name}] Face recognized: {employee_id} (confidence: {confidence:.3f})")
-                    
-                    # Convert the matching frame to base64 ONLY when reporting
-                    _, buffer = cv2.imencode('.jpg', frame)
-                    jpg_as_text = base64.b64encode(buffer).decode('utf-8')
-                    
-                    # Post recognized CCTV event to the Node.js server
-                    self.report_attendance(employee_id, confidence, jpg_as_text)
-                    
+                if results:
+                    jpg_as_text = None
+                    for employee_id, confidence in results:
+                        # Check cool-down per employee
+                        now = time.time()
+                        last_seen = self.cooldowns.get(employee_id, 0)
+                        if now - last_seen < self.cooldown_seconds:
+                            logger.debug(f"[{self.name}] Matched {employee_id} but cool-down is active")
+                            continue
+                        
+                        # Update cool-down
+                        self.cooldowns[employee_id] = now
+                        logger.info(f"[{self.name}] Face recognized: {employee_id} (confidence: {confidence:.3f})")
+                        
+                        # Convert the matching frame to base64 ONLY when reporting
+                        if jpg_as_text is None:
+                            _, buffer = cv2.imencode('.jpg', frame)
+                            jpg_as_text = base64.b64encode(buffer).decode('utf-8')
+                        
+                        # Post recognized CCTV event to the Node.js server
+                        self.report_attendance(employee_id, confidence, jpg_as_text)
+                        
+            except ValueError:
+                # Silence common "No face detected" errors
+                pass
             except Exception as e:
                 logger.error(f"[{self.name}] Error in processing loop: {e}")
                 traceback.print_exc()

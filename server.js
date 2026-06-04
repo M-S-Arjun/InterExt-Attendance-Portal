@@ -444,23 +444,35 @@ app.post('/api/face/recognize', async (req, res) => {
     }
     
     if (data.success && data.matched) {
-      // Face recognized - auto-create attendance event
+      // Face recognized - auto-create attendance events for all matched employees
       const db = database.read();
-      let employee = db.employees?.find(e => e.id === data.employee_id);
-      if (!employee) {
-        // Fallback: match by directory name format (lowercase with underscores)
-        employee = db.employees?.find(e => {
-          if (!e.name) return false;
-          const cleanDbName = e.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
-          const cleanInputName = data.employee_id.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
-          return cleanDbName === cleanInputName || 
-                 cleanDbName.replace(/_/g, '') === cleanInputName.replace(/_/g, '') || 
-                 cleanDbName.includes(cleanInputName) || 
-                 cleanInputName.includes(cleanDbName);
-        });
-      }
+      const matches = data.matches || [{ employee_id: data.employee_id, confidence: data.confidence }];
+      const results = [];
       
-      if (employee) {
+      for (const match of matches) {
+        let employee = db.employees?.find(e => e.id === match.employee_id);
+        if (!employee) {
+          // Fallback: match by directory name format (lowercase with underscores)
+          employee = db.employees?.find(e => {
+            if (!e.name) return false;
+            const cleanDbName = e.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
+            const cleanInputName = match.employee_id.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
+            return cleanDbName === cleanInputName || 
+                   cleanDbName.replace(/_/g, '') === cleanInputName.replace(/_/g, '') || 
+                   cleanDbName.includes(cleanInputName) || 
+                   cleanInputName.includes(cleanDbName);
+          });
+        }
+        
+        if (!employee) {
+          results.push({
+            success: false,
+            employee_id: match.employee_id,
+            message: `Employee profile not found for match ${match.employee_id}`
+          });
+          continue;
+        }
+        
         const now = new Date();
         const timestamp = now.toISOString();
         const eventDate = timestamp.split('T')[0];
@@ -473,22 +485,26 @@ app.post('/api/face/recognize', async (req, res) => {
         // Duplicate attendance prevention
         if (existingAttendance) {
           if (existingAttendance.status === 'completed' || existingAttendance.status === 'leave') {
-            return res.status(400).json({
+            results.push({
               success: false,
-              status: "rejected",
+              employee: { id: employee.id, name: employee.name },
+              employee_id: employee.id,
               message: "Attendance already completed or marked leave for today"
             });
+            continue;
           }
           // If check-in exists, we're performing a check-out. Prevent duplicate double-clicks within 30s.
           if (existingAttendance.checkIn) {
             const checkInTime = new Date(existingAttendance.checkIn);
             const diffSeconds = (now - checkInTime) / 1000;
             if (diffSeconds < 30) {
-              return res.status(400).json({
+              results.push({
                 success: false,
-                status: "rejected",
+                employee: { id: employee.id, name: employee.name },
+                employee_id: employee.id,
                 message: "Duplicate scan detected. Please wait 30 seconds."
               });
+              continue;
             }
           }
         }
@@ -550,7 +566,7 @@ app.post('/api/face/recognize', async (req, res) => {
           siteName: siteName,
           messageText: `Face recognized - auto ${eventType}`,
           facialRecognitionMatch: true,
-          matchConfidence: data.confidence,
+          matchConfidence: match.confidence,
           latitude: latitude ? Number(latitude) : undefined,
           longitude: longitude ? Number(longitude) : undefined,
           verificationMethod: 'Face Recognition',
@@ -577,17 +593,40 @@ app.post('/api/face/recognize', async (req, res) => {
         io.emit('attendance_updated', savedAttendance);
         io.emit('camera_event_recorded', savedEvent);
         
+        results.push({
+          success: true,
+          employee: { id: employee.id, name: employee.name },
+          employee_id: employee.id,
+          confidence: match.confidence,
+          eventType: eventType,
+          attendance: savedAttendance,
+          message: "Attendance marked successfully"
+        });
+      }
+      
+      const successResults = results.filter(r => r.success);
+      if (successResults.length > 0) {
+        const firstSuccess = successResults[0];
+        const names = successResults.map(r => r.employee.name).join(', ');
         return res.json({
           success: true,
           status: "accepted",
-          employee_id: employee.id,
-          message: "Attendance marked successfully",
-          // Keep compatibility fields
+          employee_id: firstSuccess.employee.id,
+          message: `Attendance marked successfully for: ${names}`,
           recognized: true,
-          employee: { id: employee.id, name: employee.name },
-          confidence: data.confidence,
-          attendance: savedAttendance,
-          eventType: eventType
+          employee: firstSuccess.employee,
+          confidence: firstSuccess.confidence,
+          attendance: firstSuccess.attendance,
+          eventType: firstSuccess.eventType,
+          matches: results
+        });
+      } else {
+        const messages = results.map(r => `${r.employee ? r.employee.name : r.employee_id}: ${r.message}`).join('; ');
+        return res.status(400).json({
+          success: false,
+          status: "rejected",
+          message: messages || "Face match rejected",
+          matches: results
         });
       }
     }

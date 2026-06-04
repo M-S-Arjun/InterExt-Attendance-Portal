@@ -89,17 +89,7 @@ class FaceRecognitionModel:
             raise
 
     
-    def extract_face_embedding(self, image_path_or_data, raise_errors: bool = False) -> Optional[np.ndarray]:
-        """
-        Extract face embedding from image
-        
-        Args:
-            image_path_or_data: Path to image, base64 encoded image data, or numpy BGR image array
-            raise_errors: If True, raise ValueError for validation failures
-            
-        Returns:
-            Face embedding vector (512-dim) or None if no face detected
-        """
+    def _load_image_array(self, image_path_or_data) -> Optional[np.ndarray]:
         try:
             from PIL import Image, ImageOps
             import io
@@ -136,7 +126,27 @@ class FaceRecognitionModel:
                 scale = max_size / max(h, w)
                 image_array = cv2.resize(image_array, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
                 logger.info(f"Downscaled image from {w}x{h} to {int(w*scale)}x{int(h*scale)}")
+            return image_array
+        except Exception as e:
+            logger.error(f"Error loading image array: {e}")
+            traceback.print_exc()
+            return None
 
+    def extract_face_embedding(self, image_path_or_data, raise_errors: bool = False) -> Optional[np.ndarray]:
+        """
+        Extract face embedding from image
+        
+        Args:
+            image_path_or_data: Path to image, base64 encoded image data, or numpy BGR image array
+            raise_errors: If True, raise ValueError for validation failures
+            
+        Returns:
+            Face embedding vector (512-dim) or None if no face detected
+        """
+        try:
+            image_array = self._load_image_array(image_path_or_data)
+            if image_array is None:
+                return None
             
             # Detect faces and get embeddings
             faces = self.app.get(image_array)
@@ -165,6 +175,67 @@ class FaceRecognitionModel:
             logger.error(f"Error extracting face embedding: {e}")
             traceback.print_exc()
             return None
+
+    def recognize_faces(self, image_path_or_data, threshold: float = 0.6) -> List[Tuple[str, float]]:
+        """
+        Recognize multiple employees from image
+        
+        Args:
+            image_path_or_data: Path to image, base64 data, or numpy BGR image array
+            threshold: Cosine similarity threshold (0-1). Higher = stricter matching
+            
+        Returns:
+            List of tuples of (employee_id, confidence) for all matched faces
+        """
+        if not self.embeddings_db:
+            logger.warning("No embeddings database loaded")
+            return []
+        
+        # Load image array
+        image_array = self._load_image_array(image_path_or_data)
+        if image_array is None:
+            return []
+        
+        # Detect faces and get embeddings
+        faces = self.app.get(image_array)
+        
+        if len(faces) == 0:
+            logger.warning("No face detected in image")
+            raise ValueError("No face detected")
+            
+        results = []
+        for face in faces:
+            embedding = face.embedding
+            if embedding is None:
+                continue
+            
+            # Normalize embedding
+            embedding = embedding / np.linalg.norm(embedding)
+            
+            # Find best match using cosine similarity
+            best_match = None
+            best_score = 0
+            
+            for emp_id, emp_embedding in self.embeddings_db.items():
+                similarity = np.dot(embedding, emp_embedding)
+                
+                if similarity > best_score:
+                    best_score = similarity
+                    best_match = emp_id
+            
+            if best_score >= threshold:
+                logger.info(f"Face recognized: {best_match} (confidence: {best_score:.3f})")
+                results.append((best_match, float(best_score)))
+            else:
+                logger.info(f"No match found for a detected face (best score: {best_score:.3f}, threshold: {threshold})")
+        
+        # Deduplicate matches (if two faces match the same employee, keep the higher confidence one)
+        unique_matches = {}
+        for emp_id, score in results:
+            if emp_id not in unique_matches or score > unique_matches[emp_id]:
+                unique_matches[emp_id] = score
+                
+        return list(unique_matches.items())
     
     def train_employee_embeddings(self, employee_images_dir: str, force_retrain: bool = False, save_callback=None) -> Dict[str, np.ndarray]:
         """
