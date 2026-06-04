@@ -3798,32 +3798,70 @@ function initEmployeeWageAutoCalculation() {
   const empDaily = document.getElementById('emp-daily');
   const empHourly = document.getElementById('emp-hourly');
   const empMode = document.getElementById('emp-mode');
+  const empShiftStart = document.getElementById('emp-shift-start');
+  const empShiftEnd = document.getElementById('emp-shift-end');
 
-  if (!empMonthly || !empStdDays || !empDaily || !empHourly || !empMode) return;
+  if (!empMonthly || !empStdDays || !empDaily || !empHourly || !empMode || !empShiftStart || !empShiftEnd) return;
 
   function calculateWages() {
     const modeVal = empMode.value || "";
-    // If daily wages worker, skip auto-calculation
-    if (modeVal.toLowerCase().includes('daily')) {
-      return;
-    }
+    // If daily wages worker, skip auto-calculation from monthly wages
+    const isDailyWageWorker = modeVal.toLowerCase().includes('daily');
 
     const monthlyVal = parseFloat(empMonthly.value);
-    if (isNaN(monthlyVal) || monthlyVal <= 0) {
-      return;
+    const stdDays = parseInt(empStdDays.value) || 30;
+
+    // Calculate shift hours
+    const shiftStart = empShiftStart.value;
+    const shiftEnd = empShiftEnd.value;
+    let workHours = 8; // Default fallback to 8 hours if shift times are missing
+
+    if (shiftStart && shiftEnd) {
+      const [startH, startM] = shiftStart.split(':').map(Number);
+      const [endH, endM] = shiftEnd.split(':').map(Number);
+      
+      let startDecimal = startH + startM / 60;
+      let endDecimal = endH + endM / 60;
+      
+      let duration = 0;
+      if (endDecimal >= startDecimal) {
+        duration = endDecimal - startDecimal;
+      } else {
+        duration = (24 - startDecimal) + endDecimal;
+      }
+      
+      // Deduct lunch break (1 PM to 2 PM, i.e., 13:00 to 14:00) if shift spans it
+      if (startDecimal <= 13.0 && endDecimal >= 14.0) {
+        duration -= 1.0;
+      }
+      
+      workHours = Math.max(1, duration);
     }
 
-    const stdDays = parseInt(empStdDays.value) || 30;
-    const dailyWage = monthlyVal / stdDays;
-    const hourlyWage = dailyWage / 8;
+    if (!isDailyWageWorker && !isNaN(monthlyVal) && monthlyVal > 0) {
+      const dailyWage = monthlyVal / stdDays;
+      const hourlyWage = dailyWage / workHours;
 
-    empDaily.value = Number(dailyWage.toFixed(2));
-    empHourly.value = Number(hourlyWage.toFixed(2));
+      empDaily.value = Number(dailyWage.toFixed(2));
+      empHourly.value = Number(hourlyWage.toFixed(2));
+    } else {
+      // If daily wage is entered manually, or it's a daily wage worker, we can still auto-calculate hourly wage based on daily rate and shift hours
+      const dailyVal = parseFloat(empDaily.value);
+      if (!isNaN(dailyVal) && dailyVal > 0) {
+        const hourlyWage = dailyVal / workHours;
+        empHourly.value = Number(hourlyWage.toFixed(2));
+      }
+    }
   }
 
   // Bind input and change events to trigger calculations
   empMonthly.addEventListener('input', calculateWages);
   empStdDays.addEventListener('input', calculateWages);
   empMode.addEventListener('input', calculateWages);
+  empDaily.addEventListener('input', calculateWages);
+  empShiftStart.addEventListener('change', calculateWages);
+  empShiftEnd.addEventListener('change', calculateWages);
+  empShiftStart.addEventListener('input', calculateWages);
+  empShiftEnd.addEventListener('input', calculateWages);
 }
 
