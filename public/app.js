@@ -80,6 +80,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       .then(reg => console.log('[PWA Dashboard] Service Worker registered scope:', reg.scope))
       .catch(err => console.warn('[PWA Dashboard] Service Worker registration failed:', err));
   }
+
+  // Set up automatic daily/hourly wage calculation when monthly wage is inputted
+  initEmployeeWageAutoCalculation();
 });
 
 // Load core static schemas (employees, sites, settings)
@@ -3788,3 +3791,39 @@ async function testCctvConnection() {
     alert("Connection error: " + err.message);
   }
 }
+
+function initEmployeeWageAutoCalculation() {
+  const empMonthly = document.getElementById('emp-monthly');
+  const empStdDays = document.getElementById('emp-std-days');
+  const empDaily = document.getElementById('emp-daily');
+  const empHourly = document.getElementById('emp-hourly');
+  const empMode = document.getElementById('emp-mode');
+
+  if (!empMonthly || !empStdDays || !empDaily || !empHourly || !empMode) return;
+
+  function calculateWages() {
+    const modeVal = empMode.value || "";
+    // If daily wages worker, skip auto-calculation
+    if (modeVal.toLowerCase().includes('daily')) {
+      return;
+    }
+
+    const monthlyVal = parseFloat(empMonthly.value);
+    if (isNaN(monthlyVal) || monthlyVal <= 0) {
+      return;
+    }
+
+    const stdDays = parseInt(empStdDays.value) || 30;
+    const dailyWage = monthlyVal / stdDays;
+    const hourlyWage = dailyWage / 8;
+
+    empDaily.value = Number(dailyWage.toFixed(2));
+    empHourly.value = Number(hourlyWage.toFixed(2));
+  }
+
+  // Bind input and change events to trigger calculations
+  empMonthly.addEventListener('input', calculateWages);
+  empStdDays.addEventListener('input', calculateWages);
+  empMode.addEventListener('input', calculateWages);
+}
+
