@@ -501,7 +501,7 @@ app.post('/api/face/recognize', async (req, res) => {
           notes: 'Face recognized'
         };
 
-        if (existingAttendance) {
+        if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent') {
           if (existingAttendance.status === 'completed' || existingAttendance.status === 'leave') {
             results.push({
               success: false,
@@ -553,6 +553,12 @@ app.post('/api/face/recognize', async (req, res) => {
           }
         } else {
           eventType = 'entry';
+          if (existingAttendance) {
+            attendanceEntry.id = existingAttendance.id;
+            attendanceEntry.checkOut = null;
+            attendanceEntry.lunchOut = null;
+            attendanceEntry.lunchIn = null;
+          }
           attendanceEntry.checkIn = timestamp;
         }
         
@@ -879,7 +885,7 @@ app.post('/api/face/cctv-event', async (req, res) => {
     };
 
     if (resolvedEventType === 'auto') {
-      if (existingAttendance) {
+      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent') {
         attendanceEntry.id = existingAttendance.id;
         attendanceEntry.checkIn = existingAttendance.checkIn;
         
@@ -901,11 +907,17 @@ app.post('/api/face/cctv-event', async (req, res) => {
         }
       } else {
         resolvedEventType = 'entry';
+        if (existingAttendance) {
+          attendanceEntry.id = existingAttendance.id;
+          attendanceEntry.checkOut = null;
+          attendanceEntry.lunchOut = null;
+          attendanceEntry.lunchIn = null;
+        }
         attendanceEntry.checkIn = timestamp;
       }
     } else {
       // Explicit camera direction configurations
-      if (existingAttendance) {
+      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent') {
         attendanceEntry.id = existingAttendance.id;
         attendanceEntry.checkIn = existingAttendance.checkIn;
         attendanceEntry.lunchOut = existingAttendance.lunchOut;
@@ -928,6 +940,12 @@ app.post('/api/face/cctv-event', async (req, res) => {
           }
         }
       } else {
+        if (existingAttendance) {
+          attendanceEntry.id = existingAttendance.id;
+          attendanceEntry.checkOut = null;
+          attendanceEntry.lunchOut = null;
+          attendanceEntry.lunchIn = null;
+        }
         if (resolvedEventType === 'entry') {
           attendanceEntry.checkIn = timestamp;
         } else {
