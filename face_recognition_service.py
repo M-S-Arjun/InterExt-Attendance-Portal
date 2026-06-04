@@ -22,6 +22,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Optimize ONNX Runtime CPU execution settings globally to prevent thread oversubscription
+try:
+    import onnxruntime as ort
+    
+    # Save original InferenceSession __init__
+    original_init = ort.InferenceSession.__init__
+    
+    def optimized_init(self_session, model_path, sess_options=None, *args, **kwargs):
+        if sess_options is None:
+            sess_options = ort.SessionOptions()
+        
+        # Optimize CPU threads to prevent thread context-switching thrashing on host
+        sess_options.intra_op_num_threads = 4
+        sess_options.inter_op_num_threads = 1
+        sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        
+        # Pass the optimized options to the original constructor
+        original_init(self_session, model_path, sess_options, *args, **kwargs)
+        
+    ort.InferenceSession.__init__ = optimized_init
+    logger.info("[ORT-Speedup] Successfully patched ONNX Runtime InferenceSession for low-latency CPU inference.")
+except Exception as ort_err:
+    logger.warning(f"[ORT-Speedup] Failed to patch ONNX Runtime settings: {ort_err}")
+
 try:
     import insightface
     from insightface.app import FaceAnalysis

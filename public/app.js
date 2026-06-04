@@ -1133,8 +1133,8 @@ async function recognizeFaceFromCamera() {
           document.getElementById('camera-event-type').value = result.eventType;
           setCameraEventTimestampNow();
           
-          // Show recognition result
-          alert(`✓ Face recognized!\nEmployee: ${result.employee.name}\nConfidence: ${(result.confidence * 100).toFixed(1)}%`);
+          // Show recognition result as a floating toast notification (hands-free)
+          showFloatingNotification(result.employee.name, result.confidence, result.eventType);
           
           // Auto-submit or show preview
           console.log("Face recognition result:", result);
@@ -3208,7 +3208,8 @@ async function captureAndRecognizeFace() {
       document.getElementById('camera-event-type').value = result.eventType;
       setCameraEventTimestampNow();
       
-      alert(`✓ Face recognized successfully!\n\nEmployee: ${result.employee.name}\nConfidence: ${(result.confidence * 100).toFixed(1)}%\nAction Type: ${result.eventType.toUpperCase()}`);
+      // Show recognition result as a floating toast notification (hands-free)
+      showFloatingNotification(result.employee.name, result.confidence, result.eventType);
     } else {
       const errMsg = result.message || 'Face match not recognized.';
       if (errMsg === 'Face not recognized' || errMsg === 'No matching employee found' || errMsg === 'No face detected') {
