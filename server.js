@@ -473,7 +473,7 @@ app.post('/api/face/recognize', async (req, res) => {
           continue;
         }
         
-        const now = new Date();
+        const now = req.body.timestamp ? new Date(req.body.timestamp) : new Date();
         const timestamp = now.toISOString();
         const eventDate = timestamp.split('T')[0];
         
@@ -483,6 +483,24 @@ app.post('/api/face/recognize', async (req, res) => {
         );
         
         // Duplicate attendance prevention
+        // Determine local hour for lunch break checks (1pm-2pm)
+        const localHour = now.getHours();
+        const isLunchHour = (localHour === 13);
+        
+        let eventType = 'entry';
+        const attendanceEntry = {
+          employeeId: employee.id,
+          employeeName: employee.name,
+          date: eventDate,
+          siteName: 'Webcam Scan',
+          facialRecognitionMatch: true,
+          matchConfidence: match.confidence,
+          latitude: latitude ? Number(latitude) : undefined,
+          longitude: longitude ? Number(longitude) : undefined,
+          verificationMethod: 'Face Recognition',
+          notes: 'Face recognized'
+        };
+
         if (existingAttendance) {
           if (existingAttendance.status === 'completed' || existingAttendance.status === 'leave') {
             results.push({
@@ -493,23 +511,50 @@ app.post('/api/face/recognize', async (req, res) => {
             });
             continue;
           }
-          // If check-in exists, we're performing a check-out. Prevent duplicate double-clicks within 30s.
-          if (existingAttendance.checkIn) {
-            const checkInTime = new Date(existingAttendance.checkIn);
-            const diffSeconds = (now - checkInTime) / 1000;
-            if (diffSeconds < 30) {
-              results.push({
-                success: false,
-                employee: { id: employee.id, name: employee.name },
-                employee_id: employee.id,
-                message: "Duplicate scan detected. Please wait 30 seconds."
-              });
-              continue;
-            }
+          
+          // Prevent duplicate scans within 30 seconds of the last recorded state transition
+          let lastEventTime = new Date(existingAttendance.checkIn);
+          if (existingAttendance.lunchIn) {
+            lastEventTime = new Date(existingAttendance.lunchIn);
+          } else if (existingAttendance.lunchOut) {
+            lastEventTime = new Date(existingAttendance.lunchOut);
           }
+          
+          const diffSeconds = (now - lastEventTime) / 1000;
+          if (diffSeconds < 30) {
+            results.push({
+              success: false,
+              employee: { id: employee.id, name: employee.name },
+              employee_id: employee.id,
+              message: "Duplicate scan detected. Please wait 30 seconds."
+            });
+            continue;
+          }
+          
+          // Calculate state transition
+          attendanceEntry.id = existingAttendance.id;
+          attendanceEntry.checkIn = existingAttendance.checkIn;
+          
+          if (existingAttendance.lunchOut && existingAttendance.lunchIn) {
+            eventType = 'exit';
+            attendanceEntry.lunchOut = existingAttendance.lunchOut;
+            attendanceEntry.lunchIn = existingAttendance.lunchIn;
+            attendanceEntry.checkOut = timestamp;
+          } else if (existingAttendance.lunchOut && !existingAttendance.lunchIn) {
+            eventType = 'lunch-in';
+            attendanceEntry.lunchOut = existingAttendance.lunchOut;
+            attendanceEntry.lunchIn = timestamp;
+          } else if (!existingAttendance.lunchOut && isLunchHour) {
+            eventType = 'lunch-out';
+            attendanceEntry.lunchOut = timestamp;
+          } else {
+            eventType = 'exit';
+            attendanceEntry.checkOut = timestamp;
+          }
+        } else {
+          eventType = 'entry';
+          attendanceEntry.checkIn = timestamp;
         }
-        
-        const eventType = existingAttendance && existingAttendance.checkIn ? 'exit' : 'entry';
         
         // Geofencing verification
         let siteName = 'Webcam Scan';
@@ -540,6 +585,11 @@ app.post('/api/face/recognize', async (req, res) => {
           }
         }
         
+        attendanceEntry.siteName = siteName;
+        if (distance !== null && distance > 200) {
+          attendanceEntry.notes = `[FLAGGED LOCATION] Off-Site Scan (${Math.round(distance)}m)`;
+        }
+        
         // Save webcam recognition as a camera event log
         const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
         const savedEvent = database.saveCameraEvent({
@@ -559,35 +609,7 @@ app.post('/api/face/recognize', async (req, res) => {
             : `Face recognized on site. Distance: ${distance ? Math.round(distance) : 0}m`
         });
         
-        const attendanceEntry = {
-          employeeId: employee.id,
-          employeeName: employee.name,
-          date: eventDate,
-          siteName: siteName,
-          messageText: `Face recognized - auto ${eventType}`,
-          facialRecognitionMatch: true,
-          matchConfidence: match.confidence,
-          latitude: latitude ? Number(latitude) : undefined,
-          longitude: longitude ? Number(longitude) : undefined,
-          verificationMethod: 'Face Recognition',
-          notes: distance !== null && distance > 200 
-            ? `[FLAGGED LOCATION] Off-Site Scan (${Math.round(distance)}m)` 
-            : `Face recognized`
-        };
-        
-        if (eventType === 'entry') {
-          attendanceEntry.checkIn = timestamp;
-          if (existingAttendance?.checkOut) {
-            attendanceEntry.id = existingAttendance.id;
-            attendanceEntry.checkOut = existingAttendance.checkOut;
-          }
-        } else {
-          if (existingAttendance?.checkIn) {
-            attendanceEntry.id = existingAttendance.id;
-            attendanceEntry.checkIn = existingAttendance.checkIn;
-          }
-          attendanceEntry.checkOut = timestamp;
-        }
+        attendanceEntry.messageText = `Face recognized - auto ${eventType}`;
         
         const savedAttendance = database.saveAttendance(attendanceEntry);
         io.emit('attendance_updated', savedAttendance);
@@ -842,9 +864,76 @@ app.post('/api/face/cctv-event', async (req, res) => {
       a => a.employeeId === employee.id && a.date === eventDate
     );
     
+    const localHour = now.getHours();
+    const isLunchHour = (localHour === 13);
+    
     let resolvedEventType = event_type;
+    const attendanceEntry = {
+      employeeId: employee.id,
+      employeeName: employee.name,
+      date: eventDate,
+      siteName: site_name || 'CCTV Camera',
+      messageText: '',
+      facialRecognitionMatch: true,
+      matchConfidence: confidence
+    };
+
     if (resolvedEventType === 'auto') {
-      resolvedEventType = existingAttendance && existingAttendance.checkIn ? 'exit' : 'entry';
+      if (existingAttendance) {
+        attendanceEntry.id = existingAttendance.id;
+        attendanceEntry.checkIn = existingAttendance.checkIn;
+        
+        if (existingAttendance.lunchOut && existingAttendance.lunchIn) {
+          resolvedEventType = 'exit';
+          attendanceEntry.lunchOut = existingAttendance.lunchOut;
+          attendanceEntry.lunchIn = existingAttendance.lunchIn;
+          attendanceEntry.checkOut = timestamp;
+        } else if (existingAttendance.lunchOut && !existingAttendance.lunchIn) {
+          resolvedEventType = 'lunch-in';
+          attendanceEntry.lunchOut = existingAttendance.lunchOut;
+          attendanceEntry.lunchIn = timestamp;
+        } else if (!existingAttendance.lunchOut && isLunchHour) {
+          resolvedEventType = 'lunch-out';
+          attendanceEntry.lunchOut = timestamp;
+        } else {
+          resolvedEventType = 'exit';
+          attendanceEntry.checkOut = timestamp;
+        }
+      } else {
+        resolvedEventType = 'entry';
+        attendanceEntry.checkIn = timestamp;
+      }
+    } else {
+      // Explicit camera direction configurations
+      if (existingAttendance) {
+        attendanceEntry.id = existingAttendance.id;
+        attendanceEntry.checkIn = existingAttendance.checkIn;
+        attendanceEntry.lunchOut = existingAttendance.lunchOut;
+        attendanceEntry.lunchIn = existingAttendance.lunchIn;
+        attendanceEntry.checkOut = existingAttendance.checkOut;
+        
+        if (resolvedEventType === 'entry') {
+          if (existingAttendance.lunchOut && !existingAttendance.lunchIn) {
+            resolvedEventType = 'lunch-in';
+            attendanceEntry.lunchIn = timestamp;
+          } else {
+            attendanceEntry.checkIn = timestamp;
+          }
+        } else if (resolvedEventType === 'exit') {
+          if (!existingAttendance.lunchOut && isLunchHour) {
+            resolvedEventType = 'lunch-out';
+            attendanceEntry.lunchOut = timestamp;
+          } else {
+            attendanceEntry.checkOut = timestamp;
+          }
+        }
+      } else {
+        if (resolvedEventType === 'entry') {
+          attendanceEntry.checkIn = timestamp;
+        } else {
+          attendanceEntry.checkOut = timestamp;
+        }
+      }
     }
     
     // 1. Record camera event log
@@ -864,29 +953,7 @@ app.post('/api/face/cctv-event', async (req, res) => {
     const savedEvent = database.saveCameraEvent(cameraEvent);
     
     // 2. Record attendance entry
-    const attendanceEntry = {
-      employeeId: employee.id,
-      employeeName: employee.name,
-      date: eventDate,
-      siteName: site_name || 'CCTV Camera',
-      messageText: `CCTV Face recognized - auto ${resolvedEventType}`,
-      facialRecognitionMatch: true,
-      matchConfidence: confidence
-    };
-    
-    if (resolvedEventType === 'entry') {
-      attendanceEntry.checkIn = timestamp;
-      if (existingAttendance?.checkOut) {
-        attendanceEntry.id = existingAttendance.id;
-        attendanceEntry.checkOut = existingAttendance.checkOut;
-      }
-    } else {
-      if (existingAttendance?.checkIn) {
-        attendanceEntry.id = existingAttendance.id;
-        attendanceEntry.checkIn = existingAttendance.checkIn;
-      }
-      attendanceEntry.checkOut = timestamp;
-    }
+    attendanceEntry.messageText = `CCTV Face recognized - auto ${resolvedEventType}`;
     
     const savedAttendance = database.saveAttendance(attendanceEntry);
     io.emit('attendance_updated', savedAttendance);

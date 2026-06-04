@@ -3467,12 +3467,44 @@ function showFloatingNotification(employeeName, confidence, eventType) {
   toast.style.color = '#fff';
   toast.style.minWidth = '280px';
   
-  const iconColor = eventType === 'entry' ? '#2ed573' : '#ff4757';
-  const titleText = eventType === 'entry' ? 'Checked In' : 'Checked Out';
+  let iconName = 'check-circle';
+  let iconColor = '#2ed573';
+  let borderIconColor = 'rgba(46, 213, 115, 0.25)';
+  let bgIconColor = 'rgba(46, 213, 115, 0.1)';
+  let titleText = 'Checked In';
+
+  if (eventType === 'entry') {
+    iconName = 'check-circle';
+    iconColor = '#2ed573';
+    borderIconColor = 'rgba(46, 213, 115, 0.25)';
+    bgIconColor = 'rgba(46, 213, 115, 0.1)';
+    titleText = 'Checked In';
+  } else if (eventType === 'lunch-in') {
+    iconName = 'coffee';
+    iconColor = '#2ed573';
+    borderIconColor = 'rgba(46, 213, 115, 0.25)';
+    bgIconColor = 'rgba(46, 213, 115, 0.1)';
+    titleText = 'Returned from Lunch';
+  } else if (eventType === 'lunch-out') {
+    iconName = 'coffee';
+    iconColor = '#ffa500';
+    borderIconColor = 'rgba(255, 165, 0, 0.25)';
+    bgIconColor = 'rgba(255, 165, 0, 0.1)';
+    titleText = 'Out for Lunch';
+    toast.style.border = '1px solid rgba(255, 165, 0, 0.3)';
+  } else {
+    // exit
+    iconName = 'check-circle';
+    iconColor = '#ff4757';
+    borderIconColor = 'rgba(255, 71, 87, 0.25)';
+    bgIconColor = 'rgba(255, 71, 87, 0.1)';
+    titleText = 'Checked Out';
+    toast.style.border = '1px solid rgba(255, 71, 87, 0.3)';
+  }
   
   toast.innerHTML = `
-    <div style="background: rgba(46, 213, 115, 0.1); border-radius: 50%; padding: 8px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(46, 213, 115, 0.25);">
-      <i data-lucide="check-circle" style="color: #2ed573; width: 22px; height: 22px;"></i>
+    <div style="background: ${bgIconColor}; border-radius: 50%; padding: 8px; display: flex; align-items: center; justify-content: center; border: 1px solid ${borderIconColor};">
+      <i data-lucide="${iconName}" style="color: ${iconColor}; width: 22px; height: 22px;"></i>
     </div>
     <div style="flex: 1;">
       <h4 style="margin: 0; font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">${employeeName}</h4>

@@ -333,7 +333,7 @@ class Database {
   // --- Attendance Table with dynamic absenteeism & shift calculations ---
   
   // Calculate attendance hours and wages based on checkIn, checkOut, and employee rates
-  calculateShift(employee, checkInTime, checkOutTime) {
+  calculateShift(employee, checkInTime, checkOutTime, record = null) {
     const settings = this.getSettings();
     const F = settings.standardFullDayHours; // Full Day Limit (e.g. 8)
     const h = settings.standardHalfDayHours; // Half Day Limit (e.g. 4)
@@ -363,7 +363,18 @@ class Database {
     const checkOut = new Date(checkOutTime);
     
     // Total decimal hours worked
-    const diffMs = checkOut - checkIn;
+    let diffMs = checkOut - checkIn;
+    
+    // Deduct lunch break duration if both lunchOut and lunchIn are populated
+    if (record && record.lunchOut && record.lunchIn) {
+      const lOut = new Date(record.lunchOut);
+      const lIn = new Date(record.lunchIn);
+      const lunchDiffMs = lIn - lOut;
+      if (lunchDiffMs > 0) {
+        diffMs -= lunchDiffMs;
+      }
+    }
+    
     const durationMinutes = Math.max(0, Math.floor(diffMs / 60000));
     const totalHours = Number((durationMinutes / 60).toFixed(2));
     
@@ -611,7 +622,7 @@ class Database {
 
     // Check if check-out time is supplied and check-in exists. If so, calculate math if not explicitly overridden by manual edit
     if (record.checkIn && record.checkOut && !record.isManualOverride) {
-      const shiftMath = this.calculateShift(employee, record.checkIn, record.checkOut);
+      const shiftMath = this.calculateShift(employee, record.checkIn, record.checkOut, record);
       record.duration = shiftMath.durationMinutes;
       record.regularHours = shiftMath.regularHours;
       record.otHours = shiftMath.otHours;
@@ -829,7 +840,7 @@ class Database {
       const index = db.attendance.findIndex(a => a.id === log.id);
       if (index >= 0) {
         try {
-          const shiftMath = this.calculateShift(employee, log.checkIn, log.checkOut);
+          const shiftMath = this.calculateShift(employee, log.checkIn, log.checkOut, log);
           db.attendance[index] = {
             ...db.attendance[index],
             checkOut: log.checkOut,
