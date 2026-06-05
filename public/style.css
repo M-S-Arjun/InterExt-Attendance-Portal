@@ -2344,25 +2344,35 @@ select.payroll-col-filter {
 /* Enable individual scrolling on tab views that need it */
 .tab-view#tab-dashboard,
 .tab-view#tab-settings,
-.tab-view#tab-cctv {
+.tab-view#tab-holidays,
+.tab-view#tab-camera,
+.tab-view#tab-sites {
   overflow-y: auto !important;
-  height: 100%;
+  flex-grow: 1;
+  min-height: 0;
+  height: auto !important;
 }
 
 /* Layout table tab views as flex containers to let table card fill remaining height */
 .tab-view#tab-payroll,
 .tab-view#tab-employees,
 .tab-view#tab-logs,
-.tab-view#tab-selfies {
+.tab-view#tab-selfies,
+.tab-view#tab-travel {
   display: none;
-  height: 100%;
+  flex-grow: 1;
+  flex-shrink: 1;
+  min-height: 0;
+  height: auto !important;
   overflow: hidden !important;
 }
+
 
 .tab-view#tab-payroll.active,
 .tab-view#tab-employees.active,
 .tab-view#tab-logs.active,
-.tab-view#tab-selfies.active {
+.tab-view#tab-selfies.active,
+.tab-view#tab-travel.active {
   display: flex;
   flex-direction: column;
 }
@@ -2370,7 +2380,8 @@ select.payroll-col-filter {
 .tab-view#tab-payroll .glass-card,
 .tab-view#tab-employees .glass-card,
 .tab-view#tab-logs .glass-card,
-.tab-view#tab-selfies .glass-card {
+.tab-view#tab-selfies .glass-card,
+.tab-view#tab-travel .glass-card {
   display: flex;
   flex-direction: column;
   flex-grow: 1;
@@ -2385,7 +2396,8 @@ select.payroll-col-filter {
 .tab-view#tab-payroll .overflow-x,
 .tab-view#tab-employees .overflow-x,
 .tab-view#tab-logs .overflow-x,
-.tab-view#tab-selfies .overflow-x {
+.tab-view#tab-selfies .overflow-x,
+.tab-view#tab-travel .overflow-x {
   flex-grow: 1;
   overflow-y: auto !important;
   overflow-x: auto !important;
@@ -2393,6 +2405,14 @@ select.payroll-col-filter {
   height: auto !important;
   border-radius: 0;
   border-top: 1px solid var(--glass-border);
+}
+
+/* Ensure multi-section tab tables do not clip vertically, but allow horizontal scrolling */
+.tab-view#tab-camera .overflow-x,
+.tab-view#tab-sites .overflow-x {
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+  height: auto !important;
 }
 
 /* Wrapper inside <th> to align heading label and filter button side-by-side */
@@ -2426,7 +2446,7 @@ select.payroll-col-filter {
   border: none;
   color: var(--text-tertiary);
   cursor: pointer;
-  padding: 4px;
+  padding: 2px;
   border-radius: 4px;
   display: flex;
   align-items: center;
@@ -2453,10 +2473,11 @@ select.payroll-col-filter {
 }
 
 .filter-trigger-btn i {
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
   pointer-events: none;
 }
+
 
 /* Floating popover dropdown */
 .filter-dropdown-content {
