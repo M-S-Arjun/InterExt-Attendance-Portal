@@ -2322,7 +2322,9 @@ function renderPayrollTable(data) {
     const tr = document.createElement('tr');
     tr.dataset.empId = row.employeeId;
     
-    const dailyRate = Number((row.actualSalary / row.stdWorkingDays).toFixed(2));
+    const isOfficeStaff = row.modeOfWork && row.modeOfWork.toLowerCase().trim() === 'office staff';
+    const isDaily = !isOfficeStaff;
+    const dailyRate = isDaily ? (Number(row.dailyRate) || 0.0) : Number((row.actualSalary / row.stdWorkingDays).toFixed(2));
     
     tr.innerHTML = `
       <td><strong>${idx + 1}</strong></td>
@@ -2331,19 +2333,19 @@ function renderPayrollTable(data) {
       <td>
         <span class="worker-primary-name">${row.employeeName}</span>
       </td>
-      <td class="cell-basic" data-val="${row.basic}">₹${row.basic.toFixed(2)}</td>
-      <td class="cell-da" data-val="${row.da}">₹${row.da.toFixed(2)}</td>
-      <td class="cell-allowances" data-val="${row.allowances}">₹${row.allowances.toFixed(2)}</td>
-      <td class="cell-actual-salary" data-val="${row.actualSalary}">₹${row.actualSalary.toFixed(2)}</td>
+      <td class="cell-basic" data-val="${isDaily ? 0 : row.basic}">${isDaily ? '—' : '₹' + row.basic.toFixed(2)}</td>
+      <td class="cell-da" data-val="${isDaily ? 0 : row.da}">${isDaily ? '—' : '₹' + row.da.toFixed(2)}</td>
+      <td class="cell-allowances" data-val="${isDaily ? 0 : row.allowances}">${isDaily ? '—' : '₹' + row.allowances.toFixed(2)}</td>
+      <td class="cell-actual-salary" data-val="${isDaily ? 0 : row.actualSalary}">${isDaily ? '—' : '₹' + row.actualSalary.toFixed(2)}</td>
       <td>
-        <input type="number" class="table-input input-std-working-days" value="${row.stdWorkingDays}" step="1" min="1" oninput="recalculatePayrollRow(this)">
+        <input type="number" class="table-input input-std-working-days" value="${row.stdWorkingDays}" step="1" min="0" oninput="recalculatePayrollRow(this)">
       </td>
       <td class="cell-working-days" data-val="${row.workingDays}">${row.workingDays}</td>
       <td class="cell-daily-wages" data-val="${dailyRate}">₹${dailyRate.toFixed(2)}</td>
       <td>
-        <input type="number" class="table-input input-lop-days" value="${row.lopDays}" step="0.5" min="0" oninput="recalculatePayrollRow(this)">
+        ${isDaily ? `<input type="number" class="table-input input-lop-days" value="" disabled placeholder="—" style="opacity: 0.5;">` : `<input type="number" class="table-input input-lop-days" value="${row.lopDays}" step="0.5" min="0" oninput="recalculatePayrollRow(this)">`}
       </td>
-      <td class="cell-lop-amount" data-val="${row.lopAmount}">₹${row.lopAmount.toFixed(2)}</td>
+      <td class="cell-lop-amount" data-val="${isDaily ? 0 : row.lopAmount}">${isDaily ? '—' : '₹' + row.lopAmount.toFixed(2)}</td>
       <td>
         <input type="number" class="table-input input-ot-hours" value="${row.otHours}" step="0.5" min="0" oninput="recalculatePayrollRow(this)">
       </td>
@@ -2361,9 +2363,9 @@ function renderPayrollTable(data) {
       </td>
       <td class="cell-missing-days-amount" data-val="${row.missingDaysAmount}">₹${row.missingDaysAmount.toFixed(2)}</td>
       <td>
-        <input type="number" class="table-input input-holiday-days" value="${row.holidayDaysWorked}" step="1" min="0" oninput="recalculatePayrollRow(this)">
+        ${isDaily ? `<input type="number" class="table-input input-holiday-days" value="" disabled placeholder="—" style="opacity: 0.5;">` : `<input type="number" class="table-input input-holiday-days" value="${row.holidayDaysWorked}" step="1" min="0" oninput="recalculatePayrollRow(this)">`}
       </td>
-      <td class="cell-holiday-bonus" data-val="${row.holidayBonus}">₹${row.holidayBonus.toFixed(2)}</td>
+      <td class="cell-holiday-bonus" data-val="${isDaily ? 0 : row.holidayBonus}">${isDaily ? '—' : '₹' + row.holidayBonus.toFixed(2)}</td>
       <td class="cell-earned-salary" data-val="${row.earnedSalary}">₹${row.earnedSalary.toFixed(2)}</td>
       <td>
         <input type="number" class="table-input input-salary-advance" value="${row.salaryAdvance || 0.0}" step="100" min="0" oninput="recalculatePayrollRow(this)">
@@ -2386,6 +2388,11 @@ function recalculatePayrollRow(inputEl) {
   const tr = inputEl.closest('tr');
   if (!tr) return;
 
+  const modeOfWorkCell = tr.cells[1];
+  const modeOfWork = modeOfWorkCell ? modeOfWorkCell.textContent.toLowerCase().trim() : '';
+  const isOfficeStaff = modeOfWork === 'office staff';
+  const isDailyWageWorker = !isOfficeStaff;
+
   // Retrieve user settings or defaults
   const basicRatio = state.settings.basicRatio !== undefined ? Number(state.settings.basicRatio) : 0.50;
   const daRatio = state.settings.daRatio !== undefined ? Number(state.settings.daRatio) : 0.25;
@@ -2394,45 +2401,46 @@ function recalculatePayrollRow(inputEl) {
   const lopDeductionRate = state.settings.lopDeductionRate !== undefined ? Number(state.settings.lopDeductionRate) : 1.00;
 
   const actualSalary = Number(tr.querySelector('.cell-actual-salary').dataset.val) || 0;
-  const stdWorkingDays = Number(tr.querySelector('.input-std-working-days').value) || 30;
-  const lopDays = Number(tr.querySelector('.input-lop-days').value) || 0;
+  const stdWorkingDays = Number(tr.querySelector('.input-std-working-days').value) || 0;
+  const lopDays = isDailyWageWorker ? 0 : (Number(tr.querySelector('.input-lop-days').value) || 0);
   const otHours = Number(tr.querySelector('.input-ot-hours').value) || 0;
   const travelTimeHours = Number(tr.querySelector('.input-travel-time-hours').value) || 0;
   const extraDays = Number(tr.querySelector('.input-extra-days').value) || 0;
   const missingDays = Number(tr.querySelector('.input-missing-days').value) || 0;
-  const holidayDays = Number(tr.querySelector('.input-holiday-days').value) || 0;
+  const holidayDays = isDailyWageWorker ? 0 : (Number(tr.querySelector('.input-holiday-days').value) || 0);
   
   const salaryAdvance = Number(tr.querySelector('.input-salary-advance').value) || 0;
-
-  const modeOfWorkCell = tr.cells[1];
-  const modeOfWork = modeOfWorkCell ? modeOfWorkCell.textContent.toLowerCase().trim() : '';
-  const isDailyWageWorker = modeOfWork.includes('daily wages') || modeOfWork.includes('welder');
 
   const dailyRate = isDailyWageWorker ? (Number(tr.querySelector('.cell-daily-wages').dataset.val) || 0) : Number((actualSalary / stdWorkingDays).toFixed(2));
   
   let actualSalaryCalculated = actualSalary;
-  if (isDailyWageWorker) {
-    actualSalaryCalculated = dailyRate * stdWorkingDays;
-  }
+  let basic = 0.0;
+  let da = 0.0;
+  let allowances = 0.0;
+  let lopAmount = 0.0;
+  let workingDays = 0;
+  let amount = 0.0;
 
-  // Calculate component basics dynamically using settings
-  const basic = Number((actualSalaryCalculated * basicRatio).toFixed(2));
-  const da = Number((actualSalaryCalculated * daRatio).toFixed(2));
-  const allowances = Number((actualSalaryCalculated * allowancesRatio).toFixed(2));
+  if (isDailyWageWorker) {
+    actualSalaryCalculated = 0.0;
+    workingDays = stdWorkingDays; 
+    amount = Number((dailyRate * workingDays).toFixed(2));
+  } else {
+    actualSalaryCalculated = actualSalary;
+    basic = Number((actualSalaryCalculated * basicRatio).toFixed(2));
+    da = Number((actualSalaryCalculated * daRatio).toFixed(2));
+    allowances = Number((actualSalaryCalculated * allowancesRatio).toFixed(2));
+    lopAmount = Number((lopDays * dailyRate * lopDeductionRate).toFixed(2));
+    workingDays = Number((stdWorkingDays - lopDays).toFixed(2));
+    amount = Number((actualSalaryCalculated * (workingDays / stdWorkingDays)).toFixed(2));
+  }
   
   const hourlyRate = Number((dailyRate / 8).toFixed(2));
 
-  // LOP Amount using LOP deduction rate multiplier
-  const lopAmount = Number((lopDays * dailyRate * lopDeductionRate).toFixed(2));
-
-  // Working Days = Std Working days - LOP(Day)
-  const workingDays = Number((stdWorkingDays - lopDays).toFixed(2));
-
-  // amount = Gross Salary * (Working Days / Std Working days)
-  const amount = Number((actualSalaryCalculated * (workingDays / stdWorkingDays)).toFixed(2));
-
-  // OT Payout using overtimeRateMultiplier
-  const otPayout = Number((otHours * hourlyRate * overtimeRateMultiplier).toFixed(2));
+  // OT Payout
+  const otPayout = isDailyWageWorker
+    ? Number((otHours * (dailyRate / 10.0)).toFixed(2))
+    : Number((otHours * hourlyRate * overtimeRateMultiplier).toFixed(2));
 
   // Travel Time Payout
   const travelTimePayout = Number((travelTimeHours * hourlyRate).toFixed(2));
@@ -2444,7 +2452,7 @@ function recalculatePayrollRow(inputEl) {
   const missingDaysAmount = Number((missingDays * dailyRate).toFixed(2));
 
   // Holiday Bonus
-  const holidayBonus = Number((holidayDays * dailyRate).toFixed(2));
+  const holidayBonus = isDailyWageWorker ? 0.00 : Number((holidayDays * dailyRate).toFixed(2));
 
   // Earned Salary = amount + OT(Amount) + Travel Time( Amount) + Extra days Amount + Missing days(Amount) + Holiday Bonus
   const earnedSalary = Number((amount + otPayout + travelTimePayout + extraDaysAmount + missingDaysAmount + holidayBonus).toFixed(2));
@@ -2452,21 +2460,34 @@ function recalculatePayrollRow(inputEl) {
   // Net Salary = Earned Salary - Advance Paid
   const netSalary = Number((earnedSalary - salaryAdvance).toFixed(2));
 
-  const updateCell = (selector, val, isCurrency = true) => {
+  const updateCell = (selector, val, isCurrency = true, displayOverride = null) => {
     const cell = tr.querySelector(selector);
     if (cell) {
       cell.dataset.val = val;
-      cell.textContent = isCurrency ? `₹${val.toFixed(2)}` : val;
+      if (displayOverride !== null) {
+        cell.textContent = displayOverride;
+      } else {
+        cell.textContent = isCurrency ? `₹${val.toFixed(2)}` : val;
+      }
     }
   };
 
   if (isDailyWageWorker) {
+    updateCell('.cell-actual-salary', 0, true, '—');
+    updateCell('.cell-basic', 0, true, '—');
+    updateCell('.cell-da', 0, true, '—');
+    updateCell('.cell-allowances', 0, true, '—');
+    updateCell('.cell-lop-amount', 0, true, '—');
+    updateCell('.cell-holiday-bonus', 0, true, '—');
+  } else {
     updateCell('.cell-actual-salary', actualSalaryCalculated);
+    updateCell('.cell-basic', basic);
+    updateCell('.cell-da', da);
+    updateCell('.cell-allowances', allowances);
+    updateCell('.cell-lop-amount', lopAmount);
+    updateCell('.cell-holiday-bonus', holidayBonus);
   }
-  updateCell('.cell-basic', basic);
-  updateCell('.cell-da', da);
-  updateCell('.cell-allowances', allowances);
-  updateCell('.cell-lop-amount', lopAmount);
+  
   updateCell('.cell-working-days', workingDays, false);
   updateCell('.cell-daily-wages', dailyRate);
   updateCell('.cell-amount', amount);
@@ -2474,7 +2495,6 @@ function recalculatePayrollRow(inputEl) {
   updateCell('.cell-travel-time-payout', travelTimePayout);
   updateCell('.cell-extra-days-amount', extraDaysAmount);
   updateCell('.cell-missing-days-amount', missingDaysAmount);
-  updateCell('.cell-holiday-bonus', holidayBonus);
   updateCell('.cell-earned-salary', earnedSalary);
   updateCell('.cell-net-salary', netSalary);
   
@@ -2494,13 +2514,18 @@ async function savePayrollAdjustments() {
     const employeeId = tr.dataset.empId;
     if (!employeeId) return;
 
+    const modeOfWorkCell = tr.cells[1];
+    const modeOfWork = modeOfWorkCell ? modeOfWorkCell.textContent.toLowerCase().trim() : '';
+    const isOfficeStaff = modeOfWork === 'office staff';
+    const isDaily = !isOfficeStaff;
+
     const stdWorkingDays = Number(tr.querySelector('.input-std-working-days').value);
-    const lopDays = Number(tr.querySelector('.input-lop-days').value);
+    const lopDays = isDaily ? 0 : Number(tr.querySelector('.input-lop-days').value);
     const otHours = Number(tr.querySelector('.input-ot-hours').value);
     const travelTimeHours = Number(tr.querySelector('.input-travel-time-hours').value);
     const extraDays = Number(tr.querySelector('.input-extra-days').value);
     const missingDays = Number(tr.querySelector('.input-missing-days').value);
-    const holidayDaysWorked = Number(tr.querySelector('.input-holiday-days').value);
+    const holidayDaysWorked = isDaily ? 0 : Number(tr.querySelector('.input-holiday-days').value);
     const salaryAdvance = Number(tr.querySelector('.input-salary-advance').value);
 
     adjustments.push({
@@ -2862,8 +2887,10 @@ function applyFiltersTravel() {
     if (emp) {
       if (emp.hourlyRate) {
         hourlyRate = Number(emp.hourlyRate);
+      } else if (emp.dailyRate) {
+        hourlyRate = Number((Number(emp.dailyRate) / 8.0).toFixed(2));
       } else {
-        const actualSalary = Number(emp.monthlyWage) || (Number(emp.dailyRate) * 26) || 0.0;
+        const actualSalary = Number(emp.monthlyWage) || 0.0;
         const stdWorkingDays = Number(emp.stdWorkingDays) || 30;
         hourlyRate = Number((actualSalary / stdWorkingDays / 8).toFixed(2));
       }
@@ -2907,8 +2934,10 @@ function applyFiltersTravel() {
     if (emp) {
       if (emp.hourlyRate) {
         hourlyRate = Number(emp.hourlyRate);
+      } else if (emp.dailyRate) {
+        hourlyRate = Number((Number(emp.dailyRate) / 8.0).toFixed(2));
       } else {
-        const actualSalary = Number(emp.monthlyWage) || (Number(emp.dailyRate) * 26) || 0.0;
+        const actualSalary = Number(emp.monthlyWage) || 0.0;
         const stdWorkingDays = Number(emp.stdWorkingDays) || 30;
         hourlyRate = Number((actualSalary / stdWorkingDays / 8).toFixed(2));
       }

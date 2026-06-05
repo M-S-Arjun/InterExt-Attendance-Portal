@@ -1940,20 +1940,23 @@ app.get('/api/export/payroll/excel', async (req, res) => {
     
     // Add row data
     list.forEach((row, idx) => {
+      const isOfficeStaff = row.modeOfWork && row.modeOfWork.toLowerCase().trim() === 'office staff';
+      const isDaily = !isOfficeStaff;
+      
       worksheet.addRow([
         idx + 1,
         row.modeOfWork || "—",
         row.userId || "—",
         row.employeeName,
-        row.basic,
-        row.da,
-        row.allowances,
-        row.actualSalary,
-        row.stdWorkingDays,
+        isDaily ? "—" : row.basic,
+        isDaily ? "—" : row.da,
+        isDaily ? "—" : row.allowances,
+        isDaily ? "—" : row.actualSalary,
+        isDaily ? "—" : row.stdWorkingDays,
         row.workingDays,
-        Number((row.actualSalary / row.stdWorkingDays).toFixed(2)),
-        row.lopDays,
-        row.lopAmount,
+        row.dailyRate,
+        isDaily ? "—" : row.lopDays,
+        isDaily ? "—" : row.lopAmount,
         row.otHours,
         row.otPayout,
         row.travelTimeHours,
@@ -1962,8 +1965,8 @@ app.get('/api/export/payroll/excel', async (req, res) => {
         row.extraDaysAmount,
         row.missingDays,
         row.missingDaysAmount,
-        row.holidayDaysWorked || 0,
-        row.holidayBonus || 0.0,
+        isDaily ? "—" : (row.holidayDaysWorked || 0),
+        isDaily ? "—" : (row.holidayBonus || 0.0),
         row.earnedSalary,
         row.salaryAdvance || 0.0,
         row.netSalary,

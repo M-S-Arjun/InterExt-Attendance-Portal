@@ -395,10 +395,20 @@ class Database {
         otHours = 0.0;
         calculatedWage = dailyRate;
       } else {
-        // OT rules: Minimum OT is 1 Hour
         const exactOT = totalHours - F;
-        otHours = exactOT > 0 ? Number(Math.max(1.0, exactOT).toFixed(2)) : 0.0;
-        calculatedWage = Number((dailyRate + (otHours * hourlyRate)).toFixed(2));
+        if (exactOT > 0) {
+          const otMinutes = Math.round(exactOT * 60);
+          if (otMinutes < 50) {
+            otHours = 0.0;
+          } else {
+            const hoursPart = Math.floor(otMinutes / 60);
+            const minutesPart = otMinutes % 60;
+            otHours = minutesPart >= 50 ? hoursPart + 1.0 : hoursPart * 1.0;
+          }
+        } else {
+          otHours = 0.0;
+        }
+        calculatedWage = Number((dailyRate + (otHours * (dailyRate / 10.0))).toFixed(2));
       }
     } else if (totalHours >= h) {
       // Half Day + Extra Hours
@@ -1049,45 +1059,53 @@ class Database {
       const adj = adjs.find(a => a.employeeId === emp.id) || {};
       
       const isOfficeStaff = emp.modeOfWork && emp.modeOfWork.toLowerCase().trim() === 'office staff';
+      const isDailyWageWorker = !isOfficeStaff;
+      
       const defaultStdDays = isOfficeStaff ? 30 : 26;
       
-      // Default Std Working Days
-      const stdWorkingDays = adj.stdWorkingDays !== undefined ? Number(adj.stdWorkingDays) : defaultStdDays;
+      // Count present days from logs
+      const empLogs = attendanceLogs.filter(log => log.employeeId === emp.id);
+      const presentCount = empLogs.filter(log => log.status === 'completed' || log.status === 'checked-in').length;
       
-      const isDailyWageWorker = emp.modeOfWork && (
-        emp.modeOfWork.toLowerCase().includes('daily wages') || 
-        emp.modeOfWork.toLowerCase().includes('welder')
-      );
+      // Default std working days (for daily wage workers, default standard working days is the actual days present)
+      const stdWorkingDays = adj.stdWorkingDays !== undefined ? Number(adj.stdWorkingDays) : (isDailyWageWorker ? presentCount : defaultStdDays);
       
       let actualSalary = 0.0;
+      let basic = 0.0;
+      let da = 0.0;
+      let allowances = 0.0;
+      let dailyRate = 0.0;
+      let dailyBasic = 0.0;
+      let dailyDa = 0.0;
+      let dailyAllowances = 0.0;
+      let lopDays = 0;
+      let lopAmount = 0.0;
+      let workingDays = 0;
+      let amount = 0.0;
+
       if (isDailyWageWorker) {
-        // Strict daily-wage calculation, ignore monthly wages completely
-        actualSalary = (Number(emp.dailyRate) || 0.0) * stdWorkingDays;
+        dailyRate = Number(emp.dailyRate) || 0.0;
+        workingDays = stdWorkingDays; // standard working days input represents present days
+        amount = Number((dailyRate * workingDays).toFixed(2));
       } else {
         actualSalary = Number(emp.monthlyWage) || (Number(emp.dailyRate) * stdWorkingDays) || 0.0;
+        basic = Number((actualSalary * basicRatio).toFixed(2));
+        da = Number((actualSalary * daRatio).toFixed(2));
+        allowances = Number((actualSalary * allowancesRatio).toFixed(2));
+        
+        dailyRate = Number((actualSalary / stdWorkingDays).toFixed(2));
+        dailyBasic = Number((basic / stdWorkingDays).toFixed(2));
+        dailyDa = Number((da / stdWorkingDays).toFixed(2));
+        dailyAllowances = Number((allowances / stdWorkingDays).toFixed(2));
+        
+        const absentCount = empLogs.filter(log => log.status === 'absent').length;
+        lopDays = adj.lopDays !== undefined ? Number(adj.lopDays) : absentCount;
+        lopAmount = Number((lopDays * dailyRate * lopDeductionRate).toFixed(2));
+        workingDays = Number((stdWorkingDays - lopDays).toFixed(2));
+        amount = Number((actualSalary * (workingDays / stdWorkingDays)).toFixed(2));
       }
       
-      const basic = Number((actualSalary * basicRatio).toFixed(2));
-      const da = Number((actualSalary * daRatio).toFixed(2));
-      const allowances = Number((actualSalary * allowancesRatio).toFixed(2));
-      
-      const dailyRate = isDailyWageWorker ? (Number(emp.dailyRate) || 0.0) : Number((actualSalary / stdWorkingDays).toFixed(2));
-      const dailyBasic = Number((basic / stdWorkingDays).toFixed(2));
-      const dailyDa = Number((da / stdWorkingDays).toFixed(2));
-      const dailyAllowances = Number((allowances / stdWorkingDays).toFixed(2));
-      const hourlyRate = Number(emp.hourlyRate) || Number((dailyRate / 8).toFixed(2)) || 0.0;
-      
-      // Count LOP Days: Number of days where this employee is marked "absent"
-      const empLogs = attendanceLogs.filter(log => log.employeeId === emp.id);
-      const absentCount = empLogs.filter(log => log.status === 'absent').length;
-      
-      // Override or default LOP days
-      const lopDays = adj.lopDays !== undefined ? Number(adj.lopDays) : absentCount;
-      const lopAmount = Number((lopDays * dailyRate * lopDeductionRate).toFixed(2));
-      
-      // Working Days = Std Working days - LOP(Day)
-      const workingDays = Number((stdWorkingDays - lopDays).toFixed(2));
-      const amount = Number((actualSalary * (workingDays / stdWorkingDays)).toFixed(2));
+      const hourlyRate = Number(emp.hourlyRate) || Number((dailyRate / 8.0).toFixed(2)) || 0.0;
       
       // OT Hours: Sum of otHours from logs (unless overridden)
       let defaultOtHours = 0.0;
@@ -1100,7 +1118,9 @@ class Database {
       }
       
       const otHours = adj.otHours !== undefined ? Number(adj.otHours) : Number(defaultOtHours.toFixed(2));
-      const otPayout = Number((otHours * hourlyRate * overtimeRateMultiplier).toFixed(2));
+      const otPayout = isDailyWageWorker
+        ? Number((otHours * (dailyRate / 10.0)).toFixed(2))
+        : Number((otHours * hourlyRate * overtimeRateMultiplier).toFixed(2));
       
       // Travel Time Hours
       let defaultTravelHours = 0.0;
@@ -1120,8 +1140,7 @@ class Database {
       const missingDays = adj.missingDays !== undefined ? Number(adj.missingDays) : 0.0;
       const missingDaysAmount = Number((missingDays * dailyRate).toFixed(2));
       
-      // Holiday Days Worked: Count of days in empLogs that are holidays (except Sundays) and status is completed or checked-in
-      // Restricted strictly to Office Staff as per user instructions
+      // Holiday Days Worked
       let defaultHolidayDaysWorked = 0;
       if (isOfficeStaff) {
         empLogs.forEach(log => {
@@ -1138,8 +1157,8 @@ class Database {
         });
       }
       
-      const holidayDaysWorked = adj.holidayDaysWorked !== undefined ? Number(adj.holidayDaysWorked) : defaultHolidayDaysWorked;
-      const holidayBonus = Number((holidayDaysWorked * dailyRate).toFixed(2));
+      const holidayDaysWorked = isDailyWageWorker ? 0 : (adj.holidayDaysWorked !== undefined ? Number(adj.holidayDaysWorked) : defaultHolidayDaysWorked);
+      const holidayBonus = isDailyWageWorker ? 0.00 : Number((holidayDaysWorked * dailyRate).toFixed(2));
       
       // Earned Salary = amount + OT(Amount) + Travel Time( Amount) + Extra days Amount + Missing days(Amount) + Holiday Bonus
       const earnedSalary = Number((amount + otPayout + travelTimePayout + extraDaysAmount + missingDaysAmount + holidayBonus).toFixed(2));
@@ -1181,7 +1200,8 @@ class Database {
         salaryAdvance,
         netSalary,
         company: emp.paymentMode || "—",
-        notes: adj.notes || ""
+        notes: adj.notes || "",
+        dailyRate
       };
     });
   }
