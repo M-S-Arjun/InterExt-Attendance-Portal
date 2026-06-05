@@ -435,62 +435,99 @@ class AttendanceParser {
       }
     }
 
-    // 4. Time Range Extraction (Check-In & Check-Out times in a single string)
-    // Matches time formats: "8:00 AM", "08:30", "17:00", "5 PM", "8", "5"
-    const timeRegex = /\b(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)\b/gi;
-    const timeMatches = cleanLine.match(timeRegex) || [];
+    // 4. Leave & Time Range / Late check-in extraction
+    const leaveKeywords = [
+      'on leave', 'leave today', 'leave tomorrow', 'taking leave', 'casual leave', 'sick leave', 'cl', 'sl', 'el', 'pl',
+      'not coming', 'not coming today', 'not available', 'absent today', 'taking off', 'day off', 'off today',
+      'not able to come', 'not able to attend', 'not reaching today', 'hospital case leave'
+    ];
+    const isLeave = leaveKeywords.some(kw => cleanLine.includes(kw))
+      || /\b(?:i\s+am\s+)?(?:on\s+)?leave\b/i.test(cleanLine);
 
     let checkInTimestamp = null;
     let checkOutTimestamp = null;
     let actionType = 'in';
 
-    if (timeMatches.length >= 2) {
-      // Option 1: Two times detected = Completed Shift Range!
-      try {
-        checkInTimestamp = parseTimeStr(timeMatches[0], dateStr, false);
-        checkOutTimestamp = parseTimeStr(timeMatches[1], dateStr, true);
-        actionType = 'completed';
-      } catch (err) {
-        console.error("Time range parsing failed:", err);
-      }
-    } else if (timeMatches.length === 1) {
-      // Single time detected - determine direction by action words
-      const outKeywords = ['out', 'checkout', 'check-out', 'left', 'leave', 'exit', 'finish', 'done', 'leaving'];
-      const foundOut = outKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(cleanLine));
-      
-      try {
-        const timestamp = parseTimeStr(timeMatches[0], dateStr, foundOut);
-        if (foundOut) {
-          checkOutTimestamp = timestamp;
-          actionType = 'out';
-        } else {
-          checkInTimestamp = timestamp;
-          actionType = 'in';
-        }
-      } catch (err) {
-        console.error("Single time parsing failed:", err);
-      }
+    if (isLeave) {
+      actionType = 'leave';
     } else {
-      // Detect Leave keyword (e.g. "on leave", "leave today", "leave tomorrow")
-      const leaveKeywords = ['on leave', 'leave today', 'leave tomorrow', 'taking leave', 'casual leave', 'sick leave', 'cl', 'sl', 'el', 'pl'];
-      const isLeave = leaveKeywords.some(kw => cleanLine.includes(kw))
-        || /\b(?:i\s+am\s+)?(?:on\s+)?leave\b/i.test(cleanLine);
+      // Check for Late pattern
+      const lateMatch1 = cleanLine.match(/\b(\d+(?:\.\d+)?|one|two|three|four)\s*(?:hour|hours|hr|hrs)?\s*late\b/i);
+      const lateMatch2 = cleanLine.match(/\blate\s*(?:by\s*)?(\d+(?:\.\d+)?|one|two|three|four)\s*(?:hour|hours|hr|hrs)?\b/i);
       
-      if (isLeave) {
-        actionType = 'leave';
-      } else {
-        // No times detected - default to current date/time and detect In vs Out by keyword
-        // Remove 'leave' from outKeywords to prevent leaves from being parsed as checkouts
-        const outKeywords = ['out', 'checkout', 'check-out', 'left', 'exit', 'finish', 'done', 'leaving'];
-        const foundOut = outKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(cleanLine));
-        
-        const timestamp = messageTimestamp ? new Date(messageTimestamp).toISOString() : new Date().toISOString();
-        if (foundOut) {
-          checkOutTimestamp = timestamp;
-          actionType = 'out';
-        } else {
-          checkInTimestamp = timestamp;
+      const wordToNumber = { 'one': 1, 'two': 2, 'three': 3, 'four': 4 };
+      let matchedLate = lateMatch1 || lateMatch2;
+      let hasParsedLate = false;
+
+      if (matchedLate) {
+        const valStr = matchedLate[1].toLowerCase();
+        const lateHours = wordToNumber[valStr] !== undefined ? wordToNumber[valStr] : parseFloat(valStr);
+        if (!isNaN(lateHours)) {
+          let shiftStart = (matchedEmployee && matchedEmployee.shiftStart) ? matchedEmployee.shiftStart : "09:00";
+          if (!shiftStart || !shiftStart.includes(':')) {
+            shiftStart = "09:00";
+          }
+          const [sh, sm] = shiftStart.split(':').map(Number);
+          let hours = sh + Math.floor(lateHours);
+          let minutes = sm + Math.round((lateHours % 1) * 60);
+          if (minutes >= 60) {
+            hours += 1;
+            minutes -= 60;
+          }
+          
+          const d = new Date();
+          if (dateStr) {
+            const parts = dateStr.split('-');
+            d.setFullYear(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+          }
+          d.setHours(hours, minutes, 0, 0);
+          checkInTimestamp = d.toISOString();
           actionType = 'in';
+          hasParsedLate = true;
+        }
+      }
+
+      // Perform time matching on cleanLine without the late phrase to prevent matching duration numbers
+      const lineForTimeMatching = matchedLate ? cleanLine.replace(matchedLate[0], '') : cleanLine;
+      const timeRegex = /\b(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)\b/gi;
+      const timeMatches = lineForTimeMatching.match(timeRegex) || [];
+
+      if (timeMatches.length >= 2) {
+        try {
+          checkInTimestamp = parseTimeStr(timeMatches[0], dateStr, false);
+          checkOutTimestamp = parseTimeStr(timeMatches[1], dateStr, true);
+          actionType = 'completed';
+        } catch (err) {
+          console.error("Time range parsing failed:", err);
+        }
+      } else if (timeMatches.length === 1) {
+        const outKeywords = ['out', 'checkout', 'check-out', 'left', 'exit', 'finish', 'done', 'leaving'];
+        const foundOut = outKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(lineForTimeMatching));
+        try {
+          const timestamp = parseTimeStr(timeMatches[0], dateStr, foundOut);
+          if (foundOut) {
+            checkOutTimestamp = timestamp;
+            actionType = 'out';
+          } else {
+            checkInTimestamp = timestamp;
+            actionType = 'in';
+          }
+        } catch (err) {
+          console.error("Single time parsing failed:", err);
+        }
+      } else {
+        // No times matched. If we didn't parse a late pattern, default to message/current timestamp
+        if (!hasParsedLate) {
+          const outKeywords = ['out', 'checkout', 'check-out', 'left', 'exit', 'finish', 'done', 'leaving'];
+          const foundOut = outKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(lineForTimeMatching));
+          const timestamp = messageTimestamp ? new Date(messageTimestamp).toISOString() : new Date().toISOString();
+          if (foundOut) {
+            checkOutTimestamp = timestamp;
+            actionType = 'out';
+          } else {
+            checkInTimestamp = timestamp;
+            actionType = 'in';
+          }
         }
       }
     }
