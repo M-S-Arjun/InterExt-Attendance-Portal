@@ -2232,6 +2232,28 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error("[CRITICAL] Unhandled promise rejection at:", promise, "reason:", reason);
 });
 
+let isShuttingDownServer = false;
+const gracefulServerShutdown = async (signal) => {
+  if (isShuttingDownServer) return;
+  isShuttingDownServer = true;
+  console.log(`\n[Process Shutdown] Server received signal: ${signal}. Shutting down services gracefully...`);
+  try {
+    await whatsapp.destroy();
+    console.log("[Process Shutdown] Server graceful shutdown complete.");
+  } catch (err) {
+    console.error("[Process Shutdown] Error during server shutdown:", err.message);
+  }
+  if (signal === 'SIGUSR2') {
+    process.kill(process.pid, 'SIGUSR2');
+  } else {
+    process.exit(0);
+  }
+};
+
+process.once('SIGINT', () => gracefulServerShutdown('SIGINT'));
+process.once('SIGTERM', () => gracefulServerShutdown('SIGTERM'));
+process.once('SIGUSR2', () => gracefulServerShutdown('SIGUSR2'));
+
 // Boot systems
 server.listen(PORT, () => {
   console.log(`=============================================================`);

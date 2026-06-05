@@ -117,7 +117,7 @@ class WhatsAppManager extends EventEmitter {
     this.connectingTimeout = null;
     this.connectingTimeoutAt = 0;
     
-    // 24/7 AGGRESSIVE Health Monitor (every 2 minutes)
+    // 24/7 Health Monitor (every 2 minutes)
     this.healthCheckInterval = setInterval(() => {
       const now = Date.now();
       const timeSinceLastCheck = now - this.lastHealthCheckTime;
@@ -128,15 +128,8 @@ class WhatsAppManager extends EventEmitter {
       if (this.status === 'disconnected') {
         console.warn("[Health Monitor] Client disconnected. Triggering immediate reboot...");
         this.initialize();
-      } else if (this.status === 'ready') {
-        // Check for stale/idle session - if no activity for 25 minutes, force reconnect
-        const timeSinceLastMsg = now - this.lastMessageTime;
-        if (timeSinceLastMsg > 1500000) { // 25 minutes
-          console.warn("[Health Monitor] Session idle for 25+ minutes. Forcing reconnection to maintain 24/7 uptime...");
-          this.forceReconnect();
-        }
       }
-    }, 120000); // 2 minutes instead of 10
+    }, 120000); // 2 minutes
     
     // KEEPALIVE: Ping connection every 3 minutes to prevent idle timeout
     this.keepAliveInterval = setInterval(() => {
@@ -237,12 +230,14 @@ class WhatsAppManager extends EventEmitter {
         this.status = 'disconnected';
         this.isInitializing = false;
         this.emit('status', this.status);
+        setTimeout(() => this.initialize(), 5000);
       });
     } catch (err) {
       console.error("Failed to initialize WhatsApp Client:", err);
       this.status = 'disconnected';
       this.isInitializing = false;
       this.emit('status', this.status);
+      setTimeout(() => this.initialize(), 5000);
     }
   }
 
@@ -270,10 +265,10 @@ class WhatsAppManager extends EventEmitter {
       this.qrCodeDataUrl = null;
       this.emit('status', this.status);
 
-      // Start 3-minute watchdog timer for ready state to prevent hydration hangs (large accounts require more boot time)
+      // Start 5-minute watchdog timer for ready state to prevent hydration hangs (large accounts require more boot time)
       if (this.authReadyTimeout) clearTimeout(this.authReadyTimeout);
       this.authReadyTimeout = setTimeout(async () => {
-        console.warn("[Watchdog] WhatsApp authenticated but ready event timed out (3 minutes). Self-healing re-initialization triggered...");
+        console.warn("[Watchdog] WhatsApp authenticated but ready event timed out (5 minutes). Self-healing re-initialization triggered...");
         this.status = 'disconnected';
         this.emit('status', this.status);
         
@@ -286,25 +281,11 @@ class WhatsAppManager extends EventEmitter {
         } catch (e) {
           console.error("[Watchdog] Client destruction failed:", e.message);
         }
-        
-        try {
-          console.log("[Watchdog] Wiping corrupted session and cache directories...");
-          const authPath = path.join(__dirname, '.wwebjs_auth');
-          const cachePath = path.join(__dirname, '.wwebjs_cache');
-          if (fs.existsSync(authPath)) {
-            fs.rmSync(authPath, { recursive: true, force: true });
-          }
-          if (fs.existsSync(cachePath)) {
-            fs.rmSync(cachePath, { recursive: true, force: true });
-          }
-        } catch (e) {
-          console.error("[Watchdog] Failed to clean directories:", e.message);
-        }
 
-        console.log("[Watchdog] Re-initializing fresh client...");
+        console.log("[Watchdog] Re-initializing client...");
         this.isInitializing = false;
         this.initialize();
-      }, 180000);
+      }, 300000);
     });
 
     // Session authentication failed
@@ -323,16 +304,8 @@ class WhatsAppManager extends EventEmitter {
       this.qrCodeDataUrl = null;
       this.emit('status', this.status);
 
-      // Clean up session auth data and auto-reinitialize
-      try {
-        console.log("Cleaning up corrupted auth session...");
-        const authPath = path.join(__dirname, '.wwebjs_auth');
-        if (fs.existsSync(authPath)) {
-          fs.rmSync(authPath, { recursive: true, force: true });
-        }
-      } catch (e) {
-        console.error("Failed to clean auth path:", e.message);
-      }
+      // Do NOT clean up session auth data immediately to prevent destroying active logins on transient/loading failures.
+      // If the session is truly invalid, whatsapp-web.js will naturally display the QR code page next time.
       setTimeout(() => this.initialize(), 5000);
     });
 
@@ -668,10 +641,18 @@ class WhatsAppManager extends EventEmitter {
   async pingConnection() {
     try {
       if (this.client && this.status === 'ready') {
-        // Try to refresh chats to keep connection alive
-        const chats = await this.client.getChats();
-        console.log(`[KeepAlive] Successfully pinged connection. Active chats: ${chats.length}`);
-        return true;
+        // Lighter ping check using evaluating a simple script inside the browser page
+        if (this.client.pupBrowser && this.client.pupPage) {
+          const isClosed = this.client.pupBrowser.isConnected ? !this.client.pupBrowser.isConnected() : false;
+          if (isClosed) {
+            throw new Error("Puppeteer browser is disconnected");
+          }
+          await this.client.pupPage.evaluate(() => 1);
+          console.log("[KeepAlive] Successfully pinged connection (browser is responding).");
+          return true;
+        } else {
+          throw new Error("Puppeteer client not fully initialized");
+        }
       }
     } catch (err) {
       console.error("[KeepAlive] Ping failed:", err.message);
@@ -821,11 +802,50 @@ class WhatsAppManager extends EventEmitter {
     }
   }
 
-  // Cleanup intervals on shutdown
-  destroy() {
+  // Cleanup intervals and client on shutdown
+  async destroy() {
+    console.log("[Shutdown] Cleaning up intervals...");
     if (this.healthCheckInterval) clearInterval(this.healthCheckInterval);
     if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
+    if (this.client) {
+      try {
+        console.log("[Shutdown] Gracefully destroying WhatsApp client...");
+        await Promise.race([
+          this.client.destroy(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Client destroy timeout")), 10000))
+        ]);
+        console.log("[Shutdown] WhatsApp client destroyed successfully.");
+      } catch (err) {
+        console.error("[Shutdown] Error during client destruction:", err.message);
+      }
+      this.client = null;
+    }
   }
 }
+
+let isShuttingDown = false;
+const gracefulShutdown = async (signal) => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`\n[Process Shutdown] Received signal: ${signal}. Shutting down WhatsApp client gracefully...`);
+  try {
+    const manager = module.exports;
+    if (manager) {
+      await manager.destroy();
+    }
+    console.log("[Process Shutdown] Graceful shutdown complete.");
+  } catch (err) {
+    console.error("[Process Shutdown] Error during shutdown:", err.message);
+  }
+  if (signal === 'SIGUSR2') {
+    process.kill(process.pid, 'SIGUSR2');
+  } else {
+    process.exit(0);
+  }
+};
+
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.once('SIGUSR2', () => gracefulShutdown('SIGUSR2'));
 
 module.exports = new WhatsAppManager();
