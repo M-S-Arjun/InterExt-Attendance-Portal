@@ -1067,8 +1067,8 @@ class Database {
       const empLogs = attendanceLogs.filter(log => log.employeeId === emp.id);
       const presentCount = empLogs.filter(log => log.status === 'completed' || log.status === 'checked-in').length;
       
-      // Default std working days (for daily wage workers, default standard working days is the actual days present)
-      const stdWorkingDays = adj.stdWorkingDays !== undefined ? Number(adj.stdWorkingDays) : (isDailyWageWorker ? presentCount : defaultStdDays);
+      // Default std working days (30 for office staff, 26 for all others)
+      const stdWorkingDays = adj.stdWorkingDays !== undefined ? Number(adj.stdWorkingDays) : defaultStdDays;
       
       let actualSalary = 0.0;
       let basic = 0.0;
@@ -1085,7 +1085,9 @@ class Database {
 
       if (isDailyWageWorker) {
         dailyRate = Number(emp.dailyRate) || 0.0;
-        workingDays = stdWorkingDays; // standard working days input represents present days
+        const defaultLopDays = Math.max(0, stdWorkingDays - presentCount);
+        lopDays = adj.lopDays !== undefined ? Number(adj.lopDays) : defaultLopDays;
+        workingDays = Number((stdWorkingDays - lopDays).toFixed(2));
         amount = Number((dailyRate * workingDays).toFixed(2));
       } else {
         actualSalary = Number(emp.monthlyWage) || (Number(emp.dailyRate) * stdWorkingDays) || 0.0;

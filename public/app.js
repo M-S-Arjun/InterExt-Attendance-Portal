@@ -2343,7 +2343,7 @@ function renderPayrollTable(data) {
       <td class="cell-working-days" data-val="${row.workingDays}">${row.workingDays}</td>
       <td class="cell-daily-wages" data-val="${dailyRate}">₹${dailyRate.toFixed(2)}</td>
       <td>
-        ${isDaily ? `<input type="number" class="table-input input-lop-days" value="" disabled placeholder="—" style="opacity: 0.5;">` : `<input type="number" class="table-input input-lop-days" value="${row.lopDays}" step="0.5" min="0" oninput="recalculatePayrollRow(this)">`}
+        <input type="number" class="table-input input-lop-days" value="${row.lopDays}" step="0.5" min="0" oninput="recalculatePayrollRow(this)">
       </td>
       <td class="cell-lop-amount" data-val="${isDaily ? 0 : row.lopAmount}">${isDaily ? '—' : '₹' + row.lopAmount.toFixed(2)}</td>
       <td>
@@ -2402,7 +2402,7 @@ function recalculatePayrollRow(inputEl) {
 
   const actualSalary = Number(tr.querySelector('.cell-actual-salary').dataset.val) || 0;
   const stdWorkingDays = Number(tr.querySelector('.input-std-working-days').value) || 0;
-  const lopDays = isDailyWageWorker ? 0 : (Number(tr.querySelector('.input-lop-days').value) || 0);
+  const lopDays = Number(tr.querySelector('.input-lop-days').value) || 0;
   const otHours = Number(tr.querySelector('.input-ot-hours').value) || 0;
   const travelTimeHours = Number(tr.querySelector('.input-travel-time-hours').value) || 0;
   const extraDays = Number(tr.querySelector('.input-extra-days').value) || 0;
@@ -2520,7 +2520,7 @@ async function savePayrollAdjustments() {
     const isDaily = !isOfficeStaff;
 
     const stdWorkingDays = Number(tr.querySelector('.input-std-working-days').value);
-    const lopDays = isDaily ? 0 : Number(tr.querySelector('.input-lop-days').value);
+    const lopDays = Number(tr.querySelector('.input-lop-days').value);
     const otHours = Number(tr.querySelector('.input-ot-hours').value);
     const travelTimeHours = Number(tr.querySelector('.input-travel-time-hours').value);
     const extraDays = Number(tr.querySelector('.input-extra-days').value);
