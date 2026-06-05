@@ -114,6 +114,8 @@ class WhatsAppManager extends EventEmitter {
     this.lidToPhoneMap = {};
     this.lastMessageTime = Date.now();
     this.lastHealthCheckTime = Date.now();
+    this.connectingTimeout = null;
+    this.connectingTimeoutAt = 0;
     
     // 24/7 AGGRESSIVE Health Monitor (every 2 minutes)
     this.healthCheckInterval = setInterval(() => {
@@ -148,13 +150,31 @@ class WhatsAppManager extends EventEmitter {
   // Initialize the WhatsApp Web Client with self-healing lock release
   async initialize() {
     if (this.isInitializing) {
-      console.log("[Startup] Already initializing. Skipping duplicate request.");
-      return;
+      if (this.connectingTimeoutAt && Date.now() - this.connectingTimeoutAt > 180000) {
+        console.warn("[Startup] Client stuck in initializing state for >3 minutes. Clearing block and restarting...");
+        this.isInitializing = false;
+      } else {
+        console.log("[Startup] Already initializing. Skipping duplicate request.");
+        return;
+      }
     }
     this.isInitializing = true;
+    this.connectingTimeoutAt = Date.now();
     console.log("Initializing WhatsApp Client...");
     this.status = 'connecting';
     this.emit('status', this.status);
+
+    // Start a 3-minute watchdog timer to prevent getting stuck in 'connecting' state
+    if (this.connectingTimeout) clearTimeout(this.connectingTimeout);
+    this.connectingTimeout = setTimeout(async () => {
+      if (this.status === 'connecting') {
+        console.warn("[Watchdog] WhatsApp client initialization stuck in 'connecting' state for 3 minutes. Re-initializing...");
+        this.status = 'disconnected';
+        this.isInitializing = false;
+        this.emit('status', this.status);
+        this.forceReconnect();
+      }
+    }, 180000); // 3 minutes
 
     if (this.client) {
       try {
@@ -231,6 +251,7 @@ class WhatsAppManager extends EventEmitter {
     // QR Code generated - convert to Base64 image
     this.client.on('qr', async (qr) => {
       console.log("QR Code received. Generating image...");
+      this.clearConnectingTimeout();
       try {
         this.qrCodeDataUrl = await QRCode.toDataURL(qr);
         this.status = 'qr';
@@ -244,6 +265,7 @@ class WhatsAppManager extends EventEmitter {
     // Successfully Authenticated
     this.client.on('authenticated', () => {
       console.log("WhatsApp authenticated successfully!");
+      this.clearConnectingTimeout();
       this.status = 'authenticated';
       this.qrCodeDataUrl = null;
       this.emit('status', this.status);
@@ -288,6 +310,7 @@ class WhatsAppManager extends EventEmitter {
     // Session authentication failed
     this.client.on('auth_failure', (msg) => {
       console.error("WhatsApp authentication failure:", msg);
+      this.clearConnectingTimeout();
       
       // Clear watchdog timer
       if (this.authReadyTimeout) {
@@ -316,6 +339,7 @@ class WhatsAppManager extends EventEmitter {
     // Client is logged in and ready to receive messages
     this.client.on('ready', async () => {
       console.log("WhatsApp Client is ready!");
+      this.clearConnectingTimeout();
 
       // Clear watchdog timer
       if (this.authReadyTimeout) {
@@ -350,6 +374,7 @@ class WhatsAppManager extends EventEmitter {
     // Session disconnected
     this.client.on('disconnected', (reason) => {
       console.log("WhatsApp client disconnected:", reason);
+      this.clearConnectingTimeout();
 
       // Clear watchdog timer
       if (this.authReadyTimeout) {
@@ -688,12 +713,20 @@ class WhatsAppManager extends EventEmitter {
     if (!this.client) return;
     try {
       await this.client.logout();
+    } catch (err) {
+      console.error("Failed during WhatsApp logout:", err);
+    } finally {
       this.status = 'disconnected';
       this.isInitializing = false;
       this.qrCodeDataUrl = null;
       this.emit('status', this.status);
-    } catch (err) {
-      console.error("Failed during WhatsApp logout:", err);
+    }
+  }
+
+  clearConnectingTimeout() {
+    if (this.connectingTimeout) {
+      clearTimeout(this.connectingTimeout);
+      this.connectingTimeout = null;
     }
   }
 
