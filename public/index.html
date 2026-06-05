@@ -821,42 +821,50 @@
           </div>
           
           <div class="overflow-x">
-            <table class="data-table" id="payroll-table" style="min-width: 3360px;">
+            <table class="data-table" id="payroll-table" style="min-width: 3390px;">
               <thead>
                 <tr>
                   <th style="width: 60px;">No</th>
-                  <th style="width: 110px;">Employee ID</th>
-                  <th style="width: 180px;">Name</th>
-                  <th style="width: 125px;">Std Working days</th>
+                  <th style="width: 130px;">Mode of Work</th>
+                  <th style="width: 110px;">User ID</th>
+                  <th style="width: 180px;">Employee Name</th>
                   <th style="width: 120px;">Basic</th>
                   <th style="width: 120px;">DA</th>
-                  <th style="width: 135px;">Other Allowances</th>
-                  <th style="width: 130px;">Gross Salary</th>
-                  <th style="width: 110px;">Working Days</th>
-                  <th style="width: 125px;">amount</th>
-                  <th style="width: 110px;">LOP(Day)</th>
-                  <th style="width: 130px;">LOP( Amount)</th>
-                  <th style="width: 110px;">OT(Hrs)</th>
-                  <th style="width: 125px;">OT(Amount)</th>
-                  <th style="width: 130px;">Travel Time(Hrs)</th>
-                  <th style="width: 140px;">Travel Time( Amount)</th>
-                  <th style="width: 110px;">Extra days</th>
-                  <th style="width: 135px;">Extra days Amount</th>
-                  <th style="width: 115px;">Missing days</th>
-                  <th style="width: 145px;">Missing days(Amount)</th>
-                  <th style="width: 120px;">Holiday Days</th>
-                  <th style="width: 140px;">Holiday Bonus (₹)</th>
-                  <th style="width: 135px;">Earned Salary</th>
-                  <th style="width: 110px;">PF</th>
-                  <th style="width: 110px;">ESIC</th>
-                  <th style="width: 110px;">PT</th>
-                  <th style="width: 135px;">Net Salary</th>
+                  <th style="width: 140px;">Other Allowances</th>
+                  <th style="width: 130px;">Monthly Wages</th>
+                  <th style="width: 140px;">Actual Working days</th>
+                  <th style="width: 120px;">Days Worked</th>
+                  <th style="width: 120px;">Daily Wages</th>
+                  <th style="width: 110px;">LOP Days</th>
+                  <th style="width: 130px;">LOP Amount</th>
+                  <th style="width: 110px;">OT Hours</th>
+                  <th style="width: 125px;">OT Amount</th>
+                  <th style="width: 130px;">Travel Time(hrs)</th>
+                  <th style="width: 140px;">Travel Time Amount</th>
+                  <th style="width: 110px;">Extra Days</th>
+                  <th style="width: 135px;">Extra Day Amount</th>
+                  <th style="width: 115px;">Missing Days</th>
+                  <th style="width: 145px;">Missing Days Amount</th>
+                  <th style="width: 120px;">Holidays</th>
+                  <th style="width: 140px;">Holiday Amount</th>
+                  <th style="width: 135px;">Gross Payable</th>
+                  <th style="width: 120px;">Advance Paid</th>
+                  <th style="width: 135px;">Net Payable</th>
+                  <th style="width: 140px;">Company</th>
                   <th style="width: 90px;">Actions</th>
                 </tr>
               </thead>
               <tbody id="payroll-table-body">
                 <!-- Generated Dynamically -->
               </tbody>
+              <tfoot>
+                <tr style="font-weight: bold; background: var(--bg-secondary); border-top: 2px solid var(--border-color);">
+                  <td colspan="25" style="text-align: left; padding: 12px; font-size: 0.95rem;">Total</td>
+                  <td id="payroll-total-net-payable" style="text-align: right; padding: 12px; font-size: 0.95rem; color: var(--color-success); font-weight: 700;">₹0.00</td>
+                  <td></td>
+                  <td></td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </div>

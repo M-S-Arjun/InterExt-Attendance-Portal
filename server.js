@@ -1918,13 +1918,13 @@ app.get('/api/export/payroll/excel', async (req, res) => {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet(`Salary Sheet ${targetMonth}`);
     
-    // Exact Headers as per Excel screenshot with Holiday Days and Holiday Bonus
+    // Exact Headers as per requested monthly payroll order
     const headers = [
-      "No", "Employee ID", "Name", "Std Working days", "Basic", "DA", "Other Allowances", 
-      "Gross Salary", "Working Days", "amount", "LOP(Day)", "LOP( Amount)", 
-      "OT(Hrs)", "OT(Amount)", "Travel Time(Hrs)", "Travel Time( Amount)", 
-      "Extra days", "Extra days Amount", "Missing days", "Missing days(Amount)", 
-      "Holiday Days", "Holiday Bonus (₹)", "Earned Salary", "PF", "ESIC", "PT", "Net Salary"
+      "No", "Mode of Work", "User ID", "Employee Name", "Basic", "DA", "Other Allowances", 
+      "Monthly Wages", "Actual Working days", "Days Worked", "Daily Wages", "LOP Days", "LOP Amount", 
+      "OT Hours", "OT Amount", "Travel Time(hrs)", "Travel Time Amount", 
+      "Extra Days", "Extra Day Amount", "Missing Days", "Missing Days Amount", 
+      "Holidays", "Holiday Amount", "Gross Payable", "Advance Paid", "Net Payable", "Company"
     ];
     
     worksheet.addRow(headers);
@@ -1933,15 +1933,16 @@ app.get('/api/export/payroll/excel', async (req, res) => {
     list.forEach((row, idx) => {
       worksheet.addRow([
         idx + 1,
+        row.modeOfWork || "—",
         row.userId || "—",
         row.employeeName,
-        row.stdWorkingDays,
         row.basic,
         row.da,
         row.allowances,
         row.actualSalary,
+        row.stdWorkingDays,
         row.workingDays,
-        row.amount,
+        Number((row.actualSalary / row.stdWorkingDays).toFixed(2)),
         row.lopDays,
         row.lopAmount,
         row.otHours,
@@ -1955,12 +1956,20 @@ app.get('/api/export/payroll/excel', async (req, res) => {
         row.holidayDaysWorked || 0,
         row.holidayBonus || 0.0,
         row.earnedSalary,
-        row.pf || 0,
-        row.esic || 0,
-        row.pt || 0,
-        row.netSalary
+        row.salaryAdvance || 0.0,
+        row.netSalary,
+        row.company || "—"
       ]);
     });
+
+    const lastDataRow = list.length + 1; // data starts at row 2, ends at list.length + 1
+    const totalRowIndex = list.length + 2;
+
+    // Append summary row
+    const totalRowObj = worksheet.addRow([]);
+    totalRowObj.getCell(1).value = "Total";
+    totalRowObj.getCell(26).value = { formula: `=SUM(Z2:Z${lastDataRow})` };
+    totalRowObj.getCell(27).value = "";
     
     // Auto-fit column widths for premium feel!
     worksheet.columns.forEach(col => {
@@ -1997,44 +2006,71 @@ app.get('/api/export/payroll/excel', async (req, res) => {
       };
     });
     
-    // Style data rows
+    // Style data and total rows
     worksheet.eachRow((row, rowNum) => {
       if (rowNum === 1) return; // skip header
       
-      row.height = 22;
-      row.eachCell((cell, colNum) => {
-        cell.font = { name: 'Segoe UI', size: 10 };
-        cell.alignment = { vertical: 'middle', horizontal: 'center' };
-        
-        // Left-align employee ID (2) and Name (3)
-        if (colNum === 2 || colNum === 3) {
-          cell.alignment = { vertical: 'middle', horizontal: 'left' };
-        }
-        
-        // Currency / Number formatting for financial columns
-        const currencyCols = [5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 21, 22, 23, 24, 25];
-        if (currencyCols.includes(colNum)) {
-          cell.numFormat = '"₹"#,##0.00';
-          cell.alignment = { vertical: 'middle', horizontal: 'right' };
-        }
-        
-        // Elegant light green background and bold green text for the Net Salary payout cell!
-        if (colNum === 25) {
-          cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
-          cell.fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FFF0FDF4' }
+      const isTotalRow = (rowNum === totalRowIndex);
+      row.height = isTotalRow ? 24 : 22;
+      
+      row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+        if (isTotalRow) {
+          cell.font = { name: 'Segoe UI', size: 10, bold: true };
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          
+          if (colNum === 1) {
+            cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          }
+          
+          if (colNum === 26) {
+            cell.numFormat = '"₹"#,##0.00';
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFF0FDF4' }
+            };
+          }
+          
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FF94A3B8' } },
+            bottom: { style: 'double', color: { argb: 'FF1E293B' } }
+          };
+        } else {
+          cell.font = { name: 'Segoe UI', size: 10 };
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          
+          // Left-align User ID (3) and Name (4)
+          if (colNum === 3 || colNum === 4) {
+            cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          }
+          
+          // Currency / Number formatting for financial columns
+          const currencyCols = [5, 6, 7, 8, 11, 13, 15, 17, 19, 21, 23, 24, 25, 26];
+          if (currencyCols.includes(colNum)) {
+            cell.numFormat = '"₹"#,##0.00';
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          }
+          
+          // Elegant light green background and bold green text for the Net Salary payout cell (Col 26)!
+          if (colNum === 26) {
+            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFF0FDF4' }
+            };
+          }
+          
+          // Thin gray grid borders for all cells
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
           };
         }
-        
-        // Thin gray grid borders for all cells
-        cell.border = {
-          top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-          bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-          left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-          right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
-        };
       });
     });
     

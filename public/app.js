@@ -2168,6 +2168,25 @@ async function loadPayrollSheet() {
   }
 }
 
+function updatePayrollTotalSum() {
+  const tbody = document.getElementById('payroll-table-body');
+  if (!tbody) return;
+  
+  let totalNetPayable = 0;
+  tbody.querySelectorAll('tr').forEach(tr => {
+    if (tr.id === 'payroll-no-match-row' || tr.style.display === 'none') return;
+    const netSalaryCell = tr.querySelector('.cell-net-salary');
+    if (netSalaryCell) {
+      totalNetPayable += Number(netSalaryCell.dataset.val) || 0;
+    }
+  });
+  
+  const totalEl = document.getElementById('payroll-total-net-payable');
+  if (totalEl) {
+    totalEl.textContent = `₹${totalNetPayable.toFixed(2)}`;
+  }
+}
+
 // Monthly Payroll Filter Engine & Input Protection Toggler
 function applyFiltersPayroll() {
   const searchQuery = document.getElementById('pay-search-input')?.value.toLowerCase().trim() || '';
@@ -2215,7 +2234,7 @@ function applyFiltersPayroll() {
     if (!noMatchRow) {
       noMatchRow = document.createElement('tr');
       noMatchRow.id = 'payroll-no-match-row';
-      noMatchRow.innerHTML = `<td colspan="25" style="text-align: center; color: var(--text-tertiary); font-weight: 500;">No payroll records match the search query or mode of work filter.</td>`;
+      noMatchRow.innerHTML = `<td colspan="28" style="text-align: center; color: var(--text-tertiary); font-weight: 500;">No payroll records match the search query or mode of work filter.</td>`;
       document.getElementById('payroll-table-body').appendChild(noMatchRow);
     } else {
       noMatchRow.style.display = '';
@@ -2225,6 +2244,8 @@ function applyFiltersPayroll() {
       noMatchRow.style.display = 'none';
     }
   }
+  
+  updatePayrollTotalSum();
 }
 
 function renderPayrollTable(data) {
@@ -2233,7 +2254,7 @@ function renderPayrollTable(data) {
   tbody.innerHTML = "";
   
   if (!data || data.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="26" style="text-align: center; color: var(--text-tertiary);">No active employees registered for this month.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="28" style="text-align: center; color: var(--text-tertiary);">No active employees registered for this month.</td></tr>`;
     return;
   }
 
@@ -2243,25 +2264,25 @@ function renderPayrollTable(data) {
   data.forEach((row, idx) => {
     const tr = document.createElement('tr');
     tr.dataset.empId = row.employeeId;
-    tr.dataset.pfEnabled = row.pfEnabled !== false;
-    tr.dataset.esicEnabled = row.esicEnabled !== false;
-    tr.dataset.ptEnabled = row.ptEnabled !== false;
+    
+    const dailyRate = Number((row.actualSalary / row.stdWorkingDays).toFixed(2));
     
     tr.innerHTML = `
       <td><strong>${idx + 1}</strong></td>
+      <td><strong>${row.modeOfWork || "—"}</strong></td>
       <td><strong>${row.userId || "—"}</strong></td>
       <td>
         <span class="worker-primary-name">${row.employeeName}</span>
-      </td>
-      <td>
-        <input type="number" class="table-input input-std-working-days" value="${row.stdWorkingDays}" step="1" min="1" oninput="recalculatePayrollRow(this)">
       </td>
       <td class="cell-basic" data-val="${row.basic}">₹${row.basic.toFixed(2)}</td>
       <td class="cell-da" data-val="${row.da}">₹${row.da.toFixed(2)}</td>
       <td class="cell-allowances" data-val="${row.allowances}">₹${row.allowances.toFixed(2)}</td>
       <td class="cell-actual-salary" data-val="${row.actualSalary}">₹${row.actualSalary.toFixed(2)}</td>
+      <td>
+        <input type="number" class="table-input input-std-working-days" value="${row.stdWorkingDays}" step="1" min="1" oninput="recalculatePayrollRow(this)">
+      </td>
       <td class="cell-working-days" data-val="${row.workingDays}">${row.workingDays}</td>
-      <td class="cell-amount" data-val="${row.amount}">₹${row.amount.toFixed(2)}</td>
+      <td class="cell-daily-wages" data-val="${dailyRate}">₹${dailyRate.toFixed(2)}</td>
       <td>
         <input type="number" class="table-input input-lop-days" value="${row.lopDays}" step="0.5" min="0" oninput="recalculatePayrollRow(this)">
       </td>
@@ -2288,15 +2309,10 @@ function renderPayrollTable(data) {
       <td class="cell-holiday-bonus" data-val="${row.holidayBonus}">₹${row.holidayBonus.toFixed(2)}</td>
       <td class="cell-earned-salary" data-val="${row.earnedSalary}">₹${row.earnedSalary.toFixed(2)}</td>
       <td>
-        <input type="number" class="table-input input-pf" value="${row.pf || 0.0}" step="0.01" min="0" oninput="recalculatePayrollRow(this)">
-      </td>
-      <td>
-        <input type="number" class="table-input input-esic" value="${row.esic || 0.0}" step="0.01" min="0" oninput="recalculatePayrollRow(this)">
-      </td>
-      <td>
-        <input type="number" class="table-input input-pt" value="${row.pt || 0.0}" step="0.01" min="0" oninput="recalculatePayrollRow(this)">
+        <input type="number" class="table-input input-salary-advance" value="${row.salaryAdvance || 0.0}" step="100" min="0" oninput="recalculatePayrollRow(this)">
       </td>
       <td class="cell-net-salary" data-val="${row.netSalary}" style="font-weight: 700; color: var(--color-success);">₹${row.netSalary.toFixed(2)}</td>
+      <td class="cell-company"><strong>${row.company || "—"}</strong></td>
       <td>
         <div class="btn-actions-grid">
           <button class="btn-table-action" onclick="editEmployee('${row.employeeId}')" title="Edit Employee Profile"><i data-lucide="edit-3" style="width: 14px; height: 14px;"></i></button>
@@ -2306,6 +2322,7 @@ function renderPayrollTable(data) {
     tbody.appendChild(tr);
   });
   if (window.lucide) window.lucide.createIcons();
+  updatePayrollTotalSum();
 }
 
 function recalculatePayrollRow(inputEl) {
@@ -2318,9 +2335,6 @@ function recalculatePayrollRow(inputEl) {
   const allowancesRatio = state.settings.allowancesRatio !== undefined ? Number(state.settings.allowancesRatio) : 0.25;
   const overtimeRateMultiplier = state.settings.overtimeRateMultiplier !== undefined ? Number(state.settings.overtimeRateMultiplier) : 1.00;
   const lopDeductionRate = state.settings.lopDeductionRate !== undefined ? Number(state.settings.lopDeductionRate) : 1.00;
-  const pfContributionRate = state.settings.pfContributionRate !== undefined ? Number(state.settings.pfContributionRate) : 12.00;
-  const esicContributionRate = state.settings.esicContributionRate !== undefined ? Number(state.settings.esicContributionRate) : 0.75;
-  const ptDeductionStandard = state.settings.ptDeductionStandard !== undefined ? Number(state.settings.ptDeductionStandard) : 200.00;
 
   const actualSalary = Number(tr.querySelector('.cell-actual-salary').dataset.val) || 0;
   const stdWorkingDays = Number(tr.querySelector('.input-std-working-days').value) || 30;
@@ -2331,9 +2345,7 @@ function recalculatePayrollRow(inputEl) {
   const missingDays = Number(tr.querySelector('.input-missing-days').value) || 0;
   const holidayDays = Number(tr.querySelector('.input-holiday-days').value) || 0;
   
-  let pf = Number(tr.querySelector('.input-pf').value) || 0;
-  let esic = Number(tr.querySelector('.input-esic').value) || 0;
-  let pt = Number(tr.querySelector('.input-pt').value) || 0;
+  const salaryAdvance = Number(tr.querySelector('.input-salary-advance').value) || 0;
 
   const dailyRate = Number((actualSalary / stdWorkingDays).toFixed(2));
   
@@ -2344,7 +2356,7 @@ function recalculatePayrollRow(inputEl) {
   
   const hourlyRate = Number((dailyRate / 8).toFixed(2));
 
-  // LOP Amount using lopDeductionRate multiplier
+  // LOP Amount using LOP deduction rate multiplier
   const lopAmount = Number((lopDays * dailyRate * lopDeductionRate).toFixed(2));
 
   // Working Days = Std Working days - LOP(Day)
@@ -2371,25 +2383,8 @@ function recalculatePayrollRow(inputEl) {
   // Earned Salary = amount + OT(Amount) + Travel Time( Amount) + Extra days Amount + Missing days(Amount) + Holiday Bonus
   const earnedSalary = Number((amount + otPayout + travelTimePayout + extraDaysAmount + missingDaysAmount + holidayBonus).toFixed(2));
 
-  // Auto statutory recalculations if not manually editing them directly
-  if (!inputEl.classList.contains('input-pf') && 
-      !inputEl.classList.contains('input-esic') && 
-      !inputEl.classList.contains('input-pt')) {
-    const pfEnabled = tr.dataset.pfEnabled !== 'false';
-    const esicEnabled = tr.dataset.esicEnabled !== 'false';
-    const ptEnabled = tr.dataset.ptEnabled !== 'false';
-
-    pf = pfEnabled ? Number((basic * (pfContributionRate / 100)).toFixed(2)) : 0.0;
-    esic = esicEnabled ? Number((earnedSalary * (esicContributionRate / 100)).toFixed(2)) : 0.0;
-    pt = ptEnabled ? ptDeductionStandard : 0.0;
-    
-    tr.querySelector('.input-pf').value = pf;
-    tr.querySelector('.input-esic').value = esic;
-    tr.querySelector('.input-pt').value = pt;
-  }
-
-  // Net Salary = Earned Salary - PF - ESIC - PT
-  const netSalary = Number((earnedSalary - pf - esic - pt).toFixed(2));
+  // Net Salary = Earned Salary - Advance Paid
+  const netSalary = Number((earnedSalary - salaryAdvance).toFixed(2));
 
   const updateCell = (selector, val, isCurrency = true) => {
     const cell = tr.querySelector(selector);
@@ -2404,6 +2399,7 @@ function recalculatePayrollRow(inputEl) {
   updateCell('.cell-allowances', allowances);
   updateCell('.cell-lop-amount', lopAmount);
   updateCell('.cell-working-days', workingDays, false);
+  updateCell('.cell-daily-wages', dailyRate);
   updateCell('.cell-amount', amount);
   updateCell('.cell-ot-payout', otPayout);
   updateCell('.cell-travel-time-payout', travelTimePayout);
@@ -2412,6 +2408,8 @@ function recalculatePayrollRow(inputEl) {
   updateCell('.cell-holiday-bonus', holidayBonus);
   updateCell('.cell-earned-salary', earnedSalary);
   updateCell('.cell-net-salary', netSalary);
+  
+  updatePayrollTotalSum();
 }
 
 async function savePayrollAdjustments() {
@@ -2424,6 +2422,7 @@ async function savePayrollAdjustments() {
 
   const adjustments = [];
   rows.forEach(tr => {
+    if (tr.id === 'payroll-no-match-row') return;
     const employeeId = tr.dataset.empId;
     if (!employeeId) return;
 
@@ -2434,9 +2433,7 @@ async function savePayrollAdjustments() {
     const extraDays = Number(tr.querySelector('.input-extra-days').value);
     const missingDays = Number(tr.querySelector('.input-missing-days').value);
     const holidayDaysWorked = Number(tr.querySelector('.input-holiday-days').value);
-    const pf = Number(tr.querySelector('.input-pf').value);
-    const esic = Number(tr.querySelector('.input-esic').value);
-    const pt = Number(tr.querySelector('.input-pt').value);
+    const salaryAdvance = Number(tr.querySelector('.input-salary-advance').value);
 
     adjustments.push({
       employeeId,
@@ -2448,9 +2445,7 @@ async function savePayrollAdjustments() {
       extraDays,
       missingDays,
       holidayDaysWorked,
-      pf,
-      esic,
-      pt
+      salaryAdvance
     });
   });
 

@@ -1128,18 +1128,11 @@ class Database {
       // Earned Salary = amount + OT(Amount) + Travel Time( Amount) + Extra days Amount + Missing days(Amount) + Holiday Bonus
       const earnedSalary = Number((amount + otPayout + travelTimePayout + extraDaysAmount + missingDaysAmount + holidayBonus).toFixed(2));
       
-      // Auto statutory calculations
-      const defaultPf = emp.pfEnabled !== false ? Number((basic * (pfContributionRate / 100)).toFixed(2)) : 0.0;
-      const defaultEsic = emp.esicEnabled !== false ? Number((earnedSalary * (esicContributionRate / 100)).toFixed(2)) : 0.0;
-      const defaultPt = emp.ptEnabled !== false ? ptDeductionStandard : 0.0;
-
-      // Deductions (PF, ESIC, PT)
-      const pf = adj.pf !== undefined ? Number(adj.pf) : defaultPf;
-      const esic = adj.esic !== undefined ? Number(adj.esic) : defaultEsic;
-      const pt = adj.pt !== undefined ? Number(adj.pt) : defaultPt;
+      // Deductions (Advance Paid)
+      const salaryAdvance = adj.salaryAdvance !== undefined ? Number(adj.salaryAdvance) : 0.0;
       
-      // Net Salary = Earned Salary - PF - ESIC - PT
-      const netSalary = Number((earnedSalary - pf - esic - pt).toFixed(2));
+      // Net Salary = Earned Salary (Gross Payable) - Advance Paid
+      const netSalary = Number((earnedSalary - salaryAdvance).toFixed(2));
       
       return {
         employeeId: emp.id,
@@ -1169,13 +1162,9 @@ class Database {
         earnedSalary,
         holidayDaysWorked,
         holidayBonus,
-        pf,
-        esic,
-        pt,
+        salaryAdvance,
         netSalary,
-        pfEnabled: emp.pfEnabled !== false,
-        esicEnabled: emp.esicEnabled !== false,
-        ptEnabled: emp.ptEnabled !== false,
+        company: emp.paymentMode || "—",
         notes: adj.notes || ""
       };
     });
