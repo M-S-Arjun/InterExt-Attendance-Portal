@@ -2161,7 +2161,7 @@ async function loadPayrollSheet() {
   
   const tbody = document.getElementById('payroll-table-body');
   if (tbody) {
-    tbody.innerHTML = `<tr><td colspan="28" style="text-align: center; color: var(--text-secondary);"><i data-lucide="loader" class="animate-spin" style="display:inline-block; margin-right:8px; vertical-align:middle; width: 16px; height: 16px;"></i>Loading payroll records...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="27" style="text-align: center; color: var(--text-secondary);"><i data-lucide="loader" class="animate-spin" style="display:inline-block; margin-right:8px; vertical-align:middle; width: 16px; height: 16px;"></i>Loading payroll records...</td></tr>`;
     if (window.lucide) window.lucide.createIcons();
   }
   
@@ -2196,9 +2196,10 @@ async function loadPayrollSheet() {
   } catch (err) {
     console.error("Failed to load payroll sheet:", err);
     if (tbody) {
-      tbody.innerHTML = `<tr><td colspan="28" style="text-align: center; color: var(--color-error);">Error loading payroll sheet: ${err.message}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="27" style="text-align: center; color: var(--color-error);">Error loading payroll sheet: ${err.message}</td></tr>`;
     }
   }
+
 }
 
 function updatePayrollTotalSum() {
@@ -2291,7 +2292,7 @@ function applyFiltersPayroll() {
     if (!noMatchRow) {
       noMatchRow = document.createElement('tr');
       noMatchRow.id = 'payroll-no-match-row';
-      noMatchRow.innerHTML = `<td colspan="28" style="text-align: center; color: var(--text-tertiary); font-weight: 500;">No payroll records match the filter criteria.</td>`;
+      noMatchRow.innerHTML = `<td colspan="27" style="text-align: center; color: var(--text-tertiary); font-weight: 500;">No payroll records match the filter criteria.</td>`;
       document.getElementById('payroll-table-body').appendChild(noMatchRow);
     } else {
       noMatchRow.style.display = '';
@@ -2301,6 +2302,7 @@ function applyFiltersPayroll() {
       noMatchRow.style.display = 'none';
     }
   }
+
   
   updatePayrollTotalSum();
 }
@@ -2311,12 +2313,34 @@ function renderPayrollTable(data) {
   tbody.innerHTML = "";
   
   if (!data || data.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="28" style="text-align: center; color: var(--text-tertiary);">No active employees registered for this month.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="27" style="text-align: center; color: var(--text-tertiary);">No active employees registered for this month.</td></tr>`;
     return;
   }
 
-  // Sort Name alphabetically
-  data.sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+  // Sort: Daily Wages Staff first, then Welders, then Office Staff, and finally by User ID
+  function getCategoryGroup(modeOfWork) {
+    const mode = (modeOfWork || '').toLowerCase();
+    if (mode.includes('daily') && mode.includes('wages')) {
+      return 1; // Daily Wages Staff
+    } else if (mode.includes('welder')) {
+      return 2; // Welders
+    } else if (mode.includes('office')) {
+      return 3; // Office Staff
+    } else {
+      return 4; // Others
+    }
+  }
+
+  data.sort((a, b) => {
+    const groupA = getCategoryGroup(a.modeOfWork);
+    const groupB = getCategoryGroup(b.modeOfWork);
+    if (groupA !== groupB) {
+      return groupA - groupB;
+    }
+    const idA = a.userId || "";
+    const idB = b.userId || "";
+    return idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
+  });
 
   data.forEach((row, idx) => {
     const tr = document.createElement('tr');
@@ -2327,12 +2351,12 @@ function renderPayrollTable(data) {
     const dailyRate = isDaily ? (Number(row.dailyRate) || 0.0) : Number((row.actualSalary / row.stdWorkingDays).toFixed(2));
     
     tr.innerHTML = `
-      <td><strong>${idx + 1}</strong></td>
       <td><strong>${row.modeOfWork || "—"}</strong></td>
       <td><strong>${row.userId || "—"}</strong></td>
       <td>
         <span class="worker-primary-name">${row.employeeName}</span>
       </td>
+
       <td class="cell-basic" data-val="${isDaily ? 0 : row.basic}">${isDaily ? '—' : '₹' + row.basic.toFixed(2)}</td>
       <td class="cell-da" data-val="${isDaily ? 0 : row.da}">${isDaily ? '—' : '₹' + row.da.toFixed(2)}</td>
       <td class="cell-allowances" data-val="${isDaily ? 0 : row.allowances}">${isDaily ? '—' : '₹' + row.allowances.toFixed(2)}</td>
@@ -2388,7 +2412,7 @@ function recalculatePayrollRow(inputEl) {
   const tr = inputEl.closest('tr');
   if (!tr) return;
 
-  const modeOfWorkCell = tr.cells[1];
+  const modeOfWorkCell = tr.cells[0];
   const modeOfWork = modeOfWorkCell ? modeOfWorkCell.textContent.toLowerCase().trim() : '';
   const isOfficeStaff = modeOfWork === 'office staff';
   const isDailyWageWorker = !isOfficeStaff;
@@ -2514,7 +2538,7 @@ async function savePayrollAdjustments() {
     const employeeId = tr.dataset.empId;
     if (!employeeId) return;
 
-    const modeOfWorkCell = tr.cells[1];
+    const modeOfWorkCell = tr.cells[0];
     const modeOfWork = modeOfWorkCell ? modeOfWorkCell.textContent.toLowerCase().trim() : '';
     const isOfficeStaff = modeOfWork === 'office staff';
     const isDaily = !isOfficeStaff;

@@ -203,7 +203,8 @@ body {
   text-align: left;
 }
 
-.nav-item i {
+.nav-item i,
+.nav-item svg {
   width: 20px;
   height: 20px;
   flex-shrink: 0;
@@ -470,7 +471,8 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   gap: 10px;
 }
 
-.card-header h3 i {
+.card-header h3 i,
+.card-header h3 svg {
   color: var(--color-primary);
   width: 18px;
   height: 18px;
@@ -495,7 +497,8 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   transition: var(--transition-fast);
 }
 
-.btn-icon i {
+.btn-icon i,
+.btn-icon svg {
   width: 16px;
   height: 16px;
 }
@@ -564,7 +567,8 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   transform: scale(1.05);
 }
 
-.btn-sidebar-toggle i {
+.btn-sidebar-toggle i,
+.btn-sidebar-toggle svg {
   width: 18px;
   height: 18px;
 }
@@ -600,7 +604,8 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   color: var(--text-secondary);
 }
 
-.active-group-badge i {
+.active-group-badge i,
+.active-group-badge svg {
   color: var(--color-info);
 }
 
@@ -729,7 +734,8 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   width: 100%;
 }
 
-.qr-placeholder i {
+.qr-placeholder i,
+.qr-placeholder svg {
   width: 32px;
   height: 32px;
   color: var(--color-primary);
@@ -785,7 +791,8 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   justify-content: center;
 }
 
-.metric-icon i {
+.metric-icon i,
+.metric-icon svg {
   width: 26px;
   height: 26px;
 }
@@ -972,7 +979,8 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   height: 100%;
 }
 
-.ticker-empty i {
+.ticker-empty i,
+.ticker-empty svg {
   width: 48px;
   height: 48px;
   color: var(--glass-border);
@@ -1371,7 +1379,8 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   transition: var(--transition-fast);
 }
 
-.btn-table-action i {
+.btn-table-action i,
+.btn-table-action svg {
   width: 12px;
   height: 12px;
 }
@@ -1803,7 +1812,8 @@ textarea.form-control {
   transform: translateY(-1px);
 }
 
-.btn-theme-toggle i {
+.btn-theme-toggle i,
+.btn-theme-toggle svg {
   width: 18px;
   height: 18px;
 }
@@ -1889,7 +1899,8 @@ textarea.form-control {
   width: 100%;
 }
 
-.search-wrapper i {
+.search-wrapper i,
+.search-wrapper svg {
   position: absolute;
   left: 12px;
   top: 50%;
@@ -2176,7 +2187,8 @@ textarea.form-control {
   box-shadow: var(--shadow-sm);
 }
 
-.btn-fr i {
+.btn-fr i,
+.btn-fr svg {
   width: 18px;
   height: 18px;
   color: var(--text-secondary);
@@ -2191,7 +2203,8 @@ textarea.form-control {
   box-shadow: 0 4px 15px rgba(255, 107, 0, 0.2);
 }
 
-.btn-fr:hover i {
+.btn-fr:hover i,
+.btn-fr:hover svg {
   color: var(--color-primary);
   transform: scale(1.1);
 }
@@ -2448,7 +2461,7 @@ select.payroll-col-filter {
   border: none;
   color: var(--text-tertiary);
   cursor: pointer;
-  padding: 2px;
+  padding: 1.5px;
   border-radius: 4px;
   display: flex;
   align-items: center;
@@ -2474,11 +2487,13 @@ select.payroll-col-filter {
   box-shadow: 0 0 0 1px rgba(255, 107, 0, 0.2);
 }
 
-.filter-trigger-btn i {
-  width: 11px;
-  height: 11px;
+.filter-trigger-btn i,
+.filter-trigger-btn svg {
+  width: 8px;
+  height: 8px;
   pointer-events: none;
 }
+
 
 
 /* Floating popover dropdown */

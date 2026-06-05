@@ -1920,16 +1920,38 @@ app.get('/api/export/payroll/excel', async (req, res) => {
       );
     }
     
-    // Sort alphabetically by worker name
-    list.sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+    // Group & Sort: Daily Wages Staff first, then Welders, then Office Staff, and finally by User ID
+    function getCategoryGroup(modeOfWork) {
+      const mode = (modeOfWork || '').toLowerCase();
+      if (mode.includes('daily') && mode.includes('wages')) {
+        return 1; // Daily Wages Staff
+      } else if (mode.includes('welder')) {
+        return 2; // Welders
+      } else if (mode.includes('office')) {
+        return 3; // Office Staff
+      } else {
+        return 4; // Others
+      }
+    }
+
+    list.sort((a, b) => {
+      const groupA = getCategoryGroup(a.modeOfWork);
+      const groupB = getCategoryGroup(b.modeOfWork);
+      if (groupA !== groupB) {
+        return groupA - groupB;
+      }
+      const idA = a.userId || "";
+      const idB = b.userId || "";
+      return idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
+    });
     
     const ExcelJS = require('exceljs');
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet(`Salary Sheet ${targetMonth}`);
     
-    // Exact Headers as per requested monthly payroll order
+    // Exact Headers as per requested monthly payroll order (removed "No")
     const headers = [
-      "No", "Mode of Work", "User ID", "Employee Name", "Basic", "DA", "Other Allowances", 
+      "Mode of Work", "User ID", "Employee Name", "Basic", "DA", "Other Allowances", 
       "Monthly Wages", "Actual Working days", "Days Worked", "Daily Wages", "LOP Days", "LOP Amount", 
       "OT Hours", "OT Amount", "Travel Time(hrs)", "Travel Time Amount", 
       "Extra Days", "Extra Day Amount", "Missing Days", "Missing Days Amount", 
@@ -1939,12 +1961,11 @@ app.get('/api/export/payroll/excel', async (req, res) => {
     worksheet.addRow(headers);
     
     // Add row data
-    list.forEach((row, idx) => {
+    list.forEach((row) => {
       const isOfficeStaff = row.modeOfWork && row.modeOfWork.toLowerCase().trim() === 'office staff';
       const isDaily = !isOfficeStaff;
       
       worksheet.addRow([
-        idx + 1,
         row.modeOfWork || "—",
         row.userId || "—",
         row.employeeName,
@@ -1980,8 +2001,8 @@ app.get('/api/export/payroll/excel', async (req, res) => {
     // Append summary row
     const totalRowObj = worksheet.addRow([]);
     totalRowObj.getCell(1).value = "Total";
-    totalRowObj.getCell(26).value = { formula: `=SUM(Z2:Z${lastDataRow})` };
-    totalRowObj.getCell(27).value = "";
+    totalRowObj.getCell(25).value = { formula: `=SUM(Y2:Y${lastDataRow})` };
+    totalRowObj.getCell(26).value = "";
     
     // Auto-fit column widths for premium feel!
     worksheet.columns.forEach(col => {
@@ -2034,7 +2055,7 @@ app.get('/api/export/payroll/excel', async (req, res) => {
             cell.alignment = { vertical: 'middle', horizontal: 'left' };
           }
           
-          if (colNum === 26) {
+          if (colNum === 25) {
             cell.numFormat = '"₹"#,##0.00';
             cell.alignment = { vertical: 'middle', horizontal: 'right' };
             cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
@@ -2053,20 +2074,20 @@ app.get('/api/export/payroll/excel', async (req, res) => {
           cell.font = { name: 'Segoe UI', size: 10 };
           cell.alignment = { vertical: 'middle', horizontal: 'center' };
           
-          // Left-align User ID (3) and Name (4)
-          if (colNum === 3 || colNum === 4) {
+          // Left-align User ID (2) and Name (3)
+          if (colNum === 2 || colNum === 3) {
             cell.alignment = { vertical: 'middle', horizontal: 'left' };
           }
           
           // Currency / Number formatting for financial columns
-          const currencyCols = [5, 6, 7, 8, 11, 13, 15, 17, 19, 21, 23, 24, 25, 26];
+          const currencyCols = [4, 5, 6, 7, 10, 12, 14, 16, 18, 20, 22, 23, 24, 25];
           if (currencyCols.includes(colNum)) {
             cell.numFormat = '"₹"#,##0.00';
             cell.alignment = { vertical: 'middle', horizontal: 'right' };
           }
           
-          // Elegant light green background and bold green text for the Net Salary payout cell (Col 26)!
-          if (colNum === 26) {
+          // Elegant light green background and bold green text for the Net Salary payout cell (Col 25)!
+          if (colNum === 25) {
             cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
             cell.fill = {
               type: 'pattern',
