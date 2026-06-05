@@ -2349,9 +2349,11 @@ select.payroll-col-filter {
 .tab-view#tab-sites {
   overflow-y: auto !important;
   flex-grow: 1;
+  flex-shrink: 1;
   min-height: 0;
   height: auto !important;
 }
+
 
 /* Layout table tab views as flex containers to let table card fill remaining height */
 .tab-view#tab-payroll,
