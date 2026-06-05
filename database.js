@@ -1015,7 +1015,18 @@ class Database {
     return adj;
   }
 
-  getMonthlySalarySheet(monthStr) {
+  getMonthlySalarySheet(startDate, endDate = null) {
+    if (!endDate) {
+      // It's a monthStr (e.g. "2026-03")
+      const monthStr = startDate;
+      const parts = monthStr.split('-');
+      const year = parseInt(parts[0]);
+      const month = parseInt(parts[1]);
+      const numDays = new Date(year, month, 0).getDate();
+      startDate = `${monthStr}-01`;
+      endDate = `${monthStr}-${String(numDays).padStart(2, '0')}`;
+    }
+    const monthStr = startDate.substring(0, 7);
     const db = this.read();
     const employees = (db.employees || []).filter(e => e && e.status === 'active');
     const adjs = this.getPayrollAdjustments(monthStr);
@@ -1031,30 +1042,36 @@ class Database {
     const esicContributionRate = settings.esicContributionRate !== undefined ? Number(settings.esicContributionRate) : 0.75;
     const ptDeductionStandard = settings.ptDeductionStandard !== undefined ? Number(settings.ptDeductionStandard) : 200.00;
     
-    // Fetch all attendance logs for the given month
-    const parts = monthStr.split('-');
-    const year = parseInt(parts[0]);
-    const month = parseInt(parts[1]);
-    
-    const numDays = new Date(year, month, 0).getDate();
-    const startDate = `${monthStr}-01`;
-    const endDate = `${monthStr}-${String(numDays).padStart(2, '0')}`;
-    
     const attendanceLogs = this.getAttendanceForRange(startDate, endDate);
     
     return employees.map(emp => {
       // Find saved adjustments
       const adj = adjs.find(a => a.employeeId === emp.id) || {};
       
-      const actualSalary = Number(emp.monthlyWage) || (Number(emp.dailyRate) * 26) || 0.0;
+      const isOfficeStaff = emp.modeOfWork && emp.modeOfWork.toLowerCase().trim() === 'office staff';
+      const defaultStdDays = isOfficeStaff ? 30 : 26;
+      
+      // Default Std Working Days
+      const stdWorkingDays = adj.stdWorkingDays !== undefined ? Number(adj.stdWorkingDays) : defaultStdDays;
+      
+      const isDailyWageWorker = emp.modeOfWork && (
+        emp.modeOfWork.toLowerCase().includes('daily wages') || 
+        emp.modeOfWork.toLowerCase().includes('welder')
+      );
+      
+      let actualSalary = 0.0;
+      if (isDailyWageWorker) {
+        // Strict daily-wage calculation, ignore monthly wages completely
+        actualSalary = (Number(emp.dailyRate) || 0.0) * stdWorkingDays;
+      } else {
+        actualSalary = Number(emp.monthlyWage) || (Number(emp.dailyRate) * stdWorkingDays) || 0.0;
+      }
+      
       const basic = Number((actualSalary * basicRatio).toFixed(2));
       const da = Number((actualSalary * daRatio).toFixed(2));
       const allowances = Number((actualSalary * allowancesRatio).toFixed(2));
       
-      // Default Std Working Days
-      const stdWorkingDays = adj.stdWorkingDays !== undefined ? Number(adj.stdWorkingDays) : (Number(emp.stdWorkingDays) || 30);
-      
-      const dailyRate = Number((actualSalary / stdWorkingDays).toFixed(2));
+      const dailyRate = isDailyWageWorker ? (Number(emp.dailyRate) || 0.0) : Number((actualSalary / stdWorkingDays).toFixed(2));
       const dailyBasic = Number((basic / stdWorkingDays).toFixed(2));
       const dailyDa = Number((da / stdWorkingDays).toFixed(2));
       const dailyAllowances = Number((allowances / stdWorkingDays).toFixed(2));
@@ -1074,7 +1091,6 @@ class Database {
       
       // OT Hours: Sum of otHours from logs (unless overridden)
       let defaultOtHours = 0.0;
-      const isOfficeStaff = emp.modeOfWork && emp.modeOfWork.toLowerCase().trim() === 'office staff';
       if (!isOfficeStaff) {
         empLogs.forEach(log => {
           if (log.status === 'completed' && log.otHours > 0) {

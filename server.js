@@ -1699,7 +1699,10 @@ app.post('/api/checkin/web', async (req, res) => {
 
 // --- Monthly Salary Payroll Routes ---
 app.get('/api/payroll', (req, res) => {
-  const { month } = req.query;
+  const { month, startDate, endDate } = req.query;
+  if (startDate && endDate) {
+    return res.json(database.getMonthlySalarySheet(startDate, endDate));
+  }
   const targetMonth = month || new Date().toISOString().substring(0, 7); // e.g. "2026-03"
   res.json(database.getMonthlySalarySheet(targetMonth));
 });
@@ -1892,11 +1895,17 @@ app.get('/api/export/excel', (req, res) => {
 
 // Premium Monthly Salary Sheet Excel (.xlsx) Exporter
 app.get('/api/export/payroll/excel', async (req, res) => {
-  const { month, search, mode } = req.query;
-  const targetMonth = month || new Date().toISOString().substring(0, 7);
+  const { month, startDate, endDate, search, mode } = req.query;
+  let targetMonth = month || new Date().toISOString().substring(0, 7);
 
   try {
-    let list = database.getMonthlySalarySheet(targetMonth);
+    let list;
+    if (startDate && endDate) {
+      list = database.getMonthlySalarySheet(startDate, endDate);
+      targetMonth = `${startDate}_to_${endDate}`;
+    } else {
+      list = database.getMonthlySalarySheet(targetMonth);
+    }
     
     // Apply filters matching the live UI view exactly!
     if (mode) {

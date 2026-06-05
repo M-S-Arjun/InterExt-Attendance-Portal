@@ -2144,26 +2144,59 @@ function toggleSidebar() {
 // ==========================================================================
 
 async function loadPayrollSheet() {
-  const monthInput = document.getElementById('payroll-month');
-  if (!monthInput) return;
-  const month = monthInput.value || new Date().toISOString().substring(0, 7);
+  const startEl = document.getElementById('payroll-start-date');
+  const endEl = document.getElementById('payroll-end-date');
+  if (!startEl || !endEl) return;
+  
+  if (!startEl.value || !endEl.value) {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    startEl.value = firstDay.toISOString().split('T')[0];
+    endEl.value = lastDay.toISOString().split('T')[0];
+  }
+  
+  const start = startEl.value;
+  const end = endEl.value;
   
   const tbody = document.getElementById('payroll-table-body');
   if (tbody) {
-    tbody.innerHTML = `<tr><td colspan="25" style="text-align: center; color: var(--text-secondary);"><i data-lucide="loader" class="animate-spin" style="display:inline-block; margin-right:8px; vertical-align:middle; width: 16px; height: 16px;"></i>Loading payroll records...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="28" style="text-align: center; color: var(--text-secondary);"><i data-lucide="loader" class="animate-spin" style="display:inline-block; margin-right:8px; vertical-align:middle; width: 16px; height: 16px;"></i>Loading payroll records...</td></tr>`;
     if (window.lucide) window.lucide.createIcons();
   }
   
   try {
-    const res = await fetch(`/api/payroll?month=${month}`).then(r => r.json());
+    const res = await fetch(`/api/payroll?startDate=${start}&endDate=${end}`).then(r => r.json());
     state.payroll = res;
+    
+    // Dynamically populate column filter dropdown values
+    const currentModeSelection = document.getElementById('pay-col-filter-mode')?.value;
+    const currentCompanySelection = document.getElementById('pay-col-filter-company')?.value;
+
+    const modes = [...new Set(res.map(r => r.modeOfWork).filter(Boolean))].sort();
+    const modeSelect = document.getElementById('pay-col-filter-mode');
+    if (modeSelect) {
+      modeSelect.innerHTML = '<option value="">All</option>' + modes.map(m => `<option value="${m}">${m}</option>`).join('');
+      if (currentModeSelection && modes.includes(currentModeSelection)) {
+        modeSelect.value = currentModeSelection;
+      }
+    }
+    const companies = [...new Set(res.map(r => r.company).filter(Boolean))].sort();
+    const companySelect = document.getElementById('pay-col-filter-company');
+    if (companySelect) {
+      companySelect.innerHTML = '<option value="">All</option>' + companies.map(c => `<option value="${c}">${c}</option>`).join('');
+      if (currentCompanySelection && companies.includes(currentCompanySelection)) {
+        companySelect.value = currentCompanySelection;
+      }
+    }
+
     renderPayrollTable(res);
     // Apply active filter configuration on load
     applyFiltersPayroll();
   } catch (err) {
     console.error("Failed to load payroll sheet:", err);
     if (tbody) {
-      tbody.innerHTML = `<tr><td colspan="25" style="text-align: center; color: var(--color-error);">Error loading payroll sheet: ${err.message}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="28" style="text-align: center; color: var(--color-error);">Error loading payroll sheet: ${err.message}</td></tr>`;
     }
   }
 }
@@ -2187,11 +2220,22 @@ function updatePayrollTotalSum() {
   }
 }
 
-// Monthly Payroll Filter Engine & Input Protection Toggler
+// Monthly Payroll Filter Engine & Column-level Matching
 function applyFiltersPayroll() {
-  const searchQuery = document.getElementById('pay-search-input')?.value.toLowerCase().trim() || '';
-  const modeFilter = document.getElementById('pay-filter-mode')?.value || '';
+  const filterInputs = document.querySelectorAll('.payroll-col-filter');
+  const activeFilters = [];
   
+  filterInputs.forEach(input => {
+    const val = input.value.toLowerCase().trim();
+    if (val) {
+      activeFilters.push({
+        colIdx: parseInt(input.dataset.colIdx),
+        value: val,
+        tagName: input.tagName.toLowerCase()
+      });
+    }
+  });
+
   const rows = document.querySelectorAll('#payroll-table-body tr');
   if (rows.length === 0) return;
   
@@ -2202,26 +2246,40 @@ function applyFiltersPayroll() {
     if (tr.id === 'payroll-no-match-row') return;
     if (tr.cells.length === 1 && tr.cells[0].colSpan > 10) return; // ignore loading spinner row
     
-    const empId = tr.dataset.empId;
-    const empPayrollData = state.payroll.find(p => p.employeeId === empId);
-    if (!empPayrollData) return;
+    let matchesAll = true;
     
-    let matchesSearch = true;
-    let matchesMode = true;
-    
-    if (modeFilter) {
-      matchesMode = empPayrollData.modeOfWork === modeFilter;
+    for (const filter of activeFilters) {
+      const cell = tr.cells[filter.colIdx];
+      if (!cell) {
+        matchesAll = false;
+        break;
+      }
+      
+      let cellText = "";
+      const inputInside = cell.querySelector('input');
+      if (inputInside) {
+        cellText = inputInside.value;
+      } else {
+        cellText = cell.textContent;
+      }
+      cellText = cellText.toLowerCase().trim();
+      
+      if (filter.tagName === 'select') {
+        if (cellText !== filter.value) {
+          matchesAll = false;
+          break;
+        }
+      } else {
+        const cleanCellText = cellText.replace(/[₹,]/g, '');
+        const cleanFilterVal = filter.value.replace(/[₹,]/g, '');
+        if (!cleanCellText.includes(cleanFilterVal)) {
+          matchesAll = false;
+          break;
+        }
+      }
     }
     
-    if (searchQuery) {
-      matchesSearch = (
-        empPayrollData.employeeName.toLowerCase().includes(searchQuery) ||
-        (empPayrollData.userId && empPayrollData.userId.toLowerCase().includes(searchQuery)) ||
-        (empPayrollData.modeOfWork && empPayrollData.modeOfWork.toLowerCase().includes(searchQuery))
-      );
-    }
-    
-    if (matchesSearch && matchesMode) {
+    if (matchesAll) {
       tr.style.display = '';
       visibleCount++;
     } else {
@@ -2229,12 +2287,11 @@ function applyFiltersPayroll() {
     }
   });
   
-  // Render clean empty state warning
   if (visibleCount === 0) {
     if (!noMatchRow) {
       noMatchRow = document.createElement('tr');
       noMatchRow.id = 'payroll-no-match-row';
-      noMatchRow.innerHTML = `<td colspan="28" style="text-align: center; color: var(--text-tertiary); font-weight: 500;">No payroll records match the search query or mode of work filter.</td>`;
+      noMatchRow.innerHTML = `<td colspan="28" style="text-align: center; color: var(--text-tertiary); font-weight: 500;">No payroll records match the filter criteria.</td>`;
       document.getElementById('payroll-table-body').appendChild(noMatchRow);
     } else {
       noMatchRow.style.display = '';
@@ -2347,12 +2404,21 @@ function recalculatePayrollRow(inputEl) {
   
   const salaryAdvance = Number(tr.querySelector('.input-salary-advance').value) || 0;
 
-  const dailyRate = Number((actualSalary / stdWorkingDays).toFixed(2));
+  const modeOfWorkCell = tr.cells[1];
+  const modeOfWork = modeOfWorkCell ? modeOfWorkCell.textContent.toLowerCase().trim() : '';
+  const isDailyWageWorker = modeOfWork.includes('daily wages') || modeOfWork.includes('welder');
+
+  const dailyRate = isDailyWageWorker ? (Number(tr.querySelector('.cell-daily-wages').dataset.val) || 0) : Number((actualSalary / stdWorkingDays).toFixed(2));
   
+  let actualSalaryCalculated = actualSalary;
+  if (isDailyWageWorker) {
+    actualSalaryCalculated = dailyRate * stdWorkingDays;
+  }
+
   // Calculate component basics dynamically using settings
-  const basic = Number((actualSalary * basicRatio).toFixed(2));
-  const da = Number((actualSalary * daRatio).toFixed(2));
-  const allowances = Number((actualSalary * allowancesRatio).toFixed(2));
+  const basic = Number((actualSalaryCalculated * basicRatio).toFixed(2));
+  const da = Number((actualSalaryCalculated * daRatio).toFixed(2));
+  const allowances = Number((actualSalaryCalculated * allowancesRatio).toFixed(2));
   
   const hourlyRate = Number((dailyRate / 8).toFixed(2));
 
@@ -2363,7 +2429,7 @@ function recalculatePayrollRow(inputEl) {
   const workingDays = Number((stdWorkingDays - lopDays).toFixed(2));
 
   // amount = Gross Salary * (Working Days / Std Working days)
-  const amount = Number((actualSalary * (workingDays / stdWorkingDays)).toFixed(2));
+  const amount = Number((actualSalaryCalculated * (workingDays / stdWorkingDays)).toFixed(2));
 
   // OT Payout using overtimeRateMultiplier
   const otPayout = Number((otHours * hourlyRate * overtimeRateMultiplier).toFixed(2));
@@ -2394,6 +2460,9 @@ function recalculatePayrollRow(inputEl) {
     }
   };
 
+  if (isDailyWageWorker) {
+    updateCell('.cell-actual-salary', actualSalaryCalculated);
+  }
   updateCell('.cell-basic', basic);
   updateCell('.cell-da', da);
   updateCell('.cell-allowances', allowances);
@@ -2416,9 +2485,8 @@ async function savePayrollAdjustments() {
   const rows = document.querySelectorAll('#payroll-table-body tr');
   if (rows.length === 0) return;
 
-  const monthInput = document.getElementById('payroll-month');
-  if (!monthInput) return;
-  const month = monthInput.value || new Date().toISOString().substring(0, 7);
+  const startEl = document.getElementById('payroll-start-date');
+  const month = startEl && startEl.value ? startEl.value.substring(0, 7) : new Date().toISOString().substring(0, 7);
 
   const adjustments = [];
   rows.forEach(tr => {
@@ -2471,17 +2539,20 @@ async function savePayrollAdjustments() {
 }
 
 function exportPayrollExcelSheet() {
-  const monthInput = document.getElementById('payroll-month');
-  if (!monthInput) return;
-  const month = monthInput.value || new Date().toISOString().substring(0, 7);
+  const startEl = document.getElementById('payroll-start-date');
+  const endEl = document.getElementById('payroll-end-date');
+  if (!startEl || !endEl) return;
   
-  const searchQuery = document.getElementById('pay-search-input')?.value.trim() || '';
-  const modeFilter = document.getElementById('pay-filter-mode')?.value || '';
-
-  let downloadUrl = `/api/export/payroll/excel?month=${month}`;
-  if (searchQuery) downloadUrl += `&search=${encodeURIComponent(searchQuery)}`;
-  if (modeFilter) downloadUrl += `&mode=${encodeURIComponent(modeFilter)}`;
-
+  let downloadUrl = `/api/export/payroll/excel?startDate=${startEl.value}&endDate=${endEl.value}`;
+  
+  // Pass active filters to customize the exported excel sheet!
+  const modeVal = document.getElementById('pay-col-filter-mode')?.value || '';
+  if (modeVal) downloadUrl += `&mode=${encodeURIComponent(modeVal)}`;
+  
+  const nameInput = document.querySelector('.payroll-col-filter[data-col-idx="3"]');
+  const nameSearch = nameInput ? nameInput.value.trim() : '';
+  if (nameSearch) downloadUrl += `&search=${encodeURIComponent(nameSearch)}`;
+  
   window.location.href = downloadUrl;
 }
 

@@ -793,12 +793,16 @@
               <h3><i data-lucide="wallet"></i> Monthly Salary Sheets</h3>
               <p>Calculate component-wise salaries, LOP deductions, custom advances, and export summaries</p>
             </div>
-            <div class="header-right flex-filters">
-              <div class="filter-group">
-                <label>Target Month</label>
-                <input type="month" id="payroll-month" class="form-control" onchange="loadPayrollSheet()">
+            <div class="header-right flex-filters" style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <div class="filter-group" style="margin-bottom: 0;">
+                <label style="margin-bottom: 4px; font-size: 0.8rem; font-weight: 600;">Start Date</label>
+                <input type="date" id="payroll-start-date" class="form-control" onchange="loadPayrollSheet()">
               </div>
-              <div class="filter-buttons">
+              <div class="filter-group" style="margin-bottom: 0;">
+                <label style="margin-bottom: 4px; font-size: 0.8rem; font-weight: 600;">End Date</label>
+                <input type="date" id="payroll-end-date" class="form-control" onchange="loadPayrollSheet()">
+              </div>
+              <div class="filter-buttons" style="margin-top: 18px;">
                 <button class="btn btn-secondary btn-icon" onclick="savePayrollAdjustments()"><i data-lucide="save"></i> Save Sheet</button>
                 <button class="btn btn-primary btn-icon" onclick="exportPayrollExcelSheet()"><i data-lucide="file-spreadsheet"></i> Export Excel</button>
               </div>
@@ -852,6 +856,44 @@
                   <th style="width: 135px;">Net Payable</th>
                   <th style="width: 140px;">Company</th>
                   <th style="width: 90px;">Actions</th>
+                </tr>
+                <tr class="filter-row" style="background: var(--bg-secondary); border-bottom: 1px solid var(--border-color);">
+                  <th></th>
+                  <th>
+                    <select class="payroll-col-filter table-control-select" id="pay-col-filter-mode" data-col-idx="1" onchange="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);">
+                      <option value="">All</option>
+                    </select>
+                  </th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="2" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="3" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="4" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="5" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="6" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="7" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="8" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="9" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="10" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="11" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="12" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="13" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="14" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="15" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="16" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="17" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="18" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="19" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="20" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="21" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="22" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="23" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="24" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th><input type="text" class="payroll-col-filter form-control" data-col-idx="25" placeholder="Filter..." oninput="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);"></th>
+                  <th>
+                    <select class="payroll-col-filter table-control-select" id="pay-col-filter-company" data-col-idx="26" onchange="applyFiltersPayroll()" style="width: 100%; height: 28px; padding: 2px 6px; font-size: 0.8rem; background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); border-radius: 4px; color: var(--text-primary);">
+                      <option value="">All</option>
+                    </select>
+                  </th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody id="payroll-table-body">
