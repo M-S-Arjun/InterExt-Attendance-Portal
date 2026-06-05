@@ -3960,3 +3960,65 @@ function initEmployeeWageAutoCalculation() {
   empShiftEnd.addEventListener('input', calculateWages);
 }
 
+// ==========================================================================
+// EXCEL-LIKE FLOATING COLUMN FILTERS UTILS
+// ==========================================================================
+
+// Toggle filter dropdown menu visibility
+function toggleFilterDropdown(event, btn) {
+  event.stopPropagation();
+  event.preventDefault();
+  
+  const container = btn.closest('.filter-dropdown-container');
+  if (!container) return;
+  
+  const content = container.querySelector('.filter-dropdown-content');
+  if (!content) return;
+  
+  const isShown = content.classList.contains('show');
+  
+  // Close all other filter dropdowns
+  document.querySelectorAll('.filter-dropdown-content.show').forEach(el => {
+    if (el !== content) {
+      el.classList.remove('show');
+    }
+  });
+  
+  if (isShown) {
+    content.classList.remove('show');
+  } else {
+    content.classList.add('show');
+    // Focus the input inside
+    const input = content.querySelector('input, select');
+    if (input) {
+      input.focus();
+    }
+  }
+}
+
+// Update active filter styling indicator
+function updateFilterIndicator(input) {
+  const container = input.closest('.filter-dropdown-container');
+  if (!container) return;
+  
+  const btn = container.querySelector('.filter-trigger-btn');
+  if (!btn) return;
+  
+  const val = input.value.trim();
+  if (val) {
+    btn.classList.add('filter-active');
+  } else {
+    btn.classList.remove('filter-active');
+  }
+}
+
+// Global click handler to close open dropdowns on outside clicks
+document.addEventListener('click', function(event) {
+  if (!event.target.closest('.filter-dropdown-container')) {
+    document.querySelectorAll('.filter-dropdown-content.show').forEach(el => {
+      el.classList.remove('show');
+    });
+  }
+});
+
+

@@ -2332,5 +2332,220 @@ select.payroll-col-filter {
   border-color: var(--color-primary);
 }
 
+/* ==========================================================================
+   EXCEL-LIKE FLOATING COLUMN FILTERS & STICKY DASHBOARD HEADINGS
+   ========================================================================== */
+
+/* Lock the outer layout so the page header, tabs, and sidebar never scroll */
+.main-content {
+  overflow: hidden !important;
+}
+
+/* Enable individual scrolling on tab views that need it */
+.tab-view#tab-dashboard,
+.tab-view#tab-settings,
+.tab-view#tab-cctv {
+  overflow-y: auto !important;
+  height: 100%;
+}
+
+/* Layout table tab views as flex containers to let table card fill remaining height */
+.tab-view#tab-payroll,
+.tab-view#tab-employees,
+.tab-view#tab-logs,
+.tab-view#tab-selfies {
+  display: none;
+  height: 100%;
+  overflow: hidden !important;
+}
+
+.tab-view#tab-payroll.active,
+.tab-view#tab-employees.active,
+.tab-view#tab-logs.active,
+.tab-view#tab-selfies.active {
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-view#tab-payroll .glass-card,
+.tab-view#tab-employees .glass-card,
+.tab-view#tab-logs .glass-card,
+.tab-view#tab-selfies .glass-card {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  flex-shrink: 1;
+  min-height: 0;
+  margin-bottom: 0;
+  overflow: hidden;
+}
+
+
+/* Force horizontal & vertical scrolls to happen internally inside the table card */
+.tab-view#tab-payroll .overflow-x,
+.tab-view#tab-employees .overflow-x,
+.tab-view#tab-logs .overflow-x,
+.tab-view#tab-selfies .overflow-x {
+  flex-grow: 1;
+  overflow-y: auto !important;
+  overflow-x: auto !important;
+  min-height: 0;
+  height: auto !important;
+  border-radius: 0;
+  border-top: 1px solid var(--glass-border);
+}
+
+/* Wrapper inside <th> to align heading label and filter button side-by-side */
+.header-cell-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  position: relative;
+}
+
+.header-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-grow: 1;
+  text-align: left;
+}
+
+/* Dropdown Container relative to <th> */
+.filter-dropdown-container {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* Premium Filter Funnel/List button */
+.filter-trigger-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  outline: none;
+}
+
+.filter-trigger-btn:hover {
+  color: var(--text-primary);
+  background-color: var(--glass-highlight);
+}
+
+.filter-trigger-btn.active {
+  color: var(--color-primary) !important;
+  background-color: rgba(255, 107, 0, 0.1) !important;
+}
+
+/* When a filter is actively filtering, highlight the icon orange */
+.filter-trigger-btn.filter-active {
+  color: var(--color-primary) !important;
+  background-color: rgba(255, 107, 0, 0.12) !important;
+  box-shadow: 0 0 0 1px rgba(255, 107, 0, 0.2);
+}
+
+.filter-trigger-btn i {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+
+/* Floating popover dropdown */
+.filter-dropdown-content {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-sm);
+  padding: 12px;
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  min-width: 200px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.filter-dropdown-content.show {
+  display: block;
+  animation: dropdownFadeIn 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.filter-dropdown-content label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.filter-dropdown-content input[type="text"],
+.filter-dropdown-content select {
+  width: 100%;
+  height: 28px;
+  background-color: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--glass-border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.8rem;
+  padding: 2px 8px;
+  outline: none;
+  transition: var(--transition-fast);
+}
+
+.filter-dropdown-content input[type="text"]:focus,
+.filter-dropdown-content select:focus {
+  border-color: var(--color-primary);
+  background-color: var(--bg-tertiary);
+  box-shadow: 0 0 0 2px var(--focus-shadow);
+}
+
+/* Light Theme tweaks for Excel filter dropdowns */
+:root.light-theme .filter-dropdown-content {
+  background-color: rgba(255, 255, 255, 0.95);
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+}
+
+:root.light-theme .filter-dropdown-content label {
+  color: var(--text-secondary);
+}
+
+:root.light-theme .filter-dropdown-content input[type="text"],
+:root.light-theme .filter-dropdown-content select {
+  background-color: #ffffff;
+  border-color: rgba(0, 0, 0, 0.15);
+  color: var(--text-primary);
+}
+
+:root.light-theme .filter-dropdown-content input[type="text"]:focus,
+:root.light-theme .filter-dropdown-content select:focus {
+  background-color: #ffffff;
+  border-color: var(--color-primary);
+}
+
 
 
