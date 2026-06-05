@@ -2489,8 +2489,8 @@ select.payroll-col-filter {
 
 .filter-trigger-btn i,
 .filter-trigger-btn svg {
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   pointer-events: none;
 }
 
