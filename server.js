@@ -255,10 +255,22 @@ app.get('/api/settings', (req, res) => {
 
 app.post('/api/settings', (req, res) => {
   const settingsData = { ...req.body };
-  // Enforce and lock the WhatsApp group name strictly to "ATTENDANCE"
-  settingsData.whatsappGroupName = "ATTENDANCE";
+  
+  // Format the group names list cleanly (comma-separated, trimmed)
+  if (settingsData.whatsappGroupName) {
+    settingsData.whatsappGroupName = settingsData.whatsappGroupName
+      .split(',')
+      .map(name => name.trim())
+      .filter(Boolean)
+      .join(', ');
+  } else {
+    settingsData.whatsappGroupName = "ATTENDANCE";
+  }
+
   const settings = database.saveSettings(settingsData);
-  if (whatsapp && typeof whatsapp.resolveGroupId === 'function') {
+  if (whatsapp && typeof whatsapp.resolveGroupIds === 'function') {
+    whatsapp.resolveGroupIds().catch(err => console.error("Error resolving group IDs live:", err));
+  } else if (whatsapp && typeof whatsapp.resolveGroupId === 'function') {
     whatsapp.resolveGroupId().catch(err => console.error("Error resolving group ID live:", err));
   }
   res.json(settings);
@@ -2253,9 +2265,19 @@ whatsapp.on('raw_message', (data) => {
     const settings = database.getSettings();
     if (!settings || !data) return;
 
+    const targetGroupIds = (settings.whatsappGroupId || '')
+      .split(',')
+      .map(id => id.trim())
+      .filter(Boolean);
+
+    const targetGroupNames = (settings.whatsappGroupName || '')
+      .split(',')
+      .map(name => name.trim().toLowerCase())
+      .filter(Boolean);
+
     // Prefer matching by explicit groupId if the admin has saved it (robust against renames)
-    if (settings.whatsappGroupId && data.groupId) {
-      if (settings.whatsappGroupId === data.groupId) {
+    if (targetGroupIds.length > 0 && data.groupId) {
+      if (targetGroupIds.includes(data.groupId)) {
         addToRecentMessages('raw', data);
         io.emit('whatsapp_raw', data);
       }
@@ -2263,8 +2285,8 @@ whatsapp.on('raw_message', (data) => {
     }
 
     // Fallback: match by group name (case-insensitive)
-    if (settings.whatsappGroupName && data.groupName) {
-      if (data.groupName.trim().toLowerCase() === settings.whatsappGroupName.trim().toLowerCase()) {
+    if (targetGroupNames.length > 0 && data.groupName) {
+      if (targetGroupNames.includes(data.groupName.trim().toLowerCase())) {
         addToRecentMessages('raw', data);
         io.emit('whatsapp_raw', data);
       }

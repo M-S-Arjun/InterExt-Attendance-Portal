@@ -377,18 +377,36 @@ class WhatsAppManager extends EventEmitter {
       }
 
       const settings = database.getSettings();
-      // Ensure the system only monitors the group named "ATTENDANCE"
-      const targetGroupName = 'ATTENDANCE';
+      const targetGroupNames = (settings.whatsappGroupName || 'ATTENDANCE')
+        .split(',')
+        .map(name => name.trim().toLowerCase())
+        .filter(Boolean);
+
+      const targetGroupIds = (settings.whatsappGroupId || '')
+        .split(',')
+        .map(id => id.trim())
+        .filter(Boolean);
 
       let groupName = this.groupNameCache[chatId];
       let groupId = this.groupIdCache[chatId];
 
       if (!groupName) {
-        if (settings.whatsappGroupId && chatId === settings.whatsappGroupId) {
-          groupName = targetGroupName;
-          groupId = settings.whatsappGroupId;
-          this.groupNameCache[chatId] = groupName;
-          this.groupIdCache[chatId] = groupId;
+        if (targetGroupIds.includes(chatId)) {
+          console.log(`[Message Processor] Resolving group chat for ID: ${chatId}...`);
+          try {
+            const chat = await Promise.race([
+              message.getChat(),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("getChat timeout")), 8000))
+            ]);
+            if (chat && chat.isGroup) {
+              groupName = chat.name.trim();
+              groupId = chat.id && chat.id._serialized ? chat.id._serialized : chat.id;
+              this.groupNameCache[chatId] = groupName;
+              this.groupIdCache[chatId] = groupId;
+            }
+          } catch (e) {
+            console.error(`[Message Processor] Failed to resolve group chat for ID ${chatId}:`, e.message);
+          }
         } else {
           console.log(`[Message Processor] Resolving group chat for ID: ${chatId}...`);
           try {
@@ -409,17 +427,16 @@ class WhatsAppManager extends EventEmitter {
         }
       }
 
-      // Enforce matching strictly the "ATTENDANCE" group (case-insensitive)
-      if (!groupName || groupName.toLowerCase() !== targetGroupName.toLowerCase()) {
+      // Enforce matching strictly the target groups (case-insensitive)
+      if (!groupName || !targetGroupNames.includes(groupName.toLowerCase())) {
         return;
       }
 
-      // Auto-heal group JID in settings if mismatched
-      if (settings.whatsappGroupId !== groupId) {
-        console.log(`[Auto-Heal] Group ID mismatch. Updating cached JID in settings from "${settings.whatsappGroupId}" to: "${groupId}"`);
-        settings.whatsappGroupId = groupId;
-        settings.whatsappGroupName = targetGroupName;
-        database.saveSettings(settings);
+      // Auto-heal group JIDs in settings if missing
+      if (groupId && !targetGroupIds.includes(groupId)) {
+        console.log(`[Auto-Heal] Group ID missing in settings. Adding JID "${groupId}" to settings.`);
+        const updatedIds = [...targetGroupIds, groupId].join(', ');
+        database.saveSettings({ ...settings, whatsappGroupId: updatedIds });
       }
 
       const isMatchingGroup = true;
@@ -591,31 +608,46 @@ class WhatsAppManager extends EventEmitter {
     }
   }
 
-  // Live resolve stable Group ID by configured Group Name
-  async resolveGroupId() {
-    if (this.status !== 'ready') return null;
+  // Live resolve stable Group IDs by configured Group Names
+  async resolveGroupIds() {
+    if (this.status !== 'ready') return [];
     try {
       const settings = database.getSettings();
-      const targetGroupName = 'ATTENDANCE';
+      const targetGroupNames = (settings.whatsappGroupName || 'ATTENDANCE')
+        .split(',')
+        .map(name => name.trim().toLowerCase())
+        .filter(Boolean);
       
-      console.log(`[Startup] Resolving stable Group ID strictly for "${targetGroupName}"...`);
+      console.log(`[Startup] Resolving stable Group IDs for: ${targetGroupNames.join(', ')}`);
       const chats = await this.client.getChats();
-      const matchedGroup = chats.find(c => c.isGroup && c.name && c.name.trim().toLowerCase() === targetGroupName.toLowerCase());
-      if (matchedGroup) {
-        const gid = matchedGroup.id._serialized;
-        if (settings.whatsappGroupId !== gid || settings.whatsappGroupName !== targetGroupName) {
-          console.log(`[Startup] Group resolved. Saving stable ID and name to settings: ${gid}`);
-          database.saveSettings({ ...settings, whatsappGroupId: gid, whatsappGroupName: targetGroupName });
+      const matchedGroups = [];
+      const updatedIdsList = [];
+
+      for (const targetName of targetGroupNames) {
+        const matchedGroup = chats.find(c => c.isGroup && c.name && c.name.trim().toLowerCase() === targetName);
+        if (matchedGroup) {
+          matchedGroups.push(matchedGroup);
+          updatedIdsList.push(matchedGroup.id._serialized);
+        } else {
+          console.warn(`[Startup] Active WhatsApp group named "${targetName}" not found in chat directory.`);
         }
-        return matchedGroup;
-      } else {
-        console.warn(`[Startup] Active WhatsApp group named "${targetGroupName}" not found in chat directory.`);
-        return null;
       }
+
+      const uniqueIds = [...new Set(updatedIdsList)];
+      if (uniqueIds.join(', ') !== settings.whatsappGroupId) {
+        database.saveSettings({ ...settings, whatsappGroupId: uniqueIds.join(', ') });
+      }
+      return matchedGroups;
     } catch (err) {
-      console.error("[Startup] Failed to resolve stable Group ID:", err);
-      return null;
+      console.error("[Startup] Failed to resolve stable Group IDs:", err);
+      return [];
     }
+  }
+
+  // Legacy wrapper for backwards compatibility
+  async resolveGroupId() {
+    const groups = await this.resolveGroupIds();
+    return groups.length > 0 ? groups[0] : null;
   }
 
   // Refresh and fetch all available group chat names
@@ -623,10 +655,15 @@ class WhatsAppManager extends EventEmitter {
     if (this.status !== 'ready') return [];
     try {
       const chats = await this.client.getChats();
-      // Filter strictly to the group named "ATTENDANCE" to protect personal chat privacy
-      const targetGroupName = 'ATTENDANCE';
+      // Filter strictly to target group names to protect personal chat privacy
+      const settings = database.getSettings();
+      const targetGroupNames = (settings.whatsappGroupName || 'ATTENDANCE')
+        .split(',')
+        .map(name => name.trim().toLowerCase())
+        .filter(Boolean);
+
       this.activeChats = chats
-        .filter(c => c.isGroup && c.name && c.name.trim().toLowerCase() === targetGroupName.toLowerCase())
+        .filter(c => c.isGroup && c.name && targetGroupNames.includes(c.name.trim().toLowerCase()))
         .map(c => ({
           id: c.id._serialized,
           name: c.name,
@@ -720,61 +757,91 @@ class WhatsAppManager extends EventEmitter {
   async runStartupRoutines() {
     console.log("[Startup] Starting WhatsApp background routines...");
     const settings = database.getSettings();
-    const targetGroupName = 'ATTENDANCE';
-    let matchedGroup = null;
+    const targetGroupNames = (settings.whatsappGroupName || 'ATTENDANCE')
+      .split(',')
+      .map(name => name.trim())
+      .filter(Boolean);
+    const targetGroupNamesLower = targetGroupNames.map(name => name.toLowerCase());
 
-    // 1. Try to load chat directly from cached Group ID and verify the group name matches
-    if (settings.whatsappGroupId) {
+    const targetGroupIds = (settings.whatsappGroupId || '')
+      .split(',')
+      .map(id => id.trim())
+      .filter(Boolean);
+
+    const resolvedGroups = [];
+    const updatedIdsList = [];
+
+    // 1. First, try to load chat directly from cached Group IDs and verify names
+    for (const gid of targetGroupIds) {
       try {
-        console.log(`[Startup] Attempting to load chat directly by cached ID: ${settings.whatsappGroupId}`);
-        const chat = await this.client.getChatById(settings.whatsappGroupId);
-        if (chat && chat.isGroup && chat.name && chat.name.trim().toLowerCase() === targetGroupName.toLowerCase()) {
-          matchedGroup = chat;
-          console.log(`[Startup] Successfully loaded and verified chat by cached ID.`);
-        } else {
-          console.warn(`[Startup] Cached group JID ${settings.whatsappGroupId} name is "${chat ? chat.name : 'unknown'}", which does not match target "${targetGroupName}". Force-resolving...`);
+        console.log(`[Startup] Attempting to load chat directly by cached ID: ${gid}`);
+        const chat = await this.client.getChatById(gid);
+        if (chat && chat.isGroup && chat.name) {
+          const nameLower = chat.name.trim().toLowerCase();
+          if (targetGroupNamesLower.includes(nameLower)) {
+            resolvedGroups.push(chat);
+            updatedIdsList.push(gid);
+            console.log(`[Startup] Successfully loaded and verified chat by cached ID: ${gid} ("${chat.name}")`);
+          } else {
+            console.warn(`[Startup] Cached group JID ${gid} name is "${chat.name}", which does not match any target. Skipping...`);
+          }
         }
       } catch (e) {
-        console.warn(`[Startup] Cached Group ID ${settings.whatsappGroupId} lookup failed:`, e.message);
+        console.warn(`[Startup] Cached Group ID ${gid} lookup failed:`, e.message);
       }
     }
 
-    // 2. If not found by ID, search chats list with a safety timeout
-    if (!matchedGroup) {
+    // 2. For any target group names not yet resolved, search chats list
+    const resolvedNamesLower = resolvedGroups.map(c => c.name.trim().toLowerCase());
+    const missingNamesLower = targetGroupNamesLower.filter(name => !resolvedNamesLower.includes(name));
+
+    if (missingNamesLower.length > 0) {
       try {
-        console.log("[Startup] Scanning chats directory to find group...");
+        console.log("[Startup] Scanning chats directory to find missing groups...");
         const chats = await Promise.race([
           this.client.getChats(),
           new Promise((_, reject) => setTimeout(() => reject(new Error("getChats timeout")), 25000))
         ]);
-        matchedGroup = chats.find(c => c.isGroup && c.name && c.name.trim().toLowerCase() === targetGroupName.toLowerCase());
-        if (matchedGroup) {
-          const gid = matchedGroup.id._serialized;
-          console.log(`[Startup] Found matching group by name. Caching ID: ${gid}`);
-          database.saveSettings({ ...settings, whatsappGroupId: gid, whatsappGroupName: targetGroupName });
+        
+        for (const nameLower of missingNamesLower) {
+          const chat = chats.find(c => c.isGroup && c.name && c.name.trim().toLowerCase() === nameLower);
+          if (chat) {
+            const gid = chat.id._serialized;
+            resolvedGroups.push(chat);
+            updatedIdsList.push(gid);
+            console.log(`[Startup] Found matching group "${chat.name}" by name. Caching ID: ${gid}`);
+          } else {
+            console.warn(`[Startup] Group named "${nameLower}" could not be resolved from chats directory.`);
+          }
         }
       } catch (err) {
         console.error("[Startup] Failed to scan chats directory:", err.message);
       }
     }
 
-    if (matchedGroup) {
-      const gid = matchedGroup.id._serialized;
-      // Pre-populate group cache to prevent message processor from calling message.getChat()
-      this.groupNameCache[gid] = matchedGroup.name;
+    // Save all resolved group JIDs back to settings
+    const uniqueIds = [...new Set(updatedIdsList)];
+    if (uniqueIds.join(', ') !== settings.whatsappGroupId) {
+      database.saveSettings({ ...settings, whatsappGroupId: uniqueIds.join(', ') });
+    }
+
+    // 3. Process each resolved group
+    for (const group of resolvedGroups) {
+      const gid = group.id._serialized;
+      this.groupNameCache[gid] = group.name;
       this.groupIdCache[gid] = gid;
 
-      // 3. Build LID Mapping from group participants first
       try {
-        await this.buildLidMappingForChat(matchedGroup);
+        await this.buildLidMappingForChat(group);
       } catch (err) {
-        console.error("[Startup] LID mapping failed:", err.message);
+        console.error(`[Startup] LID mapping failed for group "${group.name}":`, err.message);
       }
 
-      // 4. Recover missed messages
-      await this.recoverMissedMessages(matchedGroup);
-    } else {
-      console.warn(`[Startup] Group named "${targetGroupName}" could not be resolved.`);
+      try {
+        await this.recoverMissedMessages(group);
+      } catch (err) {
+        console.error(`[Startup] Missed messages recovery failed for group "${group.name}":`, err.message);
+      }
     }
   }
 
@@ -873,11 +940,14 @@ class WhatsAppManager extends EventEmitter {
   async buildLidMapping() {
     const settings = database.getSettings();
     if (settings.whatsappGroupId) {
-      try {
-        const chat = await this.client.getChatById(settings.whatsappGroupId);
-        await this.buildLidMappingForChat(chat);
-      } catch (e) {
-        console.warn("[LID Resolver] Legacy buildLidMapping failed:", e.message);
+      const gids = settings.whatsappGroupId.split(',').map(id => id.trim()).filter(Boolean);
+      for (const gid of gids) {
+        try {
+          const chat = await this.client.getChatById(gid);
+          await this.buildLidMappingForChat(chat);
+        } catch (e) {
+          console.warn(`[LID Resolver] Legacy buildLidMapping failed for ${gid}:`, e.message);
+        }
       }
     }
   }
