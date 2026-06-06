@@ -781,12 +781,16 @@
       lucide.createIcons();
 
       try {
+        const workerSelect = document.getElementById('worker-select');
         const payload = {
           imageBase64: base64Photo,
           latitude: Number(latitude),
           longitude: Number(longitude),
           threshold: 0.6
         };
+        if (workerSelect && workerSelect.value) {
+          payload.employeeId = workerSelect.value;
+        }
 
         const res = await fetch('/api/face/recognize', {
           method: 'POST',
@@ -806,6 +810,24 @@
           resultText.textContent = data.message || "Face not recognized. Please try again.";
           resultIcon.setAttribute('data-lucide', 'x-circle');
           if (window.lucide) window.lucide.createIcons();
+          return;
+        }
+
+        // Handle selfie verification pending admin review
+        if (data.status === "pending_review") {
+          resultMsg.className = 'status-alert info';
+          resultMsg.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+          resultMsg.style.background = 'rgba(245, 158, 11, 0.1)';
+          resultMsg.style.color = 'var(--color-warning)';
+          resultText.textContent = data.message;
+          resultIcon.setAttribute('data-lucide', 'alert-circle');
+          if (window.lucide) window.lucide.createIcons();
+          
+          submitBtn.disabled = true;
+          setTimeout(() => {
+            resetForm();
+            resultMsg.style.display = 'none';
+          }, 5000);
           return;
         }
 

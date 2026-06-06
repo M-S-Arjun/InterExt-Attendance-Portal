@@ -448,17 +448,24 @@ app.get('/api/face/health', async (req, res) => {
 // Recognize face from camera image
 app.post('/api/face/recognize', async (req, res) => {
   try {
-    const { imageBase64, threshold, latitude, longitude } = req.body;
+    const { imageBase64, threshold, latitude, longitude, employeeId } = req.body;
     
     if (!imageBase64) {
       return res.status(400).json({ success: false, status: "rejected", message: 'imageBase64 required' });
+    }
+    
+    const db = database.read();
+    
+    // 1. Get claimed employee if employeeId is provided
+    let claimedEmployee = null;
+    if (employeeId) {
+      claimedEmployee = db.employees.find(e => e.id === employeeId);
     }
     
     const formData = new URLSearchParams();
     formData.append('image_base64', imageBase64);
     if (threshold) formData.append('threshold', threshold);
 
-    
     let data;
     try {
       const response = await fetch(`${FACE_RECOGNITION_SERVICE}/api/face/recognize`, {
@@ -469,140 +476,34 @@ app.post('/api/face/recognize', async (req, res) => {
       data = await response.json();
     } catch (fetchErr) {
       console.error('[API] Face recognition service fetch failed:', fetchErr.message);
-      return res.status(503).json({
-        success: false,
-        status: "rejected",
-        message: "Face recognition service unavailable"
-      });
-    }
-    
-    if (data.success && data.matched) {
-      // Face recognized - auto-create attendance events for all matched employees
-      const db = database.read();
-      const matches = data.matches || [{ employee_id: data.employee_id, confidence: data.confidence }];
-      const results = [];
-      
-      for (const match of matches) {
-        let employee = db.employees?.find(e => e.id === match.employee_id);
-        if (!employee) {
-          // Fallback: match by directory name format (lowercase with underscores)
-          employee = db.employees?.find(e => {
-            if (!e.name) return false;
-            const cleanDbName = e.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
-            const cleanInputName = match.employee_id.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
-            return cleanDbName === cleanInputName || 
-                   cleanDbName.replace(/_/g, '') === cleanInputName.replace(/_/g, '') || 
-                   cleanDbName.includes(cleanInputName) || 
-                   cleanInputName.includes(cleanDbName);
-          });
-        }
-        
-        if (!employee) {
-          results.push({
-            success: false,
-            employee_id: match.employee_id,
-            message: `Employee profile not found for match ${match.employee_id}`
-          });
-          continue;
-        }
-        
-        const now = req.body.timestamp ? new Date(req.body.timestamp) : new Date();
-        const timestamp = now.toISOString();
+      // Fallback: If service is down, but we have a claimed employee, create a pending exception!
+      if (claimedEmployee) {
+        const exceptionId = `pending_selfie_${Date.now()}`;
+        const timestamp = new Date().toISOString();
         const eventDate = timestamp.split('T')[0];
         
-        // Determine if this is check-in or check-out based on existing attendance
+        let action = 'in';
         const existingAttendance = (db.attendance || []).find(
-          a => a.employeeId === employee.id && a.date === eventDate
+          a => a.employeeId === claimedEmployee.id && a.date === eventDate
         );
-        
-        // Duplicate attendance prevention
-        // Determine local hour for lunch break checks (1pm-2pm)
-        const localHour = now.getHours();
-        const isLunchHour = (localHour === 13);
-        
-        let eventType = 'entry';
-        const attendanceEntry = {
-          employeeId: employee.id,
-          employeeName: employee.name,
-          date: eventDate,
-          siteName: 'Webcam Scan',
-          facialRecognitionMatch: true,
-          matchConfidence: match.confidence,
-          latitude: latitude ? Number(latitude) : undefined,
-          longitude: longitude ? Number(longitude) : undefined,
-          verificationMethod: 'Face Recognition',
-          notes: 'Face recognized'
-        };
-
         if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent') {
-          if (existingAttendance.status === 'completed' || existingAttendance.status === 'leave') {
-            results.push({
-              success: false,
-              employee: { id: employee.id, name: employee.name },
-              employee_id: employee.id,
-              message: "Attendance already completed or marked leave for today"
-            });
-            continue;
-          }
-          
-          // Prevent duplicate scans within 30 seconds of the last recorded state transition
-          let lastEventTime = new Date(existingAttendance.checkIn);
-          if (existingAttendance.lunchIn) {
-            lastEventTime = new Date(existingAttendance.lunchIn);
-          } else if (existingAttendance.lunchOut) {
-            lastEventTime = new Date(existingAttendance.lunchOut);
-          }
-          
-          const diffSeconds = (now - lastEventTime) / 1000;
-          if (diffSeconds < 30) {
-            results.push({
-              success: false,
-              employee: { id: employee.id, name: employee.name },
-              employee_id: employee.id,
-              message: "Duplicate scan detected. Please wait 30 seconds."
-            });
-            continue;
-          }
-          
-          // Calculate state transition
-          attendanceEntry.id = existingAttendance.id;
-          attendanceEntry.checkIn = existingAttendance.checkIn;
-          
-          if (existingAttendance.lunchOut && existingAttendance.lunchIn) {
-            eventType = 'exit';
-            attendanceEntry.lunchOut = existingAttendance.lunchOut;
-            attendanceEntry.lunchIn = existingAttendance.lunchIn;
-            attendanceEntry.checkOut = timestamp;
-          } else if (existingAttendance.lunchOut && !existingAttendance.lunchIn) {
-            eventType = 'lunch-in';
-            attendanceEntry.lunchOut = existingAttendance.lunchOut;
-            attendanceEntry.lunchIn = timestamp;
-          } else if (!existingAttendance.lunchOut && isLunchHour) {
-            eventType = 'lunch-out';
-            attendanceEntry.lunchOut = timestamp;
-          } else {
-            eventType = 'exit';
-            attendanceEntry.checkOut = timestamp;
-          }
-        } else {
-          eventType = 'entry';
-          if (existingAttendance) {
-            attendanceEntry.id = existingAttendance.id;
-            attendanceEntry.checkOut = null;
-            attendanceEntry.lunchOut = null;
-            attendanceEntry.lunchIn = null;
-          }
-          attendanceEntry.checkIn = timestamp;
+          action = 'out';
         }
         
-        // Geofencing verification
-        let siteName = 'Webcam Scan';
-        let siteId = '';
-        let distance = null;
-        let closestSite = null;
+        let imageUrl = "";
+        try {
+          const uploadsDir = path.join(__dirname, 'public', 'uploads', 'camera');
+          if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+          const filename = `pending_${exceptionId}.jpg`;
+          fs.writeFileSync(path.join(uploadsDir, filename), Buffer.from(imageBase64.replace(/^data:image\/[a-z]+;base64,/, ''), 'base64'));
+          imageUrl = `/uploads/camera/${filename}`;
+        } catch (imgErr) {}
         
+        // Geofencing
+        let siteName = 'Webcam Scan';
         if (latitude && longitude && db.sites && db.sites.length > 0) {
           let minDistance = Infinity;
+          let closestSite = null;
           db.sites.forEach(site => {
             if (site.latitude && site.longitude) {
               const dist = database.getHaversineDistance(latitude, longitude, site.latitude, site.longitude);
@@ -612,93 +513,318 @@ app.post('/api/face/recognize', async (req, res) => {
               }
             }
           });
-          
-          if (closestSite) {
-            distance = minDistance;
-            if (minDistance <= 200) {
-              siteId = closestSite.id;
-              siteName = closestSite.name;
-            } else {
-              siteName = `Off-Site (${closestSite.name})`;
-            }
-          }
+          if (closestSite && minDistance <= 200) siteName = closestSite.name;
         }
-        
-        attendanceEntry.siteName = siteName;
-        if (distance !== null && distance > 200) {
-          attendanceEntry.notes = `[FLAGGED LOCATION] Off-Site Scan (${Math.round(distance)}m)`;
-        }
-        
-        // Save webcam recognition as a camera event log
-        const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
-        const savedEvent = database.saveCameraEvent({
-          employeeId: employee.id,
-          employeeName: employee.name,
-          eventType: eventType,
-          siteName: siteName,
+
+        database.savePendingMessage({
+          id: exceptionId,
+          type: "selfie_verification",
+          sender: claimedEmployee.name,
+          extractedName: claimedEmployee.name,
+          extractedSite: siteName,
+          extractedAction: action,
           timestamp: timestamp,
-          date: eventDate,
-          imageBase64: cleanBase64,
-          imageFilename: 'webcam_scan.jpg',
-          status: 'recognized',
-          latitude: latitude ? Number(latitude) : undefined,
-          longitude: longitude ? Number(longitude) : undefined,
-          adminNotes: distance !== null && distance > 200 
-            ? `[FLAGGED LOCATION] Off-Site Scan (${Math.round(distance)}m away from ${closestSite?.name})`
-            : `Face recognized on site. Distance: ${distance ? Math.round(distance) : 0}m`
+          reason: "Face service offline (manual fallback)",
+          imageUrl: imageUrl,
+          latitude: latitude ? Number(latitude) : null,
+          longitude: longitude ? Number(longitude) : null,
+          messageText: `Selfie verification pending admin approval`
         });
+        io.emit('pending_updated');
         
-        attendanceEntry.messageText = `Face recognized - auto ${eventType}`;
-        
-        const savedAttendance = database.saveAttendance(attendanceEntry);
-        io.emit('attendance_updated', savedAttendance);
-        io.emit('camera_event_recorded', savedEvent);
-        
-        results.push({
+        return res.json({
           success: true,
-          employee: { id: employee.id, name: employee.name },
-          employee_id: employee.id,
-          confidence: match.confidence,
-          eventType: eventType,
-          attendance: savedAttendance,
-          message: "Attendance marked successfully"
+          status: "pending_review",
+          message: "Face service offline. Verification submitted and pending admin approval."
         });
       }
       
-      const successResults = results.filter(r => r.success);
-      if (successResults.length > 0) {
-        const firstSuccess = successResults[0];
-        const names = successResults.map(r => r.employee.name).join(', ');
-        return res.json({
-          success: true,
-          status: "accepted",
-          employee_id: firstSuccess.employee.id,
-          message: `Attendance marked successfully for: ${names}`,
-          recognized: true,
-          employee: firstSuccess.employee,
-          confidence: firstSuccess.confidence,
-          attendance: firstSuccess.attendance,
-          eventType: firstSuccess.eventType,
-          matches: results
+      return res.status(503).json({
+        success: false,
+        status: "rejected",
+        message: "Face recognition service unavailable"
+      });
+    }
+
+    // 2. Process results
+    let isConfident = false;
+    let matchedEmployee = null;
+    let matchConfidence = 0;
+    let matchReason = "No matching face recognized";
+
+    if (data.success && data.matched && data.matches && data.matches.length > 0) {
+      // Find highest confidence match
+      const bestMatch = data.matches[0];
+      matchConfidence = bestMatch.confidence;
+      
+      // Look up employee
+      matchedEmployee = db.employees.find(e => e.id === bestMatch.employee_id);
+      if (!matchedEmployee) {
+        // Fallback name matching
+        matchedEmployee = db.employees.find(e => {
+          if (!e.name) return false;
+          const cleanDbName = e.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
+          const cleanInputName = bestMatch.employee_id.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
+          return cleanDbName === cleanInputName;
         });
+      }
+
+      if (matchedEmployee) {
+        if (claimedEmployee) {
+          // If claimed employee matches matched employee and confidence >= 0.75
+          if (claimedEmployee.id === matchedEmployee.id) {
+            if (matchConfidence >= 0.75) {
+              isConfident = true;
+            } else {
+              matchReason = `Low match confidence (${(matchConfidence * 100).toFixed(0)}%)`;
+            }
+          } else {
+            matchReason = `Claimed name mismatch (Matched: ${matchedEmployee.name} with ${(matchConfidence * 100).toFixed(0)}% confidence)`;
+          }
+        } else {
+          // Auto-identify mode
+          if (matchConfidence >= 0.75) {
+            isConfident = true;
+          } else {
+            matchReason = `Low match confidence (${(matchConfidence * 100).toFixed(0)}%)`;
+          }
+        }
+      }
+    }
+
+    // 3. Handle Confident Auto-Marking
+    if (isConfident && matchedEmployee) {
+      const employee = matchedEmployee;
+      const now = req.body.timestamp ? new Date(req.body.timestamp) : new Date();
+      const timestamp = now.toISOString();
+      const eventDate = timestamp.split('T')[0];
+      
+      const existingAttendance = (db.attendance || []).find(
+        a => a.employeeId === employee.id && a.date === eventDate
+      );
+      
+      const localHour = now.getHours();
+      const isLunchHour = (localHour === 13);
+      
+      let eventType = 'entry';
+      const attendanceEntry = {
+        employeeId: employee.id,
+        employeeName: employee.name,
+        date: eventDate,
+        siteName: 'Webcam Scan',
+        facialRecognitionMatch: true,
+        matchConfidence: matchConfidence,
+        latitude: latitude ? Number(latitude) : undefined,
+        longitude: longitude ? Number(longitude) : undefined,
+        verificationMethod: 'Face Recognition',
+        notes: 'Face recognized'
+      };
+
+      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent') {
+        if (existingAttendance.status === 'completed' || existingAttendance.status === 'leave') {
+          return res.status(400).json({
+            success: false,
+            status: "rejected",
+            message: "Attendance already completed or marked leave for today"
+          });
+        }
+        
+        let lastEventTime = new Date(existingAttendance.checkIn);
+        if (existingAttendance.lunchIn) {
+          lastEventTime = new Date(existingAttendance.lunchIn);
+        } else if (existingAttendance.lunchOut) {
+          lastEventTime = new Date(existingAttendance.lunchOut);
+        }
+        
+        const diffSeconds = (now - lastEventTime) / 1000;
+        if (diffSeconds < 30) {
+          return res.status(400).json({
+            success: false,
+            status: "rejected",
+            message: "Duplicate scan detected. Please wait 30 seconds."
+          });
+        }
+        
+        attendanceEntry.id = existingAttendance.id;
+        attendanceEntry.checkIn = existingAttendance.checkIn;
+        
+        if (existingAttendance.lunchOut && existingAttendance.lunchIn) {
+          eventType = 'exit';
+          attendanceEntry.lunchOut = existingAttendance.lunchOut;
+          attendanceEntry.lunchIn = existingAttendance.lunchIn;
+          attendanceEntry.checkOut = timestamp;
+        } else if (existingAttendance.lunchOut && !existingAttendance.lunchIn) {
+          eventType = 'lunch-in';
+          attendanceEntry.lunchOut = existingAttendance.lunchOut;
+          attendanceEntry.lunchIn = timestamp;
+        } else if (!existingAttendance.lunchOut && isLunchHour) {
+          eventType = 'lunch-out';
+          attendanceEntry.lunchOut = timestamp;
+        } else {
+          eventType = 'exit';
+          attendanceEntry.checkOut = timestamp;
+        }
       } else {
-        const messages = results.map(r => `${r.employee ? r.employee.name : r.employee_id}: ${r.message}`).join('; ');
-        return res.status(400).json({
-          success: false,
-          status: "rejected",
-          message: messages || "Face match rejected",
-          matches: results
+        eventType = 'entry';
+        if (existingAttendance) {
+          attendanceEntry.id = existingAttendance.id;
+        }
+        attendanceEntry.checkIn = timestamp;
+      }
+      
+      // Geofencing verification
+      let siteName = 'Webcam Scan';
+      let distance = null;
+      let closestSite = null;
+      
+      if (latitude && longitude && db.sites && db.sites.length > 0) {
+        let minDistance = Infinity;
+        db.sites.forEach(site => {
+          if (site.latitude && site.longitude) {
+            const dist = database.getHaversineDistance(latitude, longitude, site.latitude, site.longitude);
+            if (dist < minDistance) {
+              minDistance = dist;
+              closestSite = site;
+            }
+          }
         });
+        
+        if (closestSite) {
+          distance = minDistance;
+          if (minDistance <= 200) {
+            siteName = closestSite.name;
+          } else {
+            siteName = `Off-Site (${closestSite.name})`;
+          }
+        }
+      }
+      
+      attendanceEntry.siteName = siteName;
+      if (distance !== null && distance > 200) {
+        attendanceEntry.notes = `[FLAGGED LOCATION] Off-Site Scan (${Math.round(distance)}m)`;
+      }
+      
+      // Save camera event
+      const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+      const savedEvent = database.saveCameraEvent({
+        employeeId: employee.id,
+        employeeName: employee.name,
+        eventType: eventType,
+        siteName: siteName,
+        timestamp: timestamp,
+        date: eventDate,
+        imageBase64: cleanBase64,
+        imageFilename: 'webcam_scan.jpg',
+        status: 'recognized',
+        latitude: latitude ? Number(latitude) : undefined,
+        longitude: longitude ? Number(longitude) : undefined,
+        adminNotes: distance !== null && distance > 200 
+          ? `[FLAGGED LOCATION] Off-Site Scan (${Math.round(distance)}m away from ${closestSite?.name})`
+          : `Face recognized on site. Distance: ${distance ? Math.round(distance) : 0}m`
+      });
+      
+      attendanceEntry.messageText = `Face recognized - auto ${eventType}`;
+      const savedAttendance = database.saveAttendance(attendanceEntry);
+      
+      io.emit('attendance_updated', savedAttendance);
+      io.emit('camera_event_recorded', savedEvent);
+      
+      return res.json({
+        success: true,
+        status: "accepted",
+        employee_id: employee.id,
+        message: `Attendance marked successfully for: ${employee.name}`,
+        recognized: true,
+        employee: { id: employee.id, name: employee.name },
+        confidence: matchConfidence,
+        attendance: savedAttendance,
+        eventType: eventType
+      });
+    }
+
+    // 4. Handle Low-Confidence Exception Creation
+    const exceptionId = `pending_selfie_${Date.now()}`;
+    const now = new Date();
+    const timestamp = now.toISOString();
+    const eventDate = timestamp.split('T')[0];
+    
+    // Choose which employee profile to log against in the dropdown
+    const targetEmployee = claimedEmployee || matchedEmployee;
+    const targetName = targetEmployee ? targetEmployee.name : "Unknown Worker";
+    
+    // Calculate proposed action (Transition)
+    let action = 'in';
+    if (targetEmployee) {
+      const existingAttendance = (db.attendance || []).find(
+        a => a.employeeId === targetEmployee.id && a.date === eventDate
+      );
+      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent') {
+        action = 'out';
       }
     }
     
-    // Handle specific validation/model errors returned by python Flask service
-    const errorMessage = data.error || "Face not recognized";
+    // Save image to uploads/camera
+    let imageUrl = "";
+    try {
+      const uploadsDir = path.join(__dirname, 'public', 'uploads', 'camera');
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+      const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+      const filename = `pending_${exceptionId}.jpg`;
+      fs.writeFileSync(path.join(uploadsDir, filename), Buffer.from(cleanBase64, 'base64'));
+      imageUrl = `/uploads/camera/${filename}`;
+    } catch (imgErr) {
+      console.warn('[Selfie Exception] Failed to save selfie image:', imgErr.message);
+    }
+    
+    // Geofencing verification for site name
+    let siteName = 'Webcam Scan';
+    if (latitude && longitude && db.sites && db.sites.length > 0) {
+      let minDistance = Infinity;
+      let closestSite = null;
+      db.sites.forEach(site => {
+        if (site.latitude && site.longitude) {
+          const dist = database.getHaversineDistance(latitude, longitude, site.latitude, site.longitude);
+          if (dist < minDistance) {
+            minDistance = dist;
+            closestSite = site;
+          }
+        }
+      });
+      if (closestSite) {
+        if (minDistance <= 200) {
+          siteName = closestSite.name;
+        } else {
+          siteName = `Off-Site (${closestSite.name})`;
+        }
+      }
+    }
+
+    const pendingMsg = {
+      id: exceptionId,
+      type: "selfie_verification",
+      sender: targetName,
+      extractedName: targetName,
+      extractedSite: siteName,
+      extractedAction: action,
+      timestamp: timestamp,
+      reason: matchReason,
+      imageUrl: imageUrl,
+      latitude: latitude ? Number(latitude) : null,
+      longitude: longitude ? Number(longitude) : null,
+      messageText: `Selfie verification pending admin approval`
+    };
+
+    database.savePendingMessage(pendingMsg);
+    io.emit('pending_updated');
+
     return res.json({
-      success: false,
-      status: "rejected",
-      message: errorMessage
+      success: true,
+      status: "pending_review",
+      message: `Selfie verification submitted. Pending admin review due to: ${matchReason}.`
     });
+
   } catch (err) {
     console.error('[API] Face recognition error:', err);
     res.status(500).json({ success: false, status: "rejected", message: err.message });

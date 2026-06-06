@@ -563,25 +563,30 @@ async function fetchPendingMessages() {
       const item = document.createElement('div');
       item.className = "pending-item";
       
-      // Dynamic dropdown selector builders
-      const workerOptions = state.employees
-        .map(e => `<option value="${e.id}" ${msg.extractedName && e.name.toLowerCase().includes(msg.extractedName.toLowerCase()) ? 'selected' : ''}>${e.name}</option>`)
-        .join('');
-        
-      const siteOptions = state.sites
-        .map(s => `<option value="${s.id}" ${msg.extractedSite && s.name.toLowerCase().includes(msg.extractedSite.toLowerCase()) ? 'selected' : ''}>${s.name}</option>`)
-        .join('');
-      
       const formattedTime = new Date(msg.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
       item.innerHTML = `
         <div class="pending-header">
-          <h4>Exception from +${msg.sender}</h4>
+          <h4>Exception from ${msg.sender ? msg.sender : '+' + msg.sender}</h4>
           <span>${formattedTime}</span>
         </div>
         <p class="pending-body">"${msg.messageText}"</p>
         <span class="pending-reason"><i data-lucide="alert-triangle"></i> Flag: ${msg.reason}</span>
         
+        ${msg.imageUrl ? `
+          <div class="pending-image-preview" style="margin: 10px 0; border-radius: 8px; overflow: hidden; border: 1px solid var(--glass-border); width: 120px; height: 90px; cursor: pointer; background: rgba(0,0,0,0.1);" onclick="openImageModal('${msg.imageUrl}')" title="Click to view full image">
+            <img src="${msg.imageUrl}" style="width: 100%; height: 100%; object-fit: cover;" alt="Selfie">
+          </div>
+        ` : ''}
+
+        ${(msg.latitude !== null && msg.longitude !== null && msg.latitude !== undefined && msg.longitude !== undefined) ? `
+          <div style="margin: 4px 0 12px 0;">
+            <a href="https://www.google.com/maps?q=${msg.latitude},${msg.longitude}" target="_blank" class="help-text" style="display: inline-flex; align-items: center; gap: 4px; color: var(--color-info) !important; text-decoration: none; font-weight: 500; font-size: 0.72rem;" title="View exact GPS location in Google Maps">
+              <i data-lucide="map-pin" style="width: 12px; height: 12px;"></i> View Location (${msg.latitude.toFixed(5)}, ${msg.longitude.toFixed(5)})
+            </a>
+          </div>
+        ` : ''}
+
         <form class="pending-resolver-form" onsubmit="handleResolveException(event, '${msg.id}')">
           <div class="form-group">
             <label>Map Worker</label>
@@ -624,6 +629,56 @@ async function fetchPendingMessages() {
   } catch (err) {
     console.error("Pending exceptions fetch failed:", err);
   }
+}
+
+// Lightbox viewer for selfie images in pending exceptions
+function openImageModal(url) {
+  let modal = document.getElementById('temp-image-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'temp-image-modal';
+    modal.style.position = 'fixed';
+    modal.style.top = '0';
+    modal.style.left = '0';
+    modal.style.width = '100vw';
+    modal.style.height = '100vh';
+    modal.style.backgroundColor = 'rgba(5, 7, 15, 0.9)';
+    modal.style.backdropFilter = 'blur(10px)';
+    modal.style.webkitBackdropFilter = 'blur(10px)';
+    modal.style.zIndex = '10000';
+    modal.style.display = 'flex';
+    modal.style.alignItems = 'center';
+    modal.style.justifyContent = 'center';
+    modal.onclick = () => { modal.style.display = 'none'; };
+    
+    const container = document.createElement('div');
+    container.style.position = 'relative';
+    container.style.maxWidth = '90%';
+    container.style.maxHeight = '90%';
+    
+    const img = document.createElement('img');
+    img.id = 'temp-image-modal-img';
+    img.style.maxWidth = '100%';
+    img.style.maxHeight = '80vh';
+    img.style.borderRadius = 'var(--border-radius-md)';
+    img.style.border = '1px solid var(--glass-border)';
+    img.style.boxShadow = 'var(--shadow-lg)';
+    container.appendChild(img);
+    
+    const closeHint = document.createElement('div');
+    closeHint.style.color = 'var(--text-secondary)';
+    closeHint.style.fontSize = '0.8rem';
+    closeHint.style.textAlign = 'center';
+    closeHint.style.marginTop = '10px';
+    closeHint.textContent = 'Click anywhere to close';
+    container.appendChild(closeHint);
+    
+    modal.appendChild(container);
+    document.body.appendChild(modal);
+  }
+  
+  document.getElementById('temp-image-modal-img').src = url;
+  modal.style.display = 'flex';
 }
 
 function toggleCustomField(selectEl, customFieldId) {
