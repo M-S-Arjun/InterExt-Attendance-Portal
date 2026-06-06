@@ -230,6 +230,40 @@ class AttendanceParser {
     'vagamon', 'thekkady', 'varkala', 'alleppey', 'kumarakom', 'backwaters', 'kerala'
   ]);
 
+  // Helper to robustly classify leaves semantically
+  detectIsLeave(line) {
+    const clean = line.toLowerCase().trim();
+    const leavePhrases = [
+      'on leave', 'leave today', 'leave tomorrow', 'taking leave', 'casual leave', 
+      'sick leave', 'hospital case leave', 'cl', 'sl', 'el', 'pl',
+      'not coming', 'not coming today', 'not available', 'absent today', 'taking off', 
+      'day off', 'off today', 'not able to come', 'not able to attend', 'not reaching today',
+      'cannot come', 'can\'t come', 'cant come', 'unable to come', 'unable to reach', 'unable to attend',
+      'won\'t be coming', 'wont be coming', 'won\'t come', 'wont come', 'will not come', 'will not be coming',
+      'not reporting', 'not reporting today',
+      'not well', 'unwell', 'not feeling well', 'sick', 'sickness', 'ill', 'illness', 'fever', 'headache',
+      'family function', 'family issue', 'family emergency', 'personal work', 'personal issue', 'personal emergency',
+      'urgent work', 'urgent matter', 'rest today', 'taking rest', 'need rest',
+      // Malayalam transliterated terms
+      'innu varilla', 'varilla', 'varan kazhiyilla', 'varan patilla', 'innu leave', 'leave aanu', 'leave aane', 
+      'panayanu', 'paniyanu', 'panidirunnu', 'panidirunu', 'pani aane', 'pani aanu'
+    ];
+
+    const matchesPhrase = leavePhrases.some(phrase => clean.includes(phrase));
+    const matchesRegex = /\b(?:leave|sick|sickness|unwell|fever|headache|absent|off|cl|sl|el|pl|varilla)\b/i.test(clean);
+
+    if (matchesPhrase || matchesRegex) {
+      // Safeguard: Make sure this is not a check-in message mentioning a past leave
+      const containsTime = /\b\d{1,2}[:.]\d{2}\s*(?:am|pm)?\b/i.test(clean);
+      const containsCheckInLabel = /\b(?:check-in|checkin|in\s*:|checkout|check-out|out\s*:)/i.test(clean);
+      if (containsTime && containsCheckInLabel) {
+        return false;
+      }
+      return true;
+    }
+    return false;
+  }
+
   // Parse a single text line/message
   parseSingleLine(cleanLine, dateStr = null, defaultSiteObj = null, rawSender = "", messageTimestamp = null) {
     const employees = (database.getEmployees() || []).filter(e => e && e.status === 'active');
@@ -436,13 +470,7 @@ class AttendanceParser {
     }
 
     // 4. Leave & Time Range / Late check-in extraction
-    const leaveKeywords = [
-      'on leave', 'leave today', 'leave tomorrow', 'taking leave', 'casual leave', 'sick leave', 'cl', 'sl', 'el', 'pl',
-      'not coming', 'not coming today', 'not available', 'absent today', 'taking off', 'day off', 'off today',
-      'not able to come', 'not able to attend', 'not reaching today', 'hospital case leave'
-    ];
-    const isLeave = leaveKeywords.some(kw => cleanLine.includes(kw))
-      || /\b(?:i\s+am\s+)?(?:on\s+)?leave\b/i.test(cleanLine);
+    const isLeave = this.detectIsLeave(cleanLine);
 
     let checkInTimestamp = null;
     let checkOutTimestamp = null;
@@ -452,10 +480,10 @@ class AttendanceParser {
       actionType = 'leave';
     } else {
       // Check for Late pattern
-      const lateMatch1 = cleanLine.match(/\b(\d+(?:\.\d+)?|one|two|three|four)\s*(?:hour|hours|hr|hrs)?\s*late\b/i);
-      const lateMatch2 = cleanLine.match(/\blate\s*(?:by\s*)?(\d+(?:\.\d+)?|one|two|three|four)\s*(?:hour|hours|hr|hrs)?\b/i);
+      const lateMatch1 = cleanLine.match(/\b(\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\s*late\b/i);
+      const lateMatch2 = cleanLine.match(/\blate\s*(?:by\s*)?(\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\b/i);
       
-      const wordToNumber = { 'one': 1, 'two': 2, 'three': 3, 'four': 4 };
+      const wordToNumber = { 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'half': 0.5 };
       let matchedLate = lateMatch1 || lateMatch2;
       let hasParsedLate = false;
 

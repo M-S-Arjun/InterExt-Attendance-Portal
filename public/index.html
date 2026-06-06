@@ -33,7 +33,7 @@
     
     <!-- Sidebar Navigation -->
     <aside class="sidebar">
-      <div class="sidebar-brand">
+      <div class="sidebar-brand" onclick="switchTab('dashboard')" style="cursor: pointer;">
         <div class="brand-logo">
           <img src="/logo.jpg" class="brand-logo-img" alt="Logo">
         </div>
@@ -100,9 +100,6 @@
       <!-- Top Header -->
       <header class="top-header">
         <div class="header-left-group">
-          <button class="btn-sidebar-toggle" onclick="toggleSidebar()" id="sidebar-toggle-btn" title="Toggle Sidebar">
-            <i data-lucide="menu"></i>
-          </button>
           <div class="header-welcome">
             <h1 id="page-title">Dashboard Overview</h1>
             <p id="page-subtitle">Real-time daily wage attendance tracking</p>

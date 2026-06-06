@@ -327,23 +327,10 @@ class WhatsAppManager extends EventEmitter {
       this.qrCodeDataUrl = null;
       this.emit('status', this.status);
 
-      // Build LID to Phone mapping from group participants
-      try {
-        await this.buildLidMapping();
-      } catch (e) {
-        console.error("[LID Resolver] Failed to build initial LID mappings:", e);
-      }
-
-      // Auto-resolve stable WhatsApp Group ID by configured Group Name
-      try {
-        const matchedGroup = await this.resolveGroupId();
-        if (matchedGroup) {
-          // Trigger recovery of missed messages on startup
-          await this.recoverMissedMessages(matchedGroup);
-        }
-      } catch (err) {
-        console.error("[Startup] Failed during group auto-resolution / recovery:", err);
-      }
+      // Run startup routines asynchronously in the background so they don't block boot
+      this.runStartupRoutines().catch(err => {
+        console.error("[Startup] Error running background routines:", err);
+      });
     });
 
     // Session disconnected
@@ -397,14 +384,28 @@ class WhatsAppManager extends EventEmitter {
       let groupId = this.groupIdCache[chatId];
 
       if (!groupName) {
-        console.log(`[Message Processor] Resolving group chat for ID: ${chatId}...`);
-        const chat = await message.getChat();
-        if (chat.isGroup) {
-          groupName = chat.name.trim();
-          groupId = chat.id && chat.id._serialized ? chat.id._serialized : chat.id;
+        if (settings.whatsappGroupId && chatId === settings.whatsappGroupId) {
+          groupName = targetGroupName;
+          groupId = settings.whatsappGroupId;
           this.groupNameCache[chatId] = groupName;
           this.groupIdCache[chatId] = groupId;
-          console.log(`[Message Processor] Cached group name: "${groupName}" -> ID: ${chatId}`);
+        } else {
+          console.log(`[Message Processor] Resolving group chat for ID: ${chatId}...`);
+          try {
+            const chat = await Promise.race([
+              message.getChat(),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("getChat timeout")), 8000))
+            ]);
+            if (chat && chat.isGroup) {
+              groupName = chat.name.trim();
+              groupId = chat.id && chat.id._serialized ? chat.id._serialized : chat.id;
+              this.groupNameCache[chatId] = groupName;
+              this.groupIdCache[chatId] = groupId;
+              console.log(`[Message Processor] Cached group name: "${groupName}" -> ID: ${chatId}`);
+            }
+          } catch (e) {
+            console.error(`[Message Processor] Failed to resolve group chat for ID ${chatId}:`, e.message);
+          }
         }
       }
 
@@ -413,15 +414,15 @@ class WhatsAppManager extends EventEmitter {
         return;
       }
 
-      // Filter messages belonging only to our selected Attendance Group
-      const configuredGroupId = settings.whatsappGroupId || null;
-      const configuredGroupName = settings.whatsappGroupName || null;
+      // Auto-heal group JID in settings if mismatched
+      if (settings.whatsappGroupId !== groupId) {
+        console.log(`[Auto-Heal] Group ID mismatch. Updating cached JID in settings from "${settings.whatsappGroupId}" to: "${groupId}"`);
+        settings.whatsappGroupId = groupId;
+        settings.whatsappGroupName = targetGroupName;
+        database.saveSettings(settings);
+      }
 
-      // Match strictly by groupId if configured, otherwise fall back to name match
-      const isMatchingGroup = configuredGroupId 
-        ? (groupId && configuredGroupId === groupId)
-        : (groupName && configuredGroupName && groupName.toLowerCase() === configuredGroupName.trim().toLowerCase());
-
+      const isMatchingGroup = true;
       if (isMatchingGroup) {
         // Filter out system messages or messages with empty body that aren't media/locations
         const isPhoto = message.hasMedia && (message.type === 'image' || message.type === 'document');
@@ -445,17 +446,18 @@ class WhatsAppManager extends EventEmitter {
 
         // Get clean phone number of sender, resolving LID if necessary
         const rawSenderJid = message.author || message.from;
-        let senderPhone = rawSenderJid.split('@')[0];
+        let senderPhone = rawSenderJid.split('@')[0].replace(/\D/g, '');
         
         if (this.lidToPhoneMap[senderPhone]) {
-          senderPhone = this.lidToPhoneMap[senderPhone];
+          senderPhone = this.lidToPhoneMap[senderPhone].split('@')[0].replace(/\D/g, '');
         } else if (rawSenderJid.endsWith('@lid')) {
           try {
             if (this.client && typeof this.client.getContactLidAndPhone === 'function') {
               const mappings = await this.client.getContactLidAndPhone([rawSenderJid]);
               if (mappings && mappings.length > 0 && mappings[0].pn) {
-                console.log(`[LID Resolver] Resolved ${rawSenderJid} -> ${mappings[0].pn} via getContactLidAndPhone`);
-                senderPhone = mappings[0].pn;
+                const cleanPn = mappings[0].pn.split('@')[0].replace(/\D/g, '');
+                console.log(`[LID Resolver] Resolved ${rawSenderJid} -> ${cleanPn} via getContactLidAndPhone`);
+                senderPhone = cleanPn;
                 this.lidToPhoneMap[rawSenderJid.split('@')[0]] = senderPhone;
               }
             }
@@ -463,12 +465,13 @@ class WhatsAppManager extends EventEmitter {
             console.warn("[LID Resolver] getContactLidAndPhone failed:", lidErr.message);
           }
 
-          if (senderPhone === rawSenderJid.split('@')[0]) {
+          if (senderPhone === rawSenderJid.split('@')[0].replace(/\D/g, '')) {
             try {
               const contact = await message.getContact();
               if (contact && contact.number) {
-                console.log(`[LID Resolver] Resolved ${rawSenderJid} -> ${contact.number} via contact.number`);
-                senderPhone = contact.number;
+                const cleanPn = contact.number.split('@')[0].replace(/\D/g, '');
+                console.log(`[LID Resolver] Resolved ${rawSenderJid} -> ${cleanPn} via contact.number`);
+                senderPhone = cleanPn;
                 this.lidToPhoneMap[rawSenderJid.split('@')[0]] = senderPhone;
               }
             } catch (contactErr) {
@@ -560,8 +563,8 @@ class WhatsAppManager extends EventEmitter {
   async recoverMissedMessages(chat) {
     console.log(`[Recovery Engine] Starting missed messages recovery for group: "${chat.name}"...`);
     try {
-      // Fetch the last 150 messages from the group
-      const messages = await chat.fetchMessages({ limit: 150 });
+      // Fetch the last 500 messages from the group
+      const messages = await chat.fetchMessages({ limit: 500 });
       console.log(`[Recovery Engine] Fetched ${messages.length} historical messages from WhatsApp.`);
 
       const processedIds = database.getProcessedMessageIds();
@@ -713,15 +716,72 @@ class WhatsAppManager extends EventEmitter {
     }
   }
 
-  // Build LID to Phone mapping from group participants
-  async buildLidMapping() {
-    if (!this.client) return;
-    try {
-      const chats = await this.client.getChats();
-      // Strictly resolve the LID mapping only from the group named "ATTENDANCE"
-      const attendanceChat = chats.find(c => c.isGroup && c.name && c.name.trim().toLowerCase() === 'attendance');
-      if (!attendanceChat) return;
+  // Background startup routines that run asynchronously to avoid blocking the main ready handler
+  async runStartupRoutines() {
+    console.log("[Startup] Starting WhatsApp background routines...");
+    const settings = database.getSettings();
+    const targetGroupName = 'ATTENDANCE';
+    let matchedGroup = null;
 
+    // 1. Try to load chat directly from cached Group ID and verify the group name matches
+    if (settings.whatsappGroupId) {
+      try {
+        console.log(`[Startup] Attempting to load chat directly by cached ID: ${settings.whatsappGroupId}`);
+        const chat = await this.client.getChatById(settings.whatsappGroupId);
+        if (chat && chat.isGroup && chat.name && chat.name.trim().toLowerCase() === targetGroupName.toLowerCase()) {
+          matchedGroup = chat;
+          console.log(`[Startup] Successfully loaded and verified chat by cached ID.`);
+        } else {
+          console.warn(`[Startup] Cached group JID ${settings.whatsappGroupId} name is "${chat ? chat.name : 'unknown'}", which does not match target "${targetGroupName}". Force-resolving...`);
+        }
+      } catch (e) {
+        console.warn(`[Startup] Cached Group ID ${settings.whatsappGroupId} lookup failed:`, e.message);
+      }
+    }
+
+    // 2. If not found by ID, search chats list with a safety timeout
+    if (!matchedGroup) {
+      try {
+        console.log("[Startup] Scanning chats directory to find group...");
+        const chats = await Promise.race([
+          this.client.getChats(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("getChats timeout")), 25000))
+        ]);
+        matchedGroup = chats.find(c => c.isGroup && c.name && c.name.trim().toLowerCase() === targetGroupName.toLowerCase());
+        if (matchedGroup) {
+          const gid = matchedGroup.id._serialized;
+          console.log(`[Startup] Found matching group by name. Caching ID: ${gid}`);
+          database.saveSettings({ ...settings, whatsappGroupId: gid, whatsappGroupName: targetGroupName });
+        }
+      } catch (err) {
+        console.error("[Startup] Failed to scan chats directory:", err.message);
+      }
+    }
+
+    if (matchedGroup) {
+      const gid = matchedGroup.id._serialized;
+      // Pre-populate group cache to prevent message processor from calling message.getChat()
+      this.groupNameCache[gid] = matchedGroup.name;
+      this.groupIdCache[gid] = gid;
+
+      // 3. Build LID Mapping from group participants first
+      try {
+        await this.buildLidMappingForChat(matchedGroup);
+      } catch (err) {
+        console.error("[Startup] LID mapping failed:", err.message);
+      }
+
+      // 4. Recover missed messages
+      await this.recoverMissedMessages(matchedGroup);
+    } else {
+      console.warn(`[Startup] Group named "${targetGroupName}" could not be resolved.`);
+    }
+  }
+
+  // Build LID to Phone mapping directly from a pre-loaded group chat object
+  async buildLidMappingForChat(attendanceChat) {
+    if (!this.client || !attendanceChat) return;
+    try {
       const participants = attendanceChat.groupMetadata.participants || [];
       const lids = participants.map(p => p.id._serialized).filter(id => id.endsWith('@lid'));
       
@@ -736,7 +796,7 @@ class WhatsAppManager extends EventEmitter {
               mappings.forEach(m => {
                 if (m.lid && m.pn) {
                   const cleanLid = m.lid.split('@')[0];
-                  const cleanPn = m.pn.split('@')[0];
+                  const cleanPn = m.pn.split('@')[0].replace(/\D/g, '');
                   this.lidToPhoneMap[cleanLid] = cleanPn;
                   console.log(`[LID Resolver] Mapped ${cleanLid} -> ${cleanPn}`);
                 }
@@ -747,28 +807,33 @@ class WhatsAppManager extends EventEmitter {
           }
         }
 
-        // Fallback for any unmapped LIDs
-        for (const lidJid of lids) {
+        // Fallback for any unmapped LIDs in parallel with safety timeout
+        const fallbackPromises = lids.map(async (lidJid) => {
           const cleanLid = lidJid.split('@')[0];
           if (!this.lidToPhoneMap[cleanLid]) {
             try {
-              const contact = await this.client.getContactById(lidJid);
+              const contact = await Promise.race([
+                this.client.getContactById(lidJid),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000))
+              ]);
               if (contact && contact.number) {
-                this.lidToPhoneMap[cleanLid] = contact.number;
-                console.log(`[LID Resolver] Mapped ${cleanLid} -> ${contact.number} via contact.number`);
+                const cleanPn = contact.number.split('@')[0].replace(/\D/g, '');
+                this.lidToPhoneMap[cleanLid] = cleanPn;
+                console.log(`[LID Resolver] Mapped ${cleanLid} -> ${cleanPn} via contact.number`);
               }
             } catch (err) {
               // Ignore individual failures
             }
           }
-        }
+        });
+        await Promise.all(fallbackPromises);
       }
 
       // Also scan all participants to map standard numbers to their own IDs (no-op map just in case)
       participants.forEach(p => {
         const id = p.id._serialized.split('@')[0];
         if (!p.id._serialized.endsWith('@lid')) {
-          this.lidToPhoneMap[id] = id;
+          this.lidToPhoneMap[id] = id.replace(/\D/g, '');
         }
       });
 
@@ -801,6 +866,19 @@ class WhatsAppManager extends EventEmitter {
       this.emit('lid_mappings_updated', this.lidToPhoneMap);
     } catch (err) {
       console.error("[LID Resolver] Error building LID mapping:", err);
+    }
+  }
+
+  // Legacy helper interface
+  async buildLidMapping() {
+    const settings = database.getSettings();
+    if (settings.whatsappGroupId) {
+      try {
+        const chat = await this.client.getChatById(settings.whatsappGroupId);
+        await this.buildLidMappingForChat(chat);
+      } catch (e) {
+        console.warn("[LID Resolver] Legacy buildLidMapping failed:", e.message);
+      }
     }
   }
 

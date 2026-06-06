@@ -25,7 +25,7 @@ const DEFAULT_DB = {
   ],
   attendance: [],
   settings: {
-    whatsappGroupName: "Onsite Attendance Group",
+    whatsappGroupName: "ATTENDANCE",
     shiftStartTime: "08:00",
     shiftEndTime: "17:00",
     standardFullDayHours: 8.0,
@@ -119,7 +119,20 @@ class Database {
     const tempPath = `${DB_PATH}.tmp`;
     try {
       fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8');
-      fs.renameSync(tempPath, DB_PATH);
+      
+      let retries = 5;
+      while (retries > 0) {
+        try {
+          fs.renameSync(tempPath, DB_PATH);
+          break;
+        } catch (renameErr) {
+          retries--;
+          if (retries === 0) throw renameErr;
+          // Synchronous sleep/wait for 50ms
+          const start = Date.now();
+          while (Date.now() - start < 50) {}
+        }
+      }
       
       // Perform automated periodic backup (10% chance on write to avoid bloat)
       if (Math.random() < 0.1) {
