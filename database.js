@@ -476,15 +476,17 @@ class Database {
 
   // Get attendance sheet for a specific date (YYYY-MM-DD)
   // Cross-references with active employees to dynamically add "Absent" entries
-  getAttendanceForDate(dateStr) {
-    const db = this.read();
-    const employees = db.employees.filter(e => e.status === 'active');
-    const logs = db.attendance.filter(log => log.date === dateStr);
+  getAttendanceForDate(dateStr, db = null) {
+    const activeDb = db || this.read();
+    const employees = (activeDb.employees || []).filter(e => e && e.status === 'active');
+    const logs = (activeDb.attendance || []).filter(log => log && log.date === dateStr);
     
     // Map out employees already logged
     const loggedMap = new Map();
     logs.forEach(log => {
-      loggedMap.set(log.employeeId, log);
+      if (log && log.employeeId) {
+        loggedMap.set(log.employeeId, log);
+      }
     });
 
     const fullSheet = [];
@@ -526,10 +528,12 @@ class Database {
     const end = new Date(endDateStr);
     const list = [];
     
+    const db = this.read();
+    
     // Loop over each day in range
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const dateStr = d.toISOString().split('T')[0];
-      const dailySheet = this.getAttendanceForDate(dateStr);
+      const dailySheet = this.getAttendanceForDate(dateStr, db);
       list.push(...dailySheet);
     }
     
@@ -952,7 +956,7 @@ class Database {
 
       uniqueDates.forEach(dateStr => {
         // Fetch completed dynamic attendance sheet for that date (includes Absent/Excused)
-        const dailySheet = this.getAttendanceForDate(dateStr);
+        const dailySheet = this.getAttendanceForDate(dateStr, db);
         
         // Sort alphabetically by worker name
         dailySheet.sort((a, b) => a.employeeName.localeCompare(b.employeeName));
