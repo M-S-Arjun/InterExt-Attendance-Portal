@@ -261,6 +261,7 @@ function registerSocketEvents() {
     const text = document.getElementById('sidebar-status-text');
     const badge = document.getElementById('conn-status-badge');
     const visual = document.getElementById('connection-center');
+    const logoutBtn = document.getElementById('whatsapp-logout-btn');
     
     // Reset status classes
     pill.className = "connection-pill";
@@ -271,6 +272,7 @@ function registerSocketEvents() {
       text.textContent = "WhatsApp Connected";
       badge.classList.add('status-ready');
       badge.textContent = "Connected & Active";
+      if (logoutBtn) logoutBtn.style.display = 'inline-flex';
       document.getElementById('qr-placeholder').style.display = 'flex';
       document.getElementById('qr-image').style.display = 'none';
       document.getElementById('scan-instructions').style.opacity = '0.5';
@@ -290,6 +292,7 @@ function registerSocketEvents() {
       text.textContent = "Setup Required";
       badge.classList.add('status-connecting');
       badge.textContent = "Waiting for Scan";
+      if (logoutBtn) logoutBtn.style.display = 'none';
       document.getElementById('scan-instructions').style.opacity = '1';
       visual.classList.remove('connected');
     } else if (status === 'connecting' || status === 'authenticated') {
@@ -297,6 +300,7 @@ function registerSocketEvents() {
       text.textContent = "Authenticating...";
       badge.classList.add('status-connecting');
       badge.textContent = "Linking Session...";
+      if (logoutBtn) logoutBtn.style.display = 'none';
       document.getElementById('qr-placeholder').style.display = 'flex';
       document.getElementById('qr-image').style.display = 'none';
       document.getElementById('qr-placeholder').innerHTML = `<i data-lucide="loader" class="animate-spin" style="color: var(--color-warning);"></i><p>Establishing secure socket connection...</p>`;
@@ -306,6 +310,7 @@ function registerSocketEvents() {
       text.textContent = "Disconnected";
       badge.classList.add('status-disconnected');
       badge.textContent = "Disconnected";
+      if (logoutBtn) logoutBtn.style.display = 'none';
       document.getElementById('qr-placeholder').style.display = 'flex';
       document.getElementById('qr-image').style.display = 'none';
       document.getElementById('qr-placeholder').innerHTML = `<i data-lucide="alert-circle" style="color: var(--color-error); width: 36px; height: 36px;"></i><p style="color: var(--color-error);">Engine disconnected. Attempting automatic reboot...</p>`;
@@ -4044,5 +4049,39 @@ document.addEventListener('click', function(event) {
     });
   }
 });
+
+// Trigger WhatsApp Client logout and session reset
+async function logoutWhatsApp() {
+  if (!confirm("Are you sure you want to disconnect your WhatsApp account? This will log out the session and require scanning the QR code again.")) {
+    return;
+  }
+  
+  try {
+    const btn = document.getElementById('whatsapp-logout-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `<i class="animate-spin" data-lucide="loader"></i> Disconnecting...`;
+      if (window.lucide) window.lucide.createIcons();
+    }
+    
+    const res = await fetch('/api/whatsapp/logout', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      alert('WhatsApp logged out successfully. A fresh QR code will be generated.');
+    } else {
+      alert('Failed to logout WhatsApp: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    console.error("Logout request failed:", err);
+    alert('Failed to trigger logout.');
+  } finally {
+    const btn = document.getElementById('whatsapp-logout-btn');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<i data-lucide="log-out"></i> Logout`;
+      if (window.lucide) window.lucide.createIcons();
+    }
+  }
+}
 
 

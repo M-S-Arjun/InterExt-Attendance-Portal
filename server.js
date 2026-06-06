@@ -227,6 +227,27 @@ app.post('/api/whatsapp/reconnect', async (req, res) => {
   }
 });
 
+// Trigger a WhatsApp client logout (delete session and reset)
+app.post('/api/whatsapp/logout', async (req, res) => {
+  try {
+    console.log('[API] Received request to logout WhatsApp client...');
+    await whatsapp.logout();
+    console.log('[API] WhatsApp client logged out successfully.');
+    // Reinitialize to get a fresh QR code
+    setTimeout(() => {
+      try {
+        whatsapp.initialize();
+        console.log('[API] WhatsApp reinitialization after logout triggered.');
+      } catch (e) {
+        console.error('[API] Failed to reinitialize WhatsApp client:', e.message);
+      }
+    }, 1000);
+    res.json({ ok: true, message: 'Logged out successfully, reinitializing...' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Settings CRUD
 app.get('/api/settings', (req, res) => {
   res.json(database.getSettings());

@@ -200,6 +200,8 @@ class WhatsAppManager extends EventEmitter {
         authStrategy: new LocalAuth({
           dataPath: './.wwebjs_auth' // stores authentication session in workspace
         }),
+        takeoverOnConflict: true,
+        takeoverTimeoutMs: 0,
         authTimeoutMs: 120000, // 2 minutes timeout for auth
         qrTimeoutMs: 120000,   // 2 minutes timeout for QR scanning
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',

@@ -669,6 +669,33 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   font-weight: 600;
 }
 
+.btn-logout {
+  background: rgba(244, 63, 94, 0.1);
+  border: 1px solid rgba(244, 63, 94, 0.2);
+  color: var(--color-error);
+  padding: 4px 10px;
+  border-radius: var(--border-radius-sm);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: var(--transition-fast);
+}
+
+.btn-logout:hover {
+  background: var(--color-error);
+  color: white;
+  border-color: var(--color-error);
+}
+
+.btn-logout i,
+.btn-logout svg {
+  width: 12px;
+  height: 12px;
+}
+
 .instructions-list h4 {
   font-size: 0.85rem;
   font-weight: 700;
