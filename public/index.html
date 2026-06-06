@@ -1232,9 +1232,11 @@
               <!-- WhatsApp Settings Card Section -->
               <h4 class="settings-sec-title" style="margin-top: 0;"><i data-lucide="message-square"></i> WhatsApp Group Connection</h4>
               <div class="form-group" style="max-width: 600px; margin-bottom: 30px;">
-                <label for="settings-group-select">Attendance Group Name(s)</label>
-                <input type="text" id="settings-group-select" class="form-control" placeholder="e.g. ATTENDANCE, Onsite-West, Projects" required>
-                <span class="help-text">Enter the group names you wish to monitor, separated by commas. Only messages from these groups will be parsed.</span>
+                <label style="display: block; margin-bottom: 8px; font-weight: 500;">Attendance Group Names to Monitor</label>
+                <div id="settings-groups-container" style="display: flex; flex-direction: row; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 8px;">
+                  <!-- Dynamic group input rows -->
+                </div>
+                <span class="help-text">Enter the WhatsApp group names you wish to monitor. Use the "+" button to add more groups.</span>
               </div>
               
               <!-- Calculations Table Config Section -->

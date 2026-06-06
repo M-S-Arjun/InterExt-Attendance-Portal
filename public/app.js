@@ -1757,8 +1757,167 @@ async function handleAttendanceSubmit(e) {
 }
 
 // --- Settings Management ---
+function renderGroupInputs(groupNamesString) {
+  const container = document.getElementById('settings-groups-container');
+  if (!container) return;
+  
+  // Set horizontal flex styles on container
+  container.style.display = 'flex';
+  container.style.flexDirection = 'row';
+  container.style.flexWrap = 'wrap';
+  container.style.gap = '12px';
+  container.style.alignItems = 'center';
+  container.style.marginBottom = '8px';
+  
+  container.innerHTML = "";
+
+  const names = groupNamesString 
+    ? groupNamesString.split(',').map(n => n.trim()).filter(Boolean) 
+    : ["ATTENDANCE"];
+
+  names.forEach((name) => {
+    createGroupInputColumn(name);
+  });
+
+  updateGroupInputButtons();
+}
+
+function createGroupInputColumn(value = "") {
+  const container = document.getElementById('settings-groups-container');
+  if (!container) return;
+
+  const col = document.createElement('div');
+  col.className = 'group-input-column';
+  col.style.display = 'inline-flex';
+  col.style.alignItems = 'center';
+  col.style.gap = '8px';
+  col.style.background = 'rgba(255, 255, 255, 0.05)';
+  col.style.border = '1px solid var(--glass-border)';
+  col.style.padding = '6px 12px';
+  col.style.borderRadius = 'var(--border-radius-sm)';
+  col.style.transition = 'all 0.2s ease';
+  col.style.height = '38px';
+  col.style.boxSizing = 'border-box';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'settings-group-input';
+  input.placeholder = 'e.g. ATTENDANCE';
+  input.required = true;
+  input.value = value;
+  input.style.border = 'none';
+  input.style.background = 'transparent';
+  input.style.outline = 'none';
+  input.style.padding = '0';
+  input.style.color = 'var(--text-primary)';
+  input.style.fontSize = '0.88rem';
+  input.style.width = '140px';
+
+  // Highlight wrapper on input focus
+  input.onfocus = () => {
+    col.style.borderColor = 'var(--color-primary)';
+    col.style.boxShadow = '0 0 0 2px var(--focus-shadow)';
+    col.style.backgroundColor = 'rgba(255, 255, 255, 0.08)';
+  };
+  input.onblur = () => {
+    col.style.borderColor = 'var(--glass-border)';
+    col.style.boxShadow = 'none';
+    col.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+  };
+
+  col.appendChild(input);
+  container.appendChild(col);
+}
+
+function addNewGroupInputRow() {
+  createGroupInputColumn("");
+  updateGroupInputButtons();
+}
+
+function updateGroupInputButtons() {
+  const container = document.getElementById('settings-groups-container');
+  if (!container) return;
+
+  const columns = container.querySelectorAll('.group-input-column');
+  let addBtn = container.querySelector('.btn-add-column');
+
+  // 1. Manage remove buttons for each column wrapper
+  columns.forEach((col) => {
+    let removeBtn = col.querySelector('.btn-remove-column');
+    
+    if (columns.length > 1) {
+      if (!removeBtn) {
+        removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn-remove-column';
+        removeBtn.style.background = 'transparent';
+        removeBtn.style.border = 'none';
+        removeBtn.style.color = 'var(--text-tertiary)';
+        removeBtn.style.cursor = 'pointer';
+        removeBtn.style.display = 'flex';
+        removeBtn.style.alignItems = 'center';
+        removeBtn.style.justifyContent = 'center';
+        removeBtn.style.padding = '2px';
+        removeBtn.style.marginLeft = '4px';
+        removeBtn.style.transition = 'color 0.2s';
+        removeBtn.innerHTML = `<i data-lucide="x" style="width: 14px; height: 14px;"></i>`;
+        
+        removeBtn.onmouseenter = () => { removeBtn.style.color = '#ef4444'; };
+        removeBtn.onmouseleave = () => { removeBtn.style.color = 'var(--text-tertiary)'; };
+        
+        removeBtn.onclick = () => {
+          col.remove();
+          updateGroupInputButtons();
+        };
+        col.appendChild(removeBtn);
+      }
+    } else {
+      if (removeBtn) {
+        removeBtn.remove();
+      }
+    }
+  });
+
+  // 2. Manage the "+" add button
+  if (!addBtn) {
+    addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'btn-add-column';
+    addBtn.style.background = 'rgba(255, 107, 0, 0.1)';
+    addBtn.style.color = '#ff6b00';
+    addBtn.style.border = '1px solid rgba(255, 107, 0, 0.2)';
+    addBtn.style.height = '38px';
+    addBtn.style.width = '38px';
+    addBtn.style.borderRadius = 'var(--border-radius-sm)';
+    addBtn.style.cursor = 'pointer';
+    addBtn.style.display = 'flex';
+    addBtn.style.alignItems = 'center';
+    addBtn.style.justifyContent = 'center';
+    addBtn.style.transition = 'all 0.2s ease';
+    addBtn.innerHTML = `<i data-lucide="plus" style="width: 16px; height: 16px;"></i>`;
+    
+    addBtn.onmouseenter = () => {
+      addBtn.style.background = 'rgba(255, 107, 0, 0.2)';
+      addBtn.style.transform = 'scale(1.05)';
+    };
+    addBtn.onmouseleave = () => {
+      addBtn.style.background = 'rgba(255, 107, 0, 0.1)';
+      addBtn.style.transform = 'scale(1)';
+    };
+    
+    addBtn.onclick = () => {
+      addNewGroupInputRow();
+    };
+  }
+
+  // Ensure addBtn is at the very end of the container
+  container.appendChild(addBtn);
+
+  if (window.lucide) window.lucide.createIcons();
+}
+
 function loadSettingsForm() {
-  document.getElementById('settings-group-select').value = state.settings.whatsappGroupName || "";
+  renderGroupInputs(state.settings.whatsappGroupName || "");
   document.getElementById('settings-full-hours').value = state.settings.standardFullDayHours || 8.0;
   document.getElementById('settings-half-hours').value = state.settings.standardHalfDayHours || 4.0;
   document.getElementById('settings-basic-ratio').value = Math.round((state.settings.basicRatio !== undefined ? state.settings.basicRatio : 0.50) * 100);
@@ -1796,8 +1955,11 @@ async function refreshGroupList() {
 async function handleSettingsSubmit(e) {
   e.preventDefault();
   
+  const groupInputs = document.querySelectorAll('.settings-group-input');
+  const groupNames = Array.from(groupInputs).map(input => input.value.trim()).filter(Boolean).join(', ');
+
   const payload = {
-    whatsappGroupName: document.getElementById('settings-group-select').value,
+    whatsappGroupName: groupNames,
     standardFullDayHours: Number(document.getElementById('settings-full-hours').value),
     standardHalfDayHours: Number(document.getElementById('settings-half-hours').value),
     basicRatio: Number(document.getElementById('settings-basic-ratio').value) / 100,
