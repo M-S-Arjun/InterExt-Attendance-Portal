@@ -195,17 +195,34 @@ class Database {
     return false;
   }
 
+  toTitleCase(name) {
+    if (!name) return "";
+    return name
+      .toString()
+      .trim()
+      .toLowerCase()
+      .replace(/(?:^|\s|\(|-|\.|\[|\/)([a-z])/g, function(match) {
+        return match.toUpperCase();
+      });
+  }
+
   // --- Employees Table ---
   getEmployees() {
     return (this.read().employees || []).filter(e => e && e.id && e.name);
   }
 
   saveEmployee(employee) {
+    if (employee && employee.name) {
+      employee.name = this.toTitleCase(employee.name);
+    }
     const db = this.read();
     const index = db.employees.findIndex(e => e.id === employee.id);
     
     if (index >= 0) {
       db.employees[index] = { ...db.employees[index], ...employee };
+      if (db.employees[index].name) {
+        db.employees[index].name = this.toTitleCase(db.employees[index].name);
+      }
     } else {
       employee.id = employee.id || `emp_${Date.now()}`;
       employee.status = employee.status || 'active';
