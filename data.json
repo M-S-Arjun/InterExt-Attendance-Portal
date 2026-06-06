@@ -6791,6 +6791,25 @@
       "isFullDay": true,
       "calculatedWage": 1200,
       "duration": 750
+    },
+    {
+      "employeeId": "emp_2083",
+      "employeeName": "Ajmal K H",
+      "siteName": "INTEREXT OFFICE",
+      "date": "2026-06-06",
+      "checkIn": null,
+      "checkOut": null,
+      "duration": 0,
+      "regularHours": 0,
+      "otHours": 0,
+      "extraHours": 0,
+      "isHalfDay": false,
+      "isFullDay": false,
+      "calculatedWage": 0,
+      "messageText": "Completed",
+      "status": "leave",
+      "travelHours": 0,
+      "id": "att_1780722544198"
     }
   ],
   "settings": {
@@ -8882,7 +8901,8 @@
     "true_120363419060820327@g.us_AC54E45F3E819C0B388B836ED7FC4022_144302495809555@lid",
     "false_120363419060820327@g.us_ACFE930CA3AB6171E625FA86E43A1BB4_69896700444857@lid",
     "false_120363419060820327@g.us_A5FB61840FEE30AC077ED242BB8FF2E2_81901335371935@lid",
-    "false_120363419060820327@g.us_AC50CC282B0197E60815CBC7604AA5F8_266648799977611@lid"
+    "false_120363419060820327@g.us_AC50CC282B0197E60815CBC7604AA5F8_266648799977611@lid",
+    "false_120363419060820327@g.us_3AB8DBB32464C894D4EA_190795449663538@lid"
   ],
   "cameraEvents": [
     {
