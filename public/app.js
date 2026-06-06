@@ -1,3 +1,9 @@
+function toLocalISOString(date) {
+  if (!date) return "";
+  const tzOffset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - tzOffset).toISOString();
+}
+
 // Initialize Socket.io Client
 let socket;
 
@@ -11,7 +17,7 @@ let state = {
   pendingMessages: [],
   canUndo: false,
   activeTab: 'dashboard',
-  selectedFilterDate: new Date().toISOString().split('T')[0],
+  selectedFilterDate: toLocalISOString(new Date()).split('T')[0],
   selectedRangeStart: '',
   selectedRangeEnd: '',
   charts: {
@@ -43,7 +49,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Set default filter month for payroll
   const payrollMonthInput = document.getElementById('payroll-month');
   if (payrollMonthInput) {
-    payrollMonthInput.value = new Date().toISOString().substring(0, 7);
+    payrollMonthInput.value = toLocalISOString(new Date()).substring(0, 7);
   }
   setCameraEventTimestampNow();
 
@@ -1135,14 +1141,14 @@ function resetCameraEventForm() {
   const form = document.getElementById('camera-event-form');
   if (form) form.reset();
   const now = new Date();
-  const localValue = now.toISOString().slice(0, 16);
+  const localValue = toLocalISOString(now).slice(0, 16);
   const timestampInput = document.getElementById('camera-event-timestamp');
   if (timestampInput) timestampInput.value = localValue;
 }
 
 function setCameraEventTimestampNow() {
   const now = new Date();
-  const localValue = now.toISOString().slice(0, 16);
+  const localValue = toLocalISOString(now).slice(0, 16);
   const timestampInput = document.getElementById('camera-event-timestamp');
   if (timestampInput) timestampInput.value = localValue;
 }
@@ -1677,14 +1683,14 @@ function openAttendanceAdjuster(id) {
   // Format check-in to datetime-local compatible string YYYY-MM-DDTHH:MM
   if (log.checkIn) {
     const cin = new Date(log.checkIn);
-    document.getElementById('att-checkin').value = cin.toISOString().substring(0, 16);
+    document.getElementById('att-checkin').value = toLocalISOString(cin).substring(0, 16);
   } else {
     document.getElementById('att-checkin').value = `${datePrefix}T08:00`;
   }
 
   if (log.checkOut) {
     const cout = new Date(log.checkOut);
-    document.getElementById('att-checkout').value = cout.toISOString().substring(0, 16);
+    document.getElementById('att-checkout').value = toLocalISOString(cout).substring(0, 16);
   } else {
     document.getElementById('att-checkout').value = `${datePrefix}T17:00`;
   }
@@ -2072,7 +2078,7 @@ function checkRangeChange() {
 }
 
 function resetDateFilters() {
-  state.selectedFilterDate = new Date().toISOString().split('T')[0];
+  state.selectedFilterDate = toLocalISOString(new Date()).split('T')[0];
   state.selectedRangeStart = "";
   state.selectedRangeEnd = "";
   
@@ -3078,7 +3084,7 @@ function escapeHtml(str) {
 function loadTravelLogs() {
   const filterMonth = document.getElementById('travel-filter-month');
   if (filterMonth && !filterMonth.value) {
-    filterMonth.value = new Date().toISOString().substring(0, 7); // YYYY-MM
+    filterMonth.value = toLocalISOString(new Date()).substring(0, 7); // YYYY-MM
   }
   applyFiltersTravel();
 }
@@ -3086,7 +3092,7 @@ function loadTravelLogs() {
 function resetTravelFilters() {
   const filterMonth = document.getElementById('travel-filter-month');
   if (filterMonth) {
-    filterMonth.value = new Date().toISOString().substring(0, 7);
+    filterMonth.value = toLocalISOString(new Date()).substring(0, 7);
   }
   const searchInput = document.getElementById('travel-search-input');
   if (searchInput) {
