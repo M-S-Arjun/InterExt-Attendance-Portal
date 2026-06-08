@@ -249,7 +249,11 @@ class AttendanceParser {
       'panayanu', 'paniyanu', 'panidirunnu', 'panidirunu', 'pani aane', 'pani aanu'
     ];
 
-    const matchesPhrase = leavePhrases.some(phrase => clean.includes(phrase));
+    const matchesPhrase = leavePhrases.some(phrase => {
+      const escaped = phrase.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+      return regex.test(clean);
+    });
     const matchesRegex = /\b(?:leave|sick|sickness|unwell|fever|headache|absent|off|cl|sl|el|pl|varilla)\b/i.test(clean);
 
     if (matchesPhrase || matchesRegex) {
@@ -475,6 +479,10 @@ class AttendanceParser {
     let checkInTimestamp = null;
     let checkOutTimestamp = null;
     let actionType = 'in';
+    let hasParsedLate = false;
+    let hasParsedEarly = false;
+    let isHospitalCase = false;
+    let hospitalHours = 0;
 
     if (isLeave) {
       actionType = 'leave';
@@ -482,10 +490,14 @@ class AttendanceParser {
       // Check for Late pattern
       const lateMatch1 = cleanLine.match(/\b(\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\s*late\b/i);
       const lateMatch2 = cleanLine.match(/\blate\s*(?:by\s*)?(\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\b/i);
+      const lateMinMatch = cleanLine.match(/(?:(\d+(?:\.\d+)?)\s*(?:minute|minutes|min|mins)\s*late|late\s*(?:by\s*)?(\d+(?:\.\d+)?)\s*(?:minute|minutes|min|mins))/i);
       
+      // Check for Early Exit pattern
+      const earlyMatch = cleanLine.match(/\b(\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\s*(?:early\s*exit|early\s*leave|early)\b/i);
+
       const wordToNumber = { 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'half': 0.5 };
       let matchedLate = lateMatch1 || lateMatch2;
-      let hasParsedLate = false;
+      isHospitalCase = /\bhospital\b/i.test(cleanLine);
 
       if (matchedLate) {
         const valStr = matchedLate[1].toLowerCase();
@@ -512,11 +524,97 @@ class AttendanceParser {
           checkInTimestamp = d.toISOString();
           actionType = 'in';
           hasParsedLate = true;
+          if (isHospitalCase) {
+            hospitalHours = lateHours;
+          }
+        }
+      } else if (lateMinMatch) {
+        const valStr = lateMinMatch[1] || lateMinMatch[2];
+        const lateMins = parseFloat(valStr);
+        if (!isNaN(lateMins)) {
+          let shiftStart = (matchedEmployee && matchedEmployee.shiftStart) ? matchedEmployee.shiftStart : "09:00";
+          if (!shiftStart || !shiftStart.includes(':')) {
+            shiftStart = "09:00";
+          }
+          const [sh, sm] = shiftStart.split(':').map(Number);
+          let hours = sh;
+          let minutes = sm + lateMins;
+          while (minutes >= 60) {
+            hours += 1;
+            minutes -= 60;
+          }
+          
+          const d = new Date();
+          if (dateStr) {
+            const parts = dateStr.split('-');
+            d.setFullYear(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+          }
+          d.setHours(hours, minutes, 0, 0);
+          checkInTimestamp = d.toISOString();
+          actionType = 'in';
+          hasParsedLate = true;
+          if (isHospitalCase) {
+            hospitalHours = Number((lateMins / 60).toFixed(2));
+          }
+        }
+      } else if (cleanLine.match(/\blate\b/i)) {
+        hasParsedLate = true;
+        actionType = 'in';
+        let shiftStart = (matchedEmployee && matchedEmployee.shiftStart) ? matchedEmployee.shiftStart : "09:00";
+        if (!shiftStart || !shiftStart.includes(':')) {
+          shiftStart = "09:00";
+        }
+        const [sh, sm] = shiftStart.split(':').map(Number);
+        const d = new Date();
+        if (dateStr) {
+          const parts = dateStr.split('-');
+          d.setFullYear(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        }
+        d.setHours(sh + 1, sm, 0, 0);
+        checkInTimestamp = d.toISOString();
+        if (isHospitalCase) {
+          hospitalHours = 1;
+        }
+      } else if (earlyMatch) {
+        const valStr = earlyMatch[1].toLowerCase();
+        const earlyHours = wordToNumber[valStr] !== undefined ? wordToNumber[valStr] : parseFloat(valStr);
+        if (!isNaN(earlyHours)) {
+          let shiftEnd = (matchedEmployee && matchedEmployee.shiftEnd) ? matchedEmployee.shiftEnd : "17:00";
+          if (!shiftEnd || !shiftEnd.includes(':')) {
+            shiftEnd = "17:00";
+          }
+          const [eh, em] = shiftEnd.split(':').map(Number);
+          let hours = eh - Math.floor(earlyHours);
+          let minutes = em - Math.round((earlyHours % 1) * 60);
+          if (minutes < 0) {
+            hours -= 1;
+            minutes += 60;
+          }
+          
+          const d = new Date();
+          if (dateStr) {
+            const parts = dateStr.split('-');
+            d.setFullYear(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+          }
+          d.setHours(hours, minutes, 0, 0);
+          checkOutTimestamp = d.toISOString();
+          actionType = 'out';
+          hasParsedEarly = true;
+          if (isHospitalCase) {
+            hospitalHours = earlyHours;
+          }
         }
       }
 
-      // Perform time matching on cleanLine without the late phrase to prevent matching duration numbers
-      const lineForTimeMatching = matchedLate ? cleanLine.replace(matchedLate[0], '') : cleanLine;
+      // Perform time matching on cleanLine without the late/early phrase to prevent matching duration numbers
+      let lineForTimeMatching = cleanLine;
+      if (matchedLate) {
+        lineForTimeMatching = cleanLine.replace(matchedLate[0], '');
+      } else if (lateMinMatch) {
+        lineForTimeMatching = cleanLine.replace(lateMinMatch[0], '');
+      } else if (earlyMatch) {
+        lineForTimeMatching = cleanLine.replace(earlyMatch[0], '');
+      }
       const timeRegex = /\b(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)\b/gi;
       const timeMatches = lineForTimeMatching.match(timeRegex) || [];
 
@@ -597,7 +695,10 @@ class AttendanceParser {
       checkInTime: checkInTimestamp,
       checkOutTime: checkOutTimestamp,
       leaveDate: leaveDate,
-      confidence: Number(((employeeConfidence + siteConfidence) / 2).toFixed(2))
+      confidence: Number(((employeeConfidence + siteConfidence) / 2).toFixed(2)),
+      isLate: hasParsedLate,
+      isHospitalCase: isHospitalCase && (hasParsedLate || hasParsedEarly),
+      hospitalHours: hospitalHours
     };
   }
 
