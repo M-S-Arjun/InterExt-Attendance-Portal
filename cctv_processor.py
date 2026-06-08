@@ -20,7 +20,7 @@ active_cameras = {}
 active_cameras_lock = threading.Lock()
 
 class CCTVStreamProcessor(threading.Thread):
-    def __init__(self, camera_id, name, source, site_name, event_type, threshold=0.55, node_server="http://localhost:3000"):
+    def __init__(self, camera_id, name, source, site_name, event_type, threshold=0.62, node_server="http://localhost:3000"):
         super().__init__()
         self.camera_id = camera_id
         self.name = name
@@ -34,6 +34,7 @@ class CCTVStreamProcessor(threading.Thread):
         self.latest_frame = None
         self.grab_thread = None
         self.cooldowns = {}  # { employee_id: timestamp }
+        self.consecutive_detections = {}  # { employee_id: count }
         self.cooldown_seconds = 300  # 5 minutes
         
         # Parse source if it's a webcam index (e.g. "0" -> 0)
@@ -89,9 +90,13 @@ class CCTVStreamProcessor(threading.Thread):
                 # Perform face recognition directly using the raw numpy BGR frame array
                 results = model.recognize_faces(frame, threshold=self.threshold)
                 
+                detected_employee_ids = set()
+                
                 if results:
                     jpg_as_text = None
                     for employee_id, confidence in results:
+                        detected_employee_ids.add(employee_id)
+                        
                         # Check cool-down per employee
                         now = time.time()
                         last_seen = self.cooldowns.get(employee_id, 0)
@@ -99,17 +104,31 @@ class CCTVStreamProcessor(threading.Thread):
                             logger.debug(f"[{self.name}] Matched {employee_id} but cool-down is active")
                             continue
                         
-                        # Update cool-down
-                        self.cooldowns[employee_id] = now
-                        logger.info(f"[{self.name}] Face recognized: {employee_id} (confidence: {confidence:.3f})")
+                        # Increment consecutive frames count
+                        current_count = self.consecutive_detections.get(employee_id, 0) + 1
+                        self.consecutive_detections[employee_id] = current_count
+                        logger.info(f"[{self.name}] Face detected: {employee_id} (confidence: {confidence:.3f}), consecutive frames: {current_count}/3")
                         
-                        # Convert the matching frame to base64 ONLY when reporting
-                        if jpg_as_text is None:
-                            _, buffer = cv2.imencode('.jpg', frame)
-                            jpg_as_text = base64.b64encode(buffer).decode('utf-8')
-                        
-                        # Post recognized CCTV event to the Node.js server
-                        self.report_attendance(employee_id, confidence, jpg_as_text)
+                        if current_count >= 3:
+                            # Reset consecutive count after reporting
+                            self.consecutive_detections[employee_id] = 0
+                            
+                            # Update cool-down
+                            self.cooldowns[employee_id] = now
+                            logger.info(f"[{self.name}] Face recognized (3 consecutive frames): {employee_id} (confidence: {confidence:.3f})")
+                            
+                            # Convert the matching frame to base64 ONLY when reporting
+                            if jpg_as_text is None:
+                                _, buffer = cv2.imencode('.jpg', frame)
+                                jpg_as_text = base64.b64encode(buffer).decode('utf-8')
+                            
+                            # Post recognized CCTV event to the Node.js server
+                            self.report_attendance(employee_id, confidence, jpg_as_text)
+
+                # Reset consecutive count for any employee not detected in this frame
+                for emp_id in list(self.consecutive_detections.keys()):
+                    if emp_id not in detected_employee_ids:
+                        self.consecutive_detections[emp_id] = 0
                         
             except ValueError:
                 # Silence common "No face detected" errors
@@ -147,7 +166,7 @@ class CCTVStreamProcessor(threading.Thread):
         self.running = False
 
 
-def start_cctv_thread(camera_id, name, source, site_name, event_type, threshold=0.55, node_server="http://localhost:3000"):
+def start_cctv_thread(camera_id, name, source, site_name, event_type, threshold=0.62, node_server="http://localhost:3000"):
     with active_cameras_lock:
         if camera_id in active_cameras:
             # If already running, stop it first

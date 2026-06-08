@@ -967,7 +967,7 @@ app.post('/api/cctv', async (req, res) => {
             source: savedCamera.source,
             site_name: siteName,
             event_type: savedCamera.eventType,
-            threshold: 0.55
+            threshold: 0.62
           })
         });
       } catch (err) {
@@ -1176,7 +1176,8 @@ app.post('/api/face/cctv-event', async (req, res) => {
       date: eventDate,
       imageBase64: image_base64,
       imageFilename: 'cctv_frame.jpg',
-      status: 'recognized'
+      status: 'recognized',
+      confidence: confidence
     };
     
     const savedEvent = database.saveCameraEvent(cameraEvent);
