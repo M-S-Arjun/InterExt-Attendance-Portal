@@ -302,6 +302,9 @@
                 <option value="">-- All Statuses --</option>
                 <option value="completed">Present</option>
                 <option value="checked-in">Checked-In</option>
+                <option value="late">Late (Pending)</option>
+                <option value="Late Check-in">Late Check-in</option>
+                <option value="Early Check-out">Early Check-out</option>
                 <option value="absent">Absent</option>
                 <option value="leave">Leave</option>
               </select>
@@ -1596,6 +1599,9 @@
             <select id="att-status" class="form-control" onchange="toggleManualTimeFields()">
               <option value="checked-in">Checked-In (Active duty)</option>
               <option value="completed">Completed Shift (Present)</option>
+              <option value="late">Late (Pending Scan)</option>
+              <option value="Late Check-in">Late Check-in</option>
+              <option value="Early Check-out">Early Check-out</option>
               <option value="absent">Absent</option>
               <option value="leave">On Leave / Excused</option>
             </select>
@@ -1606,6 +1612,17 @@
             <select id="att-site" class="form-control">
               <!-- Site list dynamically added -->
             </select>
+          </div>
+
+          <div class="form-row" id="att-hospital-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; background: rgba(255, 255, 255, 0.02); padding: 12px; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border);">
+            <div class="override-checkbox-container" style="display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" id="att-is-hospital" style="accent-color: var(--color-primary); width: 16px; height: 16px; cursor: pointer;">
+              <label for="att-is-hospital" style="font-weight: 600; cursor: pointer; color: var(--text-primary);">Hospital Case</label>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="att-hospital-hours" style="font-size: 0.75rem; color: var(--text-secondary);">Hospital Hours (max 2h)</label>
+              <input type="number" id="att-hospital-hours" class="form-control" min="0" max="2" step="0.5" placeholder="0">
+            </div>
           </div>
 
           <div class="form-row" id="att-times-row">
