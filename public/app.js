@@ -959,6 +959,18 @@ function renderAttendanceLogsTable(r) {
       tr.className = "table-row-absent";
     } else if (row.status === 'leave') {
       statusBadge = `<span class="badge badge-amber">Leave</span>`;
+    } else if (row.status === 'late') {
+      statusBadge = `<span class="badge badge-orange">Late (Pending)</span>`;
+      if (!row.checkOut) {
+        tr.className = "table-row-checked-in";
+      }
+    } else if (row.status === 'Late Check-in') {
+      statusBadge = `<span class="badge badge-orange">Late Check-in</span>`;
+      if (!row.checkOut) {
+        tr.className = "table-row-checked-in";
+      }
+    } else if (row.status === 'Early Check-out') {
+      statusBadge = `<span class="badge badge-orange">Early Check-out</span>`;
     }
 
     const inTime = row.checkIn ? new Date(row.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
@@ -972,13 +984,18 @@ function renderAttendanceLogsTable(r) {
 
     // Shift summary descriptors
     let shiftSummary = "—";
-    if (row.status === 'completed') {
-      if (row.isFullDay) {
-        shiftSummary = row.otHours > 0 ? `Full Shift + ${row.otHours} hr OT` : "Full-Day Shift";
-      } else if (row.isHalfDay) {
-        shiftSummary = row.extraHours > 0 ? `Half Day + ${row.extraHours} hr Ext` : "Half-Day Shift";
+    if (row.status === 'completed' || row.status === 'late' || row.status === 'Late Check-in' || row.status === 'Early Check-out') {
+      if (!row.checkOut) {
+        shiftSummary = "Late - Active Duty";
       } else {
-        shiftSummary = "Hourly Credit";
+        const hospitalExemptText = row.isHospitalExempt ? " (Hosp)" : "";
+        if (row.isFullDay) {
+          shiftSummary = row.otHours > 0 ? `Full Shift + ${row.otHours} hr OT${hospitalExemptText}` : `Full-Day Shift${hospitalExemptText}`;
+        } else if (row.isHalfDay) {
+          shiftSummary = row.extraHours > 0 ? `Half Day + ${row.extraHours} hr Ext${hospitalExemptText}` : `Half-Day Shift${hospitalExemptText}`;
+        } else {
+          shiftSummary = `Hourly Credit${hospitalExemptText}`;
+        }
       }
     } else if (row.status === 'checked-in') {
       shiftSummary = "On Active Duty";
@@ -1706,6 +1723,10 @@ function openAttendanceAdjuster(id) {
   document.getElementById('att-is-fd').checked = !!log.isFullDay;
   document.getElementById('att-is-hd').checked = !!log.isHalfDay;
 
+  // Load hospital case values
+  document.getElementById('att-is-hospital').checked = !!log.isHospitalCase;
+  document.getElementById('att-hospital-hours').value = log.hospitalHours || 0.0;
+
   // Toggle visible elements
   toggleManualTimeFields();
   toggleOverrideFields();
@@ -1724,13 +1745,13 @@ function toggleManualTimeFields() {
     timesRow.style.display = 'none';
     overrideBox.style.display = 'none';
     siteGroup.style.display = 'none';
-  } else if (status === 'checked-in') {
+  } else if (status === 'checked-in' || status === 'late') {
     timesRow.style.display = 'grid';
     checkoutGroup.style.display = 'none';
     overrideBox.style.display = 'none'; // Overrides only for complete shifts
     siteGroup.style.display = 'block';
   } else {
-    // completed
+    // completed, Late Check-in
     timesRow.style.display = 'grid';
     checkoutGroup.style.display = 'block';
     overrideBox.style.display = 'block';
@@ -1761,7 +1782,9 @@ async function handleAttendanceSubmit(e) {
     notes: document.getElementById('att-notes').value,
     siteName: document.getElementById('att-site').value,
     isManualOverride: document.getElementById('att-override').checked,
-    travelHours: Number(document.getElementById('att-travel-hours').value || 0.0)
+    travelHours: Number(document.getElementById('att-travel-hours').value || 0.0),
+    isHospitalCase: document.getElementById('att-is-hospital').checked,
+    hospitalHours: Number(document.getElementById('att-hospital-hours').value || 0.0)
   };
 
   if (status === 'absent' || status === 'leave') {
@@ -1777,21 +1800,26 @@ async function handleAttendanceSubmit(e) {
   } else {
     data.checkIn = new Date(document.getElementById('att-checkin').value).toISOString();
     
-    if (status === 'completed') {
-      data.checkOut = new Date(document.getElementById('att-checkout').value).toISOString();
-      
-      // If manual overrides active
-      if (data.isManualOverride) {
-        data.regularHours = Number(document.getElementById('att-reg-hours').value);
-        data.otHours = Number(document.getElementById('att-ot-hours').value);
-        data.extraHours = Number(document.getElementById('att-extra-hours').value);
-        data.calculatedWage = Number(document.getElementById('att-wage').value);
-        data.isFullDay = document.getElementById('att-is-fd').checked;
-        data.isHalfDay = document.getElementById('att-is-hd').checked;
+    if (status === 'completed' || status === 'late' || status === 'Late Check-in' || status === 'Early Check-out') {
+      const checkoutVal = document.getElementById('att-checkout').value;
+      if (checkoutVal) {
+        data.checkOut = new Date(checkoutVal).toISOString();
         
-        // Custom override duration (minutes)
-        const t = (data.regularHours + data.otHours + data.extraHours) * 60;
-        data.duration = Math.round(t);
+        // If manual overrides active
+        if (data.isManualOverride) {
+          data.regularHours = Number(document.getElementById('att-reg-hours').value);
+          data.otHours = Number(document.getElementById('att-ot-hours').value);
+          data.extraHours = Number(document.getElementById('att-extra-hours').value);
+          data.calculatedWage = Number(document.getElementById('att-wage').value);
+          data.isFullDay = document.getElementById('att-is-fd').checked;
+          data.isHalfDay = document.getElementById('att-is-hd').checked;
+          
+          // Custom override duration (minutes)
+          const t = (data.regularHours + data.otHours + data.extraHours) * 60;
+          data.duration = Math.round(t);
+        }
+      } else {
+        data.checkOut = null;
       }
     } else {
       // checked-in
@@ -2226,7 +2254,7 @@ function updateCharts() {
   const siteDistribution = {};
   
   // Only look at present/checked-in rows
-  const activeRecords = state.attendance.filter(r => r.status === 'checked-in' || r.status === 'completed');
+  const activeRecords = state.attendance.filter(r => r.status === 'checked-in' || r.status === 'completed' || r.status === 'late' || r.status === 'Late Check-in' || r.status === 'Early Check-out');
   activeRecords.forEach(row => {
     const site = row.siteName || "Main Site";
     siteDistribution[site] = (siteDistribution[site] || 0) + 1;
@@ -2272,7 +2300,7 @@ function updateCharts() {
     // If it's today, grab actual active rates, else render semi-random simulated rates between 60%-95% to make the dashboard look alive and fully functional!
     if (i === 0) {
       const activeCount = state.employees.filter(e => e.status === 'active').length;
-      const presentCount = state.attendance.filter(r => r.status === 'checked-in' || r.status === 'completed').length;
+      const presentCount = state.attendance.filter(r => r.status === 'checked-in' || r.status === 'completed' || r.status === 'late' || r.status === 'Late Check-in' || r.status === 'Early Check-out').length;
       const rate = activeCount > 0 ? Math.round((presentCount / activeCount) * 100) : 0;
       historyRates.push(rate);
     } else {

@@ -993,6 +993,7 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
 .badge-red { background-color: var(--color-error-bg); color: var(--color-error); }
 .badge-blue { background-color: var(--color-info-bg); color: var(--color-info); }
 .badge-secondary { background-color: var(--glass-border); color: var(--text-secondary); }
+.badge-orange { background-color: rgba(255, 107, 0, 0.12); color: var(--color-primary); }
 
 .ticker-empty {
   display: flex;
