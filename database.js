@@ -360,6 +360,25 @@ class Database {
     }
   }
 
+  getHospitalUsageForMonth(employeeId, monthStr, excludeDate = null, db = null) {
+    const activeDb = db || this.read();
+    const monthLogs = (activeDb.attendance || []).filter(log => 
+      log.employeeId === employeeId && 
+      log.date.startsWith(monthStr) && 
+      log.date !== excludeDate &&
+      log.isHospitalCase === true
+    );
+    
+    let days = 0;
+    let hours = 0;
+    monthLogs.forEach(log => {
+      days += 1;
+      hours += Number(log.hospitalHours || 0);
+    });
+    
+    return { days, hours };
+  }
+
   // --- Attendance Table with dynamic absenteeism & shift calculations ---
   
   // Calculate attendance hours and wages based on checkIn, checkOut, and employee rates
@@ -403,6 +422,11 @@ class Database {
       if (lunchDiffMs > 0) {
         diffMs -= lunchDiffMs;
       }
+    }
+
+    // Add hospital hours if this is an exempt hospital case
+    if (record && record.isHospitalExempt && record.hospitalHours) {
+      diffMs += Number(record.hospitalHours) * 3600000;
     }
     
     const durationMinutes = Math.max(0, Math.floor(diffMs / 60000));
@@ -663,6 +687,23 @@ class Database {
     record.isFullDay = record.isFullDay === true || record.isFullDay === 'true';
     record.calculatedWage = Number(record.calculatedWage) || 0.0;
     record.travelHours = Number(record.travelHours) || 0.0;
+    if (record.status === 'Early Check-out') {
+      record.isEarlyCheckout = true;
+    }
+
+    // Calculate hospital exemption status
+    const monthStr = record.date.substring(0, 7);
+    if (record.isHospitalCase) {
+      const usage = this.getHospitalUsageForMonth(record.employeeId, monthStr, record.date, db);
+      const claimedHours = Number(record.hospitalHours || 0);
+      if (usage.days < 2 && (usage.hours + claimedHours) <= 2) {
+        record.isHospitalExempt = true;
+      } else {
+        record.isHospitalExempt = false;
+      }
+    } else {
+      record.isHospitalExempt = false;
+    }
 
     // Check if check-out time is supplied and check-in exists. If so, calculate math if not explicitly overridden by manual edit
     if (record.checkIn && record.checkOut && !record.isManualOverride) {
@@ -674,7 +715,39 @@ class Database {
       record.isHalfDay = shiftMath.isHalfDay;
       record.isFullDay = shiftMath.isFullDay;
       record.calculatedWage = shiftMath.calculatedWage;
-      record.status = "completed";
+      
+      // Detect early check-out
+      let isEarlyOut = false;
+      if (employee.shiftEnd && employee.shiftEnd.includes(':')) {
+        try {
+          const checkOutDate = new Date(record.checkOut);
+          const coHour = checkOutDate.getHours();
+          const coMinute = checkOutDate.getMinutes();
+          const checkOutMinutes = coHour * 60 + coMinute;
+
+          const [shEndHour, shEndMin] = employee.shiftEnd.split(':').map(Number);
+          const shiftEndMinutes = shEndHour * 60 + shEndMin;
+          if (checkOutMinutes < shiftEndMinutes - 5) {
+            isEarlyOut = true;
+          }
+        } catch (e) {
+          console.error("Failed to calculate early checkout:", e);
+        }
+      }
+      record.isEarlyCheckout = isEarlyOut;
+
+      if (record.isEarlyCheckout) {
+        record.status = "Early Check-out";
+      } else if (record.status === 'Late Check-in' || record.status === 'late' || record.isLate) {
+        record.isLate = true;
+        if (record.scannedCheckIn) {
+          record.status = "Late Check-in";
+        } else {
+          record.status = "late";
+        }
+      } else {
+        record.status = "completed";
+      }
     } else if (record.checkIn && !record.checkOut) {
       // Active check-in
       record.duration = 0;
@@ -684,7 +757,17 @@ class Database {
       record.isHalfDay = false;
       record.isFullDay = false;
       record.calculatedWage = 0.0;
-      record.status = "checked-in";
+      
+      if (record.status === 'Late Check-in' || record.status === 'late' || record.isLate) {
+        record.isLate = true;
+        if (record.scannedCheckIn) {
+          record.status = "Late Check-in";
+        } else {
+          record.status = "late";
+        }
+      } else {
+        record.status = "checked-in";
+      }
     }
 
     // Insert or update
@@ -807,7 +890,11 @@ class Database {
         checkIn: parsedData.checkInTime || getFallbackTimestamp(),
         checkOut: null,
         messageText: rawText,
-        status: "checked-in",
+        status: parsedData.isLate ? "late" : "checked-in",
+        isLate: !!parsedData.isLate,
+        isHospitalCase: !!parsedData.isHospitalCase,
+        hospitalHours: parsedData.hospitalHours || 0.0,
+        scannedCheckIn: false,
         travelHours: parsedData.travelHours || 0.0
       };
       return this.saveAttendance(record);
@@ -820,6 +907,10 @@ class Database {
         existing.messageText += ` | ${rawText}`;
         if (parsedData.travelHours) {
           existing.travelHours = (existing.travelHours || 0.0) + parsedData.travelHours;
+        }
+        if (parsedData.isHospitalCase) {
+          existing.isHospitalCase = true;
+          existing.hospitalHours = (existing.hospitalHours || 0.0) + parsedData.hospitalHours;
         }
         return this.saveAttendance(existing);
       } else {
@@ -1097,10 +1188,37 @@ class Database {
       
       const defaultStdDays = isOfficeStaff ? 30 : 26;
       
-      // Count present days from logs
+      // Count present days from logs (include late check-in days)
       const empLogs = attendanceLogs.filter(log => log.employeeId === emp.id);
-      const presentCount = empLogs.filter(log => log.status === 'completed' || log.status === 'checked-in').length;
+      const presentCount = empLogs.filter(log => log.status === 'completed' || log.status === 'checked-in' || log.status === 'late' || log.status === 'Late Check-in' || log.status === 'Early Check-out').length;
       
+      // Calculate hospital case exemptions and standard late counts chronologically
+      const sortedEmpLogs = [...empLogs].sort((a, b) => a.date.localeCompare(b.date));
+      let hospitalDaysCount = 0;
+      let hospitalHoursCount = 0;
+      let standardLateCount = 0;
+
+      sortedEmpLogs.forEach(log => {
+        if (log.isHospitalCase) {
+          const claimedHours = Number(log.hospitalHours || 0);
+          if (hospitalDaysCount < 2 && (hospitalHoursCount + claimedHours) <= 2) {
+            hospitalDaysCount += 1;
+            hospitalHoursCount += claimedHours;
+            log.isHospitalExempt = true;
+          } else {
+            log.isHospitalExempt = false;
+          }
+        } else {
+          log.isHospitalExempt = false;
+        }
+
+        if ((log.status === 'late' || log.status === 'Late Check-in' || log.isLate) && !log.isHospitalExempt) {
+          standardLateCount += 1;
+        }
+      });
+
+      const lateLopDays = Math.max(0, standardLateCount - 2) * 0.5;
+
       // Default std working days (30 for office staff, 26 for all others)
       const stdWorkingDays = adj.stdWorkingDays !== undefined ? Number(adj.stdWorkingDays) : defaultStdDays;
       
@@ -1120,7 +1238,7 @@ class Database {
       if (isDailyWageWorker) {
         dailyRate = Number(emp.dailyRate) || 0.0;
         const defaultLopDays = Math.max(0, stdWorkingDays - presentCount);
-        lopDays = adj.lopDays !== undefined ? Number(adj.lopDays) : defaultLopDays;
+        lopDays = adj.lopDays !== undefined ? Number(adj.lopDays) : (defaultLopDays + lateLopDays);
         workingDays = Number((stdWorkingDays - lopDays).toFixed(2));
         amount = Number((dailyRate * workingDays).toFixed(2));
       } else {
@@ -1135,7 +1253,7 @@ class Database {
         dailyAllowances = Number((allowances / stdWorkingDays).toFixed(2));
         
         const absentCount = empLogs.filter(log => log.status === 'absent').length;
-        lopDays = adj.lopDays !== undefined ? Number(adj.lopDays) : absentCount;
+        lopDays = adj.lopDays !== undefined ? Number(adj.lopDays) : (absentCount + lateLopDays);
         lopAmount = Number((lopDays * dailyRate * lopDeductionRate).toFixed(2));
         workingDays = Number((stdWorkingDays - lopDays).toFixed(2));
         amount = Number((actualSalary * (workingDays / stdWorkingDays)).toFixed(2));
@@ -1237,7 +1355,9 @@ class Database {
         netSalary,
         company: emp.paymentMode || "—",
         notes: adj.notes || "",
-        dailyRate
+        dailyRate,
+        lateDays: standardLateCount,
+        lateLopDays: lateLopDays
       };
     });
   }
