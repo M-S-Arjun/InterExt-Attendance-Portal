@@ -605,6 +605,18 @@ app.post('/api/face/recognize', async (req, res) => {
       
       const localHour = now.getHours();
       const isLunchHour = (localHour === 13);
+
+      const isLateCheckInPendingScan = existingAttendance && existingAttendance.status === 'late' && !existingAttendance.scannedCheckIn;
+
+      const isScanLateTime = (() => {
+        if (!employee.shiftStart) return false;
+        const [sh, sm] = employee.shiftStart.split(':').map(Number);
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+        const shiftStartMinutes = sh * 60 + sm;
+        return nowMinutes > (shiftStartMinutes + 5); // 5-minute grace period
+      })();
+
+      const isLateCheckIn = isLateCheckInPendingScan || ((!existingAttendance || existingAttendance.status === 'absent') && isScanLateTime);
       
       let eventType = 'entry';
       const attendanceEntry = {
@@ -620,7 +632,22 @@ app.post('/api/face/recognize', async (req, res) => {
         notes: 'Face recognized'
       };
 
-      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent') {
+      if (existingAttendance) {
+        attendanceEntry.id = existingAttendance.id;
+        attendanceEntry.checkIn = existingAttendance.checkIn;
+        attendanceEntry.checkOut = existingAttendance.checkOut || null;
+        attendanceEntry.lunchOut = existingAttendance.lunchOut || null;
+        attendanceEntry.lunchIn = existingAttendance.lunchIn || null;
+        attendanceEntry.travelHours = existingAttendance.travelHours || 0.0;
+        attendanceEntry.notes = existingAttendance.notes || "";
+        attendanceEntry.status = existingAttendance.status;
+        attendanceEntry.isLate = existingAttendance.isLate || isLateCheckIn;
+        attendanceEntry.isHospitalCase = existingAttendance.isHospitalCase;
+        attendanceEntry.hospitalHours = existingAttendance.hospitalHours;
+        attendanceEntry.scannedCheckIn = existingAttendance.scannedCheckIn;
+      }
+
+      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent' && !isLateCheckInPendingScan) {
         if (existingAttendance.status === 'completed' || existingAttendance.status === 'leave') {
           return res.status(400).json({
             success: false,
@@ -666,10 +693,12 @@ app.post('/api/face/recognize', async (req, res) => {
         }
       } else {
         eventType = 'entry';
-        if (existingAttendance) {
-          attendanceEntry.id = existingAttendance.id;
-        }
         attendanceEntry.checkIn = timestamp;
+        if (isLateCheckIn) {
+          attendanceEntry.isLate = true;
+          attendanceEntry.scannedCheckIn = true;
+          attendanceEntry.status = "Late Check-in";
+        }
       }
       
       // Geofencing verification
@@ -1053,19 +1082,40 @@ app.post('/api/face/cctv-event', async (req, res) => {
       matchConfidence: confidence
     };
 
+    const isLateCheckInPendingScan = existingAttendance && existingAttendance.status === 'late' && !existingAttendance.scannedCheckIn;
+
+    const isScanLateTime = (() => {
+      if (!employee.shiftStart) return false;
+      const [sh, sm] = employee.shiftStart.split(':').map(Number);
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const shiftStartMinutes = sh * 60 + sm;
+      return nowMinutes > (shiftStartMinutes + 5); // 5-minute grace period
+    })();
+
+    const isLateCheckIn = isLateCheckInPendingScan || (!existingAttendance && isScanLateTime);
+
+    if (existingAttendance) {
+      attendanceEntry.id = existingAttendance.id;
+      attendanceEntry.checkIn = existingAttendance.checkIn;
+      attendanceEntry.checkOut = existingAttendance.checkOut || null;
+      attendanceEntry.lunchOut = existingAttendance.lunchOut || null;
+      attendanceEntry.lunchIn = existingAttendance.lunchIn || null;
+      attendanceEntry.travelHours = existingAttendance.travelHours || 0.0;
+      attendanceEntry.notes = existingAttendance.notes || "";
+      attendanceEntry.status = existingAttendance.status;
+      attendanceEntry.isLate = existingAttendance.isLate || isLateCheckIn;
+      attendanceEntry.isHospitalCase = existingAttendance.isHospitalCase;
+      attendanceEntry.hospitalHours = existingAttendance.hospitalHours;
+      attendanceEntry.scannedCheckIn = existingAttendance.scannedCheckIn;
+    }
+
     if (resolvedEventType === 'auto') {
-      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent') {
-        attendanceEntry.id = existingAttendance.id;
-        attendanceEntry.checkIn = existingAttendance.checkIn;
-        
+      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent' && !isLateCheckInPendingScan) {
         if (existingAttendance.lunchOut && existingAttendance.lunchIn) {
           resolvedEventType = 'exit';
-          attendanceEntry.lunchOut = existingAttendance.lunchOut;
-          attendanceEntry.lunchIn = existingAttendance.lunchIn;
           attendanceEntry.checkOut = timestamp;
         } else if (existingAttendance.lunchOut && !existingAttendance.lunchIn) {
           resolvedEventType = 'lunch-in';
-          attendanceEntry.lunchOut = existingAttendance.lunchOut;
           attendanceEntry.lunchIn = timestamp;
         } else if (!existingAttendance.lunchOut && isLunchHour) {
           resolvedEventType = 'lunch-out';
@@ -1076,23 +1126,16 @@ app.post('/api/face/cctv-event', async (req, res) => {
         }
       } else {
         resolvedEventType = 'entry';
-        if (existingAttendance) {
-          attendanceEntry.id = existingAttendance.id;
-          attendanceEntry.checkOut = null;
-          attendanceEntry.lunchOut = null;
-          attendanceEntry.lunchIn = null;
-        }
         attendanceEntry.checkIn = timestamp;
+        if (isLateCheckIn) {
+          attendanceEntry.isLate = true;
+          attendanceEntry.scannedCheckIn = true;
+          attendanceEntry.status = "Late Check-in";
+        }
       }
     } else {
       // Explicit camera direction configurations
-      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent') {
-        attendanceEntry.id = existingAttendance.id;
-        attendanceEntry.checkIn = existingAttendance.checkIn;
-        attendanceEntry.lunchOut = existingAttendance.lunchOut;
-        attendanceEntry.lunchIn = existingAttendance.lunchIn;
-        attendanceEntry.checkOut = existingAttendance.checkOut;
-        
+      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent' && !isLateCheckInPendingScan) {
         if (resolvedEventType === 'entry') {
           if (existingAttendance.lunchOut && !existingAttendance.lunchIn) {
             resolvedEventType = 'lunch-in';
@@ -1109,16 +1152,15 @@ app.post('/api/face/cctv-event', async (req, res) => {
           }
         }
       } else {
-        if (existingAttendance) {
-          attendanceEntry.id = existingAttendance.id;
-          attendanceEntry.checkOut = null;
-          attendanceEntry.lunchOut = null;
-          attendanceEntry.lunchIn = null;
-        }
         if (resolvedEventType === 'entry') {
           attendanceEntry.checkIn = timestamp;
         } else {
           attendanceEntry.checkOut = timestamp;
+        }
+        if (isLateCheckIn) {
+          attendanceEntry.isLate = true;
+          attendanceEntry.scannedCheckIn = true;
+          attendanceEntry.status = "Late Check-in";
         }
       }
     }
@@ -1140,7 +1182,11 @@ app.post('/api/face/cctv-event', async (req, res) => {
     const savedEvent = database.saveCameraEvent(cameraEvent);
     
     // 2. Record attendance entry
-    attendanceEntry.messageText = `CCTV Face recognized - auto ${resolvedEventType}`;
+    if (existingAttendance && existingAttendance.messageText) {
+      attendanceEntry.messageText = existingAttendance.messageText + ` | CCTV Face recognized - auto ${resolvedEventType}`;
+    } else {
+      attendanceEntry.messageText = `CCTV Face recognized - auto ${resolvedEventType}`;
+    }
     
     const savedAttendance = database.saveAttendance(attendanceEntry);
     io.emit('attendance_updated', savedAttendance);
