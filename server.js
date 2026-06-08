@@ -448,7 +448,7 @@ app.get('/api/face/health', async (req, res) => {
 // Recognize face from camera image
 app.post('/api/face/recognize', async (req, res) => {
   try {
-    const { imageBase64, threshold, latitude, longitude, employeeId } = req.body;
+    const { imageBase64, threshold, latitude, longitude, employeeId, createException } = req.body;
     
     if (!imageBase64) {
       return res.status(400).json({ success: false, status: "rejected", message: 'imageBase64 required' });
@@ -739,6 +739,16 @@ app.post('/api/face/recognize', async (req, res) => {
         confidence: matchConfidence,
         attendance: savedAttendance,
         eventType: eventType
+      });
+    }
+
+    // Check if exception logging is requested (e.g. from employee selfie check-in portal)
+    if (!createException) {
+      return res.json({
+        success: true,
+        recognized: false,
+        status: "rejected",
+        message: matchReason
       });
     }
 

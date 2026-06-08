@@ -3635,6 +3635,8 @@ let autoScanInterval = null;
 let lastScannedEmployee = null;
 let lastScanTime = 0;
 const lastScannedEmployees = {}; // Track per-employee scan timestamps to support multiple faces
+let isAutoScanningFrame = false;
+let globalScanCooldownUntil = 0;
 
 function toggleAutoScan() {
   const checkbox = document.getElementById('webcam-autoscan');
@@ -3679,13 +3681,20 @@ function startAutoScanLoop() {
     statusBadge.style.borderColor = "rgba(46, 213, 115, 0.2)";
   }
   
+  isAutoScanningFrame = false;
   autoScanInterval = setInterval(async () => {
     if (!webcamStream) {
       stopAutoScanLoop();
       return;
     }
-    await captureAndRecognizeFaceAuto();
-  }, 800);
+    if (isAutoScanningFrame) return; // Skip if previous scan is still processing
+    isAutoScanningFrame = true;
+    try {
+      await captureAndRecognizeFaceAuto();
+    } finally {
+      isAutoScanningFrame = false;
+    }
+  }, 400);
 }
 
 function stopAutoScanLoop() {
@@ -3704,6 +3713,7 @@ function stopAutoScanLoop() {
 }
 
 async function captureAndRecognizeFaceAuto() {
+  if (Date.now() < globalScanCooldownUntil) return; // Skip scanning during cool-down
   const video = document.getElementById('webcam-feed');
   const canvas = document.getElementById('webcam-canvas');
   if (!video || !canvas || !webcamStream) return;
@@ -3752,6 +3762,7 @@ async function captureAndRecognizeFaceAuto() {
         }
       ];
       
+      let recognizedAny = false;
       matches.forEach(match => {
         if (!match.success || !match.employee) return;
         
@@ -3763,6 +3774,7 @@ async function captureAndRecognizeFaceAuto() {
         }
         
         lastScannedEmployees[empId] = now;
+        recognizedAny = true;
         
         // Also keep legacy single-employee compatibility variables updated
         lastScannedEmployee = empId;
@@ -3770,6 +3782,11 @@ async function captureAndRecognizeFaceAuto() {
         
         showFloatingNotification(match.employee.name, match.confidence, match.eventType);
       });
+      
+      if (recognizedAny) {
+        // Pause scanning for 3.5 seconds to let the worker walk away
+        globalScanCooldownUntil = Date.now() + 3500;
+      }
     } else if (result.message && result.message !== 'Face not recognized' && result.message !== 'No matching employee found' && result.message !== 'No face detected') {
       const now = Date.now();
       const rejectionKey = `${result.message}`;

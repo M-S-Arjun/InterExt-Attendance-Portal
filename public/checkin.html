@@ -507,8 +507,22 @@
       const img = document.getElementById('captured-image');
       
       const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
+      
+      // Downscale canvas to max 480px for faster transfer and processing
+      const originalWidth = video.videoWidth || 640;
+      const originalHeight = video.videoHeight || 480;
+      const maxDimension = 480;
+      let targetWidth = originalWidth;
+      let targetHeight = originalHeight;
+      
+      if (Math.max(originalWidth, originalHeight) > maxDimension) {
+        const scale = maxDimension / Math.max(originalWidth, originalHeight);
+        targetWidth = Math.round(originalWidth * scale);
+        targetHeight = Math.round(originalHeight * scale);
+      }
+      
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
       
       const ctx = canvas.getContext('2d');
       
@@ -518,7 +532,7 @@
       
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
-      base64Photo = canvas.toDataURL('image/jpeg', 0.9);
+      base64Photo = canvas.toDataURL('image/jpeg', 0.8);
       
       img.src = base64Photo;
       img.style.display = 'block';
@@ -786,7 +800,8 @@
           imageBase64: base64Photo,
           latitude: Number(latitude),
           longitude: Number(longitude),
-          threshold: 0.6
+          threshold: 0.6,
+          createException: true
         };
         if (workerSelect && workerSelect.value) {
           payload.employeeId = workerSelect.value;
