@@ -1021,6 +1021,11 @@ function renderAttendanceLogsTable(r) {
       <td>
         <div class="btn-actions-grid">
           <button class="btn-table-action" onclick="openAttendanceAdjuster('${row.id}')" title="Adjust Attendance"><i data-lucide="edit-3" style="width: 14px; height: 14px;"></i></button>
+          ${(row.facialRecognitionMatch || row.verificationMethod === 'Face Recognition') ? `
+            <button class="btn-table-action" onclick="openDisputeInspector('${row.employeeId}', '${escapeHtml(row.employeeName)}', '${row.date}')" title="Dispute Resolution / Verification Details">
+              <i data-lucide="shield-check" style="width: 14px; height: 14px; color: var(--color-success, #10b981);"></i>
+            </button>
+          ` : ''}
         </div>
       </td>
     `;
@@ -3044,6 +3049,109 @@ function openSelfieLightbox(imageUrl, metaHtml) {
 
 function closeSelfieModal() {
   const modal = document.getElementById('selfie-modal');
+  if (modal) {
+    modal.classList.remove('active');
+  }
+}
+
+async function openDisputeInspector(employeeId, employeeName, date) {
+  const modal = document.getElementById('dispute-modal');
+  const modalBody = document.getElementById('dispute-modal-body');
+  if (!modal || !modalBody) return;
+
+  modalBody.innerHTML = `
+    <div style="text-align: center; padding: 30px; color: var(--text-secondary);">
+      <i data-lucide="loader" class="animate-spin" style="display:inline-block; margin-bottom: 12px; width: 24px; height: 24px;"></i>
+      <p>Fetching verification metrics and face snapshot...</p>
+    </div>
+  `;
+  modal.classList.add('active');
+  if (window.lucide) window.lucide.createIcons();
+
+  try {
+    const resp = await fetch('/api/attendance/camera/events');
+    if (!resp.ok) throw new Error("HTTP Error " + resp.status);
+    const events = await resp.json();
+    
+    // Find matching entry/exit events for this employee and date
+    let match = events.find(e => e.employeeId === employeeId && e.date === date && e.eventType === 'entry');
+    if (!match) {
+      match = events.find(e => e.employeeId === employeeId && e.date === date);
+    }
+
+    if (!match) {
+      modalBody.innerHTML = `
+        <div style="text-align: center; padding: 30px; color: var(--text-secondary);">
+          <i data-lucide="alert-circle" style="width: 48px; height: 48px; margin-bottom: 12px; color: var(--color-warning);"></i>
+          <p>No CCTV facial recognition capture log found for <strong>${escapeHtml(employeeName)}</strong> on <strong>${escapeHtml(date)}</strong>.</p>
+        </div>
+      `;
+      if (window.lucide) window.lucide.createIcons();
+      return;
+    }
+
+    let formattedTime = '—';
+    if (match.timestamp) {
+      try {
+        const dObj = new Date(match.timestamp);
+        formattedTime = dObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      } catch (e) {}
+    }
+
+    const confVal = match.confidence !== undefined ? Number(match.confidence) : null;
+    const confidenceText = confVal !== null ? (confVal * 100).toFixed(1) + "% (" + confVal.toFixed(2) + ")" : '—';
+
+    modalBody.innerHTML = `
+      <div style="display: grid; grid-template-columns: 1fr; gap: 20px; text-align: center; padding: 10px;">
+        ${match.imageUrl ? `
+          <div style="position: relative;">
+            <img src="${match.imageUrl}" alt="CCTV Snapshot" style="max-width: 100%; max-height: 50vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border); object-fit: contain;">
+            <div style="position: absolute; bottom: 10px; right: 10px; background: rgba(0, 0, 0, 0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 500;">
+              Stored Face Snapshot
+            </div>
+          </div>
+        ` : `
+          <div style="background: rgba(255, 255, 255, 0.03); padding: 40px; border-radius: 8px; border: 1px dashed var(--glass-border); color: var(--text-tertiary);">
+            <i data-lucide="image-off" style="width: 48px; height: 48px; margin-bottom: 12px; stroke-width: 1.5;"></i>
+            <p>Face Snapshot: Stored (but imageUrl not resolved)</p>
+          </div>
+        `}
+        
+        <div style="text-align: left; background: rgba(0, 0, 0, 0.2); padding: 20px; border-radius: 8px; border: 1px solid var(--glass-border); font-size: 0.9rem; line-height: 1.8; color: var(--text-primary);">
+          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 8px; margin-bottom: 8px;">
+            <span style="color: var(--text-secondary); font-weight: 500;">Employee:</span>
+            <strong style="color: var(--color-primary);">${escapeHtml(employeeName)}</strong>
+          </div>
+          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 8px; margin-bottom: 8px;">
+            <span style="color: var(--text-secondary); font-weight: 500;">Camera:</span>
+            <strong>${escapeHtml(match.siteName || 'Entry Gate')}</strong>
+          </div>
+          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 8px; margin-bottom: 8px;">
+            <span style="color: var(--text-secondary); font-weight: 500;">Time:</span>
+            <strong>${formattedTime}</strong>
+          </div>
+          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px;">
+            <span style="color: var(--text-secondary); font-weight: 500;">Confidence:</span>
+            <span class="badge badge-green" style="font-weight: 600; width: fit-content;">${confidenceText}</span>
+          </div>
+        </div>
+      </div>
+    `;
+    if (window.lucide) window.lucide.createIcons();
+  } catch (err) {
+    console.error(err);
+    modalBody.innerHTML = `
+      <div style="text-align: center; padding: 30px; color: var(--color-error);">
+        <i data-lucide="alert-octagon" style="width: 48px; height: 48px; margin-bottom: 12px;"></i>
+        <p>Failed to retrieve face recognition metrics: ${escapeHtml(err.message)}</p>
+      </div>
+    `;
+    if (window.lucide) window.lucide.createIcons();
+  }
+}
+
+function closeDisputeModal() {
+  const modal = document.getElementById('dispute-modal');
   if (modal) {
     modal.classList.remove('active');
   }
