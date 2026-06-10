@@ -6,6 +6,7 @@ Provides HTTP endpoints for camera attendance integration
 import os
 import json
 import logging
+import argparse
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 import traceback
@@ -121,7 +122,7 @@ def recognize_face():
     - JSON: {'image': 'base64_image_data'} or
     - Files: {'image': file_object}
     Optional:
-    - {'threshold': 0.6}
+    - {'threshold': 0.58}
     """
     try:
         if not model:
@@ -130,7 +131,11 @@ def recognize_face():
         if len(model.embeddings_db) == 0:
             return jsonify({'error': 'No employee embeddings trained yet'}), 400
         
-        threshold = request.form.get('threshold', 0.6, type=float)
+        threshold = request.form.get('threshold', None, type=float)
+        if threshold is None and request.is_json:
+            body = request.get_json(silent=True) or {}
+            threshold = float(body.get('threshold', 0.58))
+        threshold = threshold if threshold is not None else 0.58
         
         # Get image data
         image_data = None
@@ -263,7 +268,7 @@ def cctv_start():
         source = data.get('source') or request.form.get('source')
         site_name = data.get('site_name') or request.form.get('site_name', 'Office')
         event_type = data.get('event_type') or request.form.get('event_type', 'auto')
-        threshold = float(data.get('threshold') or request.form.get('threshold', 0.55))
+        threshold = float(data.get('threshold') or request.form.get('threshold', 0.58))
         
         node_server = os.environ.get('NODE_SERVER_URL', 'http://localhost:3000')
         
@@ -322,9 +327,47 @@ def server_error(error):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='InsightFace Face Recognition Service')
+    parser.add_argument('--train', type=str, help='Train embeddings from directory')
+    parser.add_argument('--force', action='store_true', help='Force retrain all employees')
+    parser.add_argument('--save', type=str, default=EMBEDDINGS_FILE, help='Save embeddings to this file after training')
+    parser.add_argument('--serve', action='store_true', help='Start the Flask server after initialization')
+    args = parser.parse_args()
+
     logger.info("Initializing Face Recognition Service...")
     init_model()
-    
+
+    if args.train:
+        if not os.path.exists(args.train):
+            logger.error(f'Training directory not found: {args.train}')
+            raise SystemExit(1)
+
+        logger.info(f"Training embeddings from {args.train} (force={args.force})")
+
+        def save_cb():
+            os.makedirs(os.path.dirname(args.save), exist_ok=True)
+            model.save_embeddings(args.save)
+
+        embeddings = model.train_employee_embeddings(
+            args.train,
+            force_retrain=args.force,
+            save_callback=save_cb
+        )
+        save_cb()
+        logger.info(f"Training complete. Saved embeddings for {len(embeddings)} employees to {args.save}")
+
+        if args.serve:
+            logger.info("Starting Flask API server on http://localhost:5000")
+            app.run(
+                host='0.0.0.0',
+                port=5000,
+                debug=False,
+                use_reloader=False
+            )
+        else:
+            logger.info("Exiting after training.")
+        raise SystemExit(0)
+
     logger.info("Starting Flask API server on http://localhost:5000")
     app.run(
         host='0.0.0.0',

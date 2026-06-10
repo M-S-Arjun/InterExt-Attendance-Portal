@@ -757,8 +757,9 @@ class Database {
       record.isHalfDay = false;
       record.isFullDay = false;
       record.calculatedWage = 0.0;
-      
-      if (record.status === 'Late Check-in' || record.status === 'late' || record.isLate) {
+      if (record.status === 'out-for-lunch') {
+        // Preserve lunch break state without closing the shift
+      } else if (record.status === 'Late Check-in' || record.status === 'late' || record.isLate) {
         record.isLate = true;
         if (record.scannedCheckIn) {
           record.status = "Late Check-in";
@@ -858,6 +859,32 @@ class Database {
         travelHours: parsedData.travelHours || 0.0
       };
       return this.saveAttendance(record);
+    } else if (parsedData.extractedAction === 'half-day-leave') {
+      const targetDate = parsedData.leaveDate || targetDateStr;
+      const halfDayHours = this.getSettings().standardHalfDayHours || 4.0;
+      const halfWage = Number(((employee.dailyRate || 0) * 0.5).toFixed(2));
+      const record = {
+        employeeId: employee.id,
+        employeeName: employee.name,
+        siteName: site.name || "—",
+        date: targetDate,
+        checkIn: null,
+        checkOut: null,
+        duration: 0,
+        regularHours: halfDayHours,
+        otHours: 0.0,
+        extraHours: 0.0,
+        isHalfDay: true,
+        isFullDay: false,
+        calculatedWage: halfWage,
+        messageText: rawText,
+        status: "half-day leave",
+        travelHours: 0.0
+      };
+      if (existingLogIndex >= 0) {
+        record.id = db.attendance[existingLogIndex].id;
+      }
+      return this.saveAttendance(record);
     } else if (parsedData.extractedAction === 'leave') {
       // Record clean Leave log
       const targetDate = parsedData.leaveDate || targetDateStr;
@@ -880,6 +907,25 @@ class Database {
         travelHours: 0.0
       };
       return this.saveAttendance(record);
+    } else if (parsedData.extractedAction === 'out-for-lunch') {
+      if (existingLogIndex >= 0) {
+        const existing = db.attendance[existingLogIndex];
+        existing.messageText = existing.messageText ? `${existing.messageText} | ${rawText}` : rawText;
+        existing.status = 'out-for-lunch';
+        if (parsedData.breakStart) existing.breakStart = parsedData.breakStart;
+        if (parsedData.breakEnd) existing.breakEnd = parsedData.breakEnd;
+        return this.saveAttendance(existing);
+      }
+      return this.savePendingMessage({
+        sender: parsedData.rawSender || "Unknown",
+        messageText: rawText,
+        reason: "Out for lunch message without an active check-in",
+        extractedName: employee.name,
+        extractedSite: site.name,
+        extractedAction: "out-for-lunch",
+        extractedTime: parsedData.extractedTime,
+        extractedDate: targetDateStr
+      });
     } else if (parsedData.extractedAction === 'in') {
       // Create new check-in
       const record = {

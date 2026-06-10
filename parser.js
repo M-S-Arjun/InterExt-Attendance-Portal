@@ -219,6 +219,79 @@ function parseTimeStr(timeMatchStr, dateStr = null, forceCheckoutPM = false) {
   return d.toISOString();
 }
 
+// Helper to extract target dates (in YYYY-MM-DD format) from message text
+function extractTargetDates(text, messageTimestamp = null) {
+  const refDate = messageTimestamp ? new Date(messageTimestamp) : new Date();
+  
+  // Format Date to YYYY-MM-DD
+  const formatDate = (dateObj) => {
+    const y = dateObj.getFullYear();
+    const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const d = String(dateObj.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const todayStr = formatDate(refDate);
+  
+  const yesterday = new Date(refDate);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = formatDate(yesterday);
+
+  const tomorrow = new Date(refDate);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = formatDate(tomorrow);
+
+  const dayBeforeYesterday = new Date(refDate);
+  dayBeforeYesterday.setDate(dayBeforeYesterday.getDate() - 2);
+  const dayBeforeYesterdayStr = formatDate(dayBeforeYesterday);
+
+  // Check for explicit date matches first, e.g. "25/05/2026", "25-05-2026", "25/05"
+  const explicitDates = [];
+  const fullDateRegex = /\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/g;
+  let match;
+  while ((match = fullDateRegex.exec(text)) !== null) {
+    let day = parseInt(match[1]);
+    let month = parseInt(match[2]);
+    let year = parseInt(match[3]);
+    if (year < 100) year += 2000;
+    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    explicitDates.push(dateStr);
+  }
+
+  if (explicitDates.length > 0) {
+    return [...new Set(explicitDates)].sort();
+  }
+
+  // Fallback: Check for semantic / relative date keywords
+  const cleanText = text.toLowerCase().trim();
+  const dates = new Set();
+
+  const hasYesterday = /\b(?:yesterday|innale|y'day|yday)\b/i.test(cleanText);
+  const hasToday = /\b(?:today|innu)\b/i.test(cleanText);
+  const hasTomorrow = /\b(?:tomorrow|nale|tmrw|tmrow)\b/i.test(cleanText);
+  const hasDayBeforeYesterday = /\b(?:day\s+before\s+yesterday|munninale|minnannu)\b/i.test(cleanText);
+
+  if (hasYesterday) {
+    dates.add(yesterdayStr);
+  }
+  if (hasToday) {
+    dates.add(todayStr);
+  }
+  if (hasTomorrow) {
+    dates.add(tomorrowStr);
+  }
+  if (hasDayBeforeYesterday) {
+    dates.add(dayBeforeYesterdayStr);
+  }
+
+  // If no relative indicators are present, default to today
+  if (dates.size === 0) {
+    dates.add(todayStr);
+  }
+
+  return Array.from(dates).sort();
+}
+
 class AttendanceParser {
   // Known Indian place names - to prevent confusion with employee names
   static INDIAN_PLACE_NAMES = new Set([
@@ -266,6 +339,13 @@ class AttendanceParser {
       return true;
     }
     return false;
+  }
+
+  detectIsHalfDayLeave(line) {
+    const clean = line.toLowerCase();
+    const isHalfDayText = /\bhalf[-\s]*day\b/i.test(clean);
+    const hasLeaveSignal = /\b(?:leave|off|absent|rest|not coming|unable to come|cannot come|can't come|cannot attend|wont come|will not come|sick|unwell|hospital)\b/i.test(clean);
+    return isHalfDayText && hasLeaveSignal;
   }
 
   // Parse a single text line/message
@@ -475,9 +555,12 @@ class AttendanceParser {
 
     // 4. Leave & Time Range / Late check-in extraction
     const isLeave = this.detectIsLeave(cleanLine);
+    const isHalfDayLeave = isLeave && this.detectIsHalfDayLeave(cleanLine);
 
     let checkInTimestamp = null;
     let checkOutTimestamp = null;
+    let breakStartTimestamp = null;
+    let breakEndTimestamp = null;
     let actionType = 'in';
     let hasParsedLate = false;
     let hasParsedEarly = false;
@@ -485,7 +568,7 @@ class AttendanceParser {
     let hospitalHours = 0;
 
     if (isLeave) {
-      actionType = 'leave';
+      actionType = isHalfDayLeave ? 'half-day-leave' : 'leave';
     } else {
       // Check for Late pattern
       const lateMatch1 = cleanLine.match(/\b(\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\s*late\b/i);
@@ -618,7 +701,22 @@ class AttendanceParser {
       const timeRegex = /\b(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)\b/gi;
       const timeMatches = lineForTimeMatching.match(timeRegex) || [];
 
-      if (timeMatches.length >= 2) {
+      const lunchRangePattern = /\b(?:1(?:[:.]\d{2})?\s*(?:am|pm)?|one(?:\s*pm)?)\s*(?:to|-)\s*(?:2(?:[:.]\d{2})?\s*(?:am|pm)?|two(?:\s*pm)?)\b/i;
+      const lunchOutKeywords = /\b(?:out|left|exit|lunch|break|away)\b/i;
+      const isLunchBreak = lunchRangePattern.test(cleanLine) && lunchOutKeywords.test(cleanLine);
+      if (isLunchBreak) {
+        actionType = 'out-for-lunch';
+        if (timeMatches.length >= 2) {
+          try {
+            breakStartTimestamp = parseTimeStr(timeMatches[0], dateStr, false);
+            breakEndTimestamp = parseTimeStr(timeMatches[1], dateStr, true);
+          } catch (err) {
+            console.error("Lunch break time parsing failed:", err);
+          }
+        }
+      }
+
+      if (timeMatches.length >= 2 && actionType !== 'out-for-lunch' && actionType !== 'half-day-leave') {
         try {
           checkInTimestamp = parseTimeStr(timeMatches[0], dateStr, false);
           checkOutTimestamp = parseTimeStr(timeMatches[1], dateStr, true);
@@ -626,7 +724,7 @@ class AttendanceParser {
         } catch (err) {
           console.error("Time range parsing failed:", err);
         }
-      } else if (timeMatches.length === 1) {
+      } else if (timeMatches.length === 1 && actionType !== 'half-day-leave' && actionType !== 'out-for-lunch') {
         const outKeywords = ['out', 'checkout', 'check-out', 'left', 'exit', 'finish', 'done', 'leaving'];
         const foundOut = outKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(lineForTimeMatching));
         try {
@@ -659,27 +757,11 @@ class AttendanceParser {
     }
 
     let leaveDate = null;
-    if (actionType === 'leave') {
-      const isTomorrow = /\btomorrow\b/i.test(cleanLine);
-      if (isTomorrow && dateStr) {
-        try {
-          const parts = dateStr.split('-');
-          const dateObj = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-          dateObj.setDate(dateObj.getDate() + 1);
-          
-          const y = dateObj.getFullYear();
-          const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-          const d = String(dateObj.getDate()).padStart(2, '0');
-          leaveDate = `${y}-${m}-${d}`;
-        } catch (e) {
-          leaveDate = dateStr;
-        }
-      } else {
-        leaveDate = dateStr;
-      }
+    if (actionType === 'leave' || actionType === 'half-day-leave') {
+      leaveDate = dateStr;
     }
 
-    const isSuccess = !!(matchedEmployee && (actionType === 'leave' || matchedSite || (extractedSite && extractedSite !== "—")));
+    const isSuccess = !!(matchedEmployee && (actionType === 'leave' || actionType === 'half-day-leave' || actionType === 'out-for-lunch' || matchedSite || (extractedSite && extractedSite !== "—")));
     let reason = "";
     if (!matchedEmployee) reason = "Worker name unrecognized";
     else if (actionType !== 'leave' && !matchedSite && (!extractedSite || extractedSite === "—")) reason = "Work site not specified/recognized";
@@ -695,6 +777,8 @@ class AttendanceParser {
       checkInTime: checkInTimestamp,
       checkOutTime: checkOutTimestamp,
       leaveDate: leaveDate,
+      breakStart: breakStartTimestamp,
+      breakEnd: breakEndTimestamp,
       confidence: Number(((employeeConfidence + siteConfidence) / 2).toFixed(2)),
       isLate: hasParsedLate,
       isHospitalCase: isHospitalCase && (hasParsedLate || hasParsedEarly),
@@ -956,11 +1040,26 @@ class AttendanceParser {
         if (isNameLike && isSiteLike && hasTimeLine) {
           // Build a virtual single-line and parse
           const virtual = `${nameLine}, ${siteLine}, ${activeLines.find(l => timeRegexLine.test(l) || simpleRange.test(l))}`;
-          const res = this.parseSingleLine(virtual.toLowerCase(), todayStr, defaultSiteObj, senderPhone, messageTimestamp);
-          res.rawSender = senderPhone;
-          res.isList = false;
-          res.travelHours = paidTravelHours;
-          return res;
+          const targetDates = extractTargetDates(virtual, messageTimestamp);
+          if (targetDates.length > 1) {
+            const items = targetDates.map(d => {
+              const res = this.parseSingleLine(virtual.toLowerCase(), d, defaultSiteObj, senderPhone, messageTimestamp);
+              res.rawSender = senderPhone;
+              res.originalLineText = virtual;
+              res.travelHours = paidTravelHours;
+              return res;
+            });
+            return {
+              isList: true,
+              items: items
+            };
+          } else {
+            const res = this.parseSingleLine(virtual.toLowerCase(), targetDates[0], defaultSiteObj, senderPhone, messageTimestamp);
+            res.rawSender = senderPhone;
+            res.isList = false;
+            res.travelHours = paidTravelHours;
+            return res;
+          }
         }
       }
     }
@@ -978,7 +1077,18 @@ class AttendanceParser {
 
     if (hasMultipleLines && hasInOrOut) {
       console.log(`[Parser] Detected single-worker multi-line report.`);
-      const res = this.parseSingleWorkerMultiLine(activeLines, todayStr, defaultSiteObj, senderPhone);
+      let singleWorkerDate = todayStr;
+      for (const line of activeLines) {
+        const hasDateWord = /\b(?:yesterday|today|tomorrow|innale|innu|nale|munninale|minnannu|\d{1,2}[/-]\d{1,2})\b/i.test(line);
+        if (hasDateWord) {
+          const dates = extractTargetDates(line, messageTimestamp);
+          if (dates.length > 0) {
+            singleWorkerDate = dates[0];
+            break;
+          }
+        }
+      }
+      const res = this.parseSingleWorkerMultiLine(activeLines, singleWorkerDate, defaultSiteObj, senderPhone);
       res.rawSender = senderPhone;
       res.isList = false;
       res.travelHours = paidTravelHours;
@@ -997,7 +1107,7 @@ class AttendanceParser {
         const lower = clean.toLowerCase();
         if (clean.length === 0) return;
 
-        // A. Check for date: "25/5/26"
+        // A. Check for date: "25/5/26" or relative date keyword
         const dateMatch = clean.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
         if (dateMatch) {
           let day = parseInt(dateMatch[1]);
@@ -1006,6 +1116,15 @@ class AttendanceParser {
           if (year < 100) year += 2000;
           reportDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
           return;
+        }
+
+        const hasRelative = /\b(?:yesterday|today|tomorrow|innale|innu|nale|munninale|minnannu)\b/i.test(lower);
+        if (hasRelative && !reportDate) {
+          const relativeDates = extractTargetDates(clean, messageTimestamp);
+          if (relativeDates.length > 0) {
+            reportDate = relativeDates[0];
+            return;
+          }
         }
 
         // B. Check for time range: "9 to 6", "9-6"
@@ -1072,11 +1191,46 @@ class AttendanceParser {
     }
 
     // 2. Parse line-by-line (Multi-worker lists vs. Single worker texts)
-    // Filter out header lines containing only site markers
+    // Filter out header lines containing only site markers, dates, or relative date keywords
     const dataLines = activeLines.filter(line => {
-      const lineLower = line.toLowerCase();
-      return !lineLower.startsWith("site:") && !sites.some(s => s.name.toLowerCase() === lineLower);
+      const lineLower = line.toLowerCase().trim();
+      if (lineLower.startsWith("site:") || sites.some(s => s.name.toLowerCase() === lineLower)) {
+        return false;
+      }
+      
+      const isExplicitDate = /^\s*[\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?]\s*:?\s*$/.test(lineLower) || 
+                             /^\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*:?\s*$/.test(lineLower);
+      const isRelativeDateOnly = /^\s*(yesterday|today|tomorrow|innale|innu|nale|munninale|minnannu)\b\s*:?\s*$/i.test(lineLower);
+      if (isExplicitDate || isRelativeDateOnly) {
+        return false;
+      }
+      
+      return true;
     });
+
+    // Let's determine a default date for the list by checking the first 3 lines of activeLines
+    let listDefaultDate = todayStr;
+    for (let i = 0; i < Math.min(3, activeLines.length); i++) {
+      const line = activeLines[i].toLowerCase().trim();
+      const dateMatch = line.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
+      if (dateMatch) {
+        let day = parseInt(dateMatch[1]);
+        let month = parseInt(dateMatch[2]);
+        let year = parseInt(dateMatch[3]);
+        if (year < 100) year += 2000;
+        listDefaultDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        break;
+      }
+      
+      const hasRelative = /\b(?:yesterday|today|tomorrow|innale|innu|nale|munninale|minnannu)\b/i.test(line);
+      if (hasRelative) {
+        const parsedRelDates = extractTargetDates(line, messageTimestamp);
+        if (parsedRelDates.length > 0) {
+          listDefaultDate = parsedRelDates[0];
+          break;
+        }
+      }
+    }
 
     if (dataLines.length > 1) {
       // Option 2: Consolidated Supervisor Report List!
@@ -1085,7 +1239,12 @@ class AttendanceParser {
       
       dataLines.forEach(line => {
         const cleanLine = line.toLowerCase();
-        const res = this.parseSingleLine(cleanLine, todayStr, defaultSiteObj, "", messageTimestamp);
+        // Check if individual line specifies its own date
+        const lineDates = extractTargetDates(cleanLine, messageTimestamp);
+        const hasRelativeOrExplicit = /\b(?:yesterday|today|tomorrow|innale|innu|nale|munninale|minnannu|\d{1,2}[/-]\d{1,2})\b/i.test(cleanLine);
+        const targetDate = hasRelativeOrExplicit && lineDates.length > 0 ? lineDates[0] : listDefaultDate;
+
+        const res = this.parseSingleLine(cleanLine, targetDate, defaultSiteObj, "", messageTimestamp);
         res.rawSender = senderPhone;
         res.originalLineText = line;
         res.travelHours = paidTravelHours;
@@ -1099,11 +1258,27 @@ class AttendanceParser {
     } else {
       // Option 1 or standard single check-in text
       const cleanLine = dataLines[0] ? dataLines[0].toLowerCase() : activeLines[0].toLowerCase();
-      const res = this.parseSingleLine(cleanLine, todayStr, defaultSiteObj, senderPhone, messageTimestamp);
-      res.rawSender = senderPhone;
-      res.isList = false;
-      res.travelHours = paidTravelHours;
-      return res;
+      const targetDates = extractTargetDates(cleanLine, messageTimestamp);
+      if (targetDates.length > 1) {
+        console.log(`[Parser] Semantic parser identified multi-day entry for dates: ${targetDates.join(', ')}`);
+        const items = targetDates.map(d => {
+          const res = this.parseSingleLine(cleanLine, d, defaultSiteObj, senderPhone, messageTimestamp);
+          res.rawSender = senderPhone;
+          res.originalLineText = cleanLine;
+          res.travelHours = paidTravelHours;
+          return res;
+        });
+        return {
+          isList: true,
+          items: items
+        };
+      } else {
+        const res = this.parseSingleLine(cleanLine, targetDates[0], defaultSiteObj, senderPhone, messageTimestamp);
+        res.rawSender = senderPhone;
+        res.isList = false;
+        res.travelHours = paidTravelHours;
+        return res;
+      }
     }
   }
 }

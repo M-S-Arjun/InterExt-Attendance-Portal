@@ -22,6 +22,8 @@ const XLSX = require('xlsx');
 const database = require('./database');
 const whatsapp = require('./whatsapp');
 
+const FACE_RECOGNITION_MIN_CONFIDENCE = 0.58;
+
 // In-memory stack to store resolved/deleted exception actions for the undo function
 const undoStack = [];
 const redoStack = [];
@@ -181,13 +183,19 @@ app.get('/api/stats', (req, res) => {
   const activeEmpCount = employees.filter(e => e.status === 'active').length;
   const attendanceToday = database.getAttendanceForDate(todayStr);
   
-  const presentCount = attendanceToday.filter(a => a.status === 'checked-in' || a.status === 'completed').length;
+  const presentCount = attendanceToday.filter(a => a.status === 'checked-in' || a.status === 'completed' || a.status === 'late' || a.status === 'Late Check-in' || a.status === 'Early Check-out').length;
+  const halfDayCount = attendanceToday.filter(a => a.isHalfDay === true || a.isHalfDay === 'true').length;
+  const lateCount = attendanceToday.filter(a => a.status === 'Late Check-in' || a.status === 'late' || a.isLate === true || a.isLate === 'true').length;
+  const earlyCount = attendanceToday.filter(a => a.status === 'Early Check-out' || a.isEarlyCheckout === true || a.isEarlyCheckout === 'true').length;
   const absentCount = attendanceToday.filter(a => a.status === 'absent').length;
   const pendingCount = database.getPendingMessages().length;
 
   res.json({
     totalEmployees: activeEmpCount,
     presentToday: presentCount,
+    halfDayToday: halfDayCount,
+    lateCheckInToday: lateCount,
+    earlyCheckOutToday: earlyCount,
     absentToday: absentCount,
     pendingExceptions: pendingCount
   });
@@ -445,6 +453,47 @@ app.get('/api/face/health', async (req, res) => {
   }
 });
 
+// Resolve face ID (folder name) to employee database record
+function resolveEmployeeFromFaceId(faceId, employees) {
+  if (!faceId || !employees) return null;
+
+  // 1. Direct ID match
+  let employee = employees.find(e => e.id === faceId);
+  if (employee) return employee;
+
+  // 2. Custom mapping overrides for known anomalies
+  const customFaceMappings = {
+    "akash_rana": "emp_2058",       // Akash Rana
+    "alex_gigi": "emp_2087",        // Alex Gigi
+    "anandhu_sunil": "emp_2029",   // Anandhu Sunil
+    "james_t_m": "emp_2038",        // James Tm
+    "prasanth_em": "emp_2025",      // Prasanth E.M
+    "ratheesh_ks": "emp_2048",      // Ratheesh K S
+    "rebeesh_ks": "emp_1004",       // Rebeesh K S
+    "shinod_n_t": "emp_2001"        // Shinodh N T
+  };
+
+  const mappedId = customFaceMappings[faceId];
+  if (mappedId) {
+    employee = employees.find(e => e.id === mappedId);
+    if (employee) return employee;
+  }
+
+  // 3. Robust clean name matching
+  employee = employees.find(e => {
+    if (!e.name) return false;
+    const cleanDbName = e.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
+    const cleanInputName = faceId.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
+    
+    return cleanDbName === cleanInputName || 
+           cleanDbName.replace(/_/g, '') === cleanInputName.replace(/_/g, '') || 
+           cleanDbName.includes(cleanInputName) || 
+           cleanInputName.includes(cleanDbName);
+  });
+
+  return employee;
+}
+
 // Recognize face from camera image
 app.post('/api/face/recognize', async (req, res) => {
   try {
@@ -462,16 +511,15 @@ app.post('/api/face/recognize', async (req, res) => {
       claimedEmployee = db.employees.find(e => e.id === employeeId);
     }
     
-    const formData = new URLSearchParams();
-    formData.append('image_base64', imageBase64);
-    if (threshold) formData.append('threshold', threshold);
-
     let data;
     try {
       const response = await fetch(`${FACE_RECOGNITION_SERVICE}/api/face/recognize`, {
         method: 'POST',
-        body: formData,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        body: JSON.stringify({
+          image: imageBase64,
+          threshold: threshold || 0.58
+        }),
+        headers: { 'Content-Type': 'application/json' }
       });
       data = await response.json();
     } catch (fetchErr) {
@@ -558,22 +606,13 @@ app.post('/api/face/recognize', async (req, res) => {
       matchConfidence = bestMatch.confidence;
       
       // Look up employee
-      matchedEmployee = db.employees.find(e => e.id === bestMatch.employee_id);
-      if (!matchedEmployee) {
-        // Fallback name matching
-        matchedEmployee = db.employees.find(e => {
-          if (!e.name) return false;
-          const cleanDbName = e.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
-          const cleanInputName = bestMatch.employee_id.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
-          return cleanDbName === cleanInputName;
-        });
-      }
+      matchedEmployee = resolveEmployeeFromFaceId(bestMatch.employee_id, db.employees);
 
       if (matchedEmployee) {
         if (claimedEmployee) {
-          // If claimed employee matches matched employee and confidence >= 0.75
+          // If claimed employee matches matched employee and confidence >= configured threshold
           if (claimedEmployee.id === matchedEmployee.id) {
-            if (matchConfidence >= 0.75) {
+            if (matchConfidence >= FACE_RECOGNITION_MIN_CONFIDENCE) {
               isConfident = true;
             } else {
               matchReason = `Low match confidence (${(matchConfidence * 100).toFixed(0)}%)`;
@@ -583,7 +622,7 @@ app.post('/api/face/recognize', async (req, res) => {
           }
         } else {
           // Auto-identify mode
-          if (matchConfidence >= 0.75) {
+          if (matchConfidence >= FACE_RECOGNITION_MIN_CONFIDENCE) {
             isConfident = true;
           } else {
             matchReason = `Low match confidence (${(matchConfidence * 100).toFixed(0)}%)`;
@@ -885,10 +924,10 @@ app.get('/api/face/embeddings-info', async (req, res) => {
 // Train face recognition model
 app.post('/api/face/train', async (req, res) => {
   try {
-    const { imagesDir } = req.body;
-    
+    let imagesDir = req.body.imagesDir;
     if (!imagesDir) {
-      return res.status(400).json({ error: 'imagesDir required' });
+      imagesDir = path.join(__dirname, 'uploads', 'face_training');
+      console.log('[API] Using default face training directory:', imagesDir);
     }
     
     const formData = new URLSearchParams();
@@ -1040,19 +1079,7 @@ app.post('/api/face/cctv-event', async (req, res) => {
     const { employee_id, confidence, camera_id, camera_name, site_name, event_type, image_base64 } = req.body;
     
     const db = database.read();
-    let employee = db.employees?.find(e => e.id === employee_id);
-    if (!employee) {
-      // Fallback fuzzy resolver
-      employee = db.employees?.find(e => {
-        if (!e.name) return false;
-        const cleanDbName = e.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
-        const cleanInputName = employee_id.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
-        return cleanDbName === cleanInputName || 
-               cleanDbName.replace(/_/g, '') === cleanInputName.replace(/_/g, '') || 
-               cleanDbName.includes(cleanInputName) || 
-               cleanInputName.includes(cleanDbName);
-      });
-    }
+    let employee = resolveEmployeeFromFaceId(employee_id, db.employees || []);
     
     if (!employee) {
       console.warn(`[CCTV Event] Match "${employee_id}" not found in database.`);

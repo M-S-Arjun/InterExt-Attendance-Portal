@@ -530,6 +530,9 @@ async function fetchStats() {
     const r = await fetch('/api/stats').then(r => r.json());
     document.getElementById('metric-total-emp').textContent = r.totalEmployees;
     document.getElementById('metric-present').textContent = r.presentToday;
+    document.getElementById('metric-halfday').textContent = r.halfDayToday || 0;
+    document.getElementById('metric-late').textContent = r.lateCheckInToday || 0;
+    document.getElementById('metric-early').textContent = r.earlyCheckOutToday || 0;
     document.getElementById('metric-absent').textContent = r.absentToday;
     document.getElementById('metric-pending').textContent = r.pendingExceptions;
 
@@ -971,6 +974,11 @@ function renderAttendanceLogsTable(r) {
       }
     } else if (row.status === 'Early Check-out') {
       statusBadge = `<span class="badge badge-orange">Early Check-out</span>`;
+    } else if (row.status === 'half-day leave') {
+      statusBadge = `<span class="badge badge-amber">Half Day Leave</span>`;
+    } else if (row.status === 'out-for-lunch') {
+      statusBadge = `<span class="badge badge-blue">Out for Lunch</span>`;
+      tr.className = "table-row-checked-in";
     }
 
     const inTime = row.checkIn ? new Date(row.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
@@ -984,7 +992,12 @@ function renderAttendanceLogsTable(r) {
 
     // Shift summary descriptors
     let shiftSummary = "—";
-    if (row.status === 'completed' || row.status === 'late' || row.status === 'Late Check-in' || row.status === 'Early Check-out') {
+    if (row.status === 'out-for-lunch') {
+      shiftSummary = "Out for Lunch";
+    } else if (row.status === 'half-day leave') {
+      const hospitalExemptText = row.isHospitalExempt ? " (Hosp)" : "";
+      shiftSummary = row.extraHours > 0 ? `Half Day + ${row.extraHours} hr Ext${hospitalExemptText}` : `Half-Day Shift${hospitalExemptText}`;
+    } else if (row.status === 'completed' || row.status === 'late' || row.status === 'Late Check-in' || row.status === 'Early Check-out') {
       if (!row.checkOut) {
         shiftSummary = "Late - Active Duty";
       } else {
@@ -1212,7 +1225,7 @@ async function recognizeFaceFromCamera() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             imageBase64: imageBase64,
-            threshold: 0.6
+            threshold: 0.58
           })
         });
         
@@ -1273,14 +1286,10 @@ async function recognizeFaceFromCamera() {
 
 async function trainFaceRecognitionModel() {
   try {
-    const imagesDir = prompt('Enter path to employee images directory:\n\nExpected structure:\n/path/to/images/\n  employee_id_1/\n    photo1.jpg\n    photo2.jpg\n  employee_id_2/\n    photo1.jpg');
-    
-    if (!imagesDir) return;
-    
     const resp = await fetch('/api/face/train', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ imagesDir: imagesDir })
+      body: JSON.stringify({})
     });
     
     if (!resp.ok) {
@@ -3707,7 +3716,7 @@ async function captureAndRecognizeFace() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         imageBase64: imageBase64,
-        threshold: 0.55
+        threshold: 0.58
       })
     });
     

@@ -39,6 +39,12 @@
   --color-error-bg: rgba(244, 63, 94, 0.08);
   --color-info: #ff8f3d;          /* sky-orange */
   --color-info-bg: rgba(255, 143, 61, 0.08);
+  --color-purple: #a855f7;        /* Purple */
+  --color-purple-bg: rgba(168, 85, 247, 0.08);
+  --color-indigo: #6366f1;        /* Indigo */
+  --color-indigo-bg: rgba(99, 102, 241, 0.08);
+  --color-cyan: #06b6d4;          /* Cyan */
+  --color-cyan-bg: rgba(6, 182, 212, 0.08);
   
   --shadow-lg: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.5);
@@ -79,6 +85,12 @@
   --color-error-bg: rgba(225, 29, 72, 0.06);
   --color-info: #e65100;          /* dark orange */
   --color-info-bg: rgba(230, 81, 0, 0.06);
+  --color-purple: #8b5cf6;        /* Purple */
+  --color-purple-bg: rgba(139, 92, 246, 0.06);
+  --color-indigo: #4f46e5;        /* Indigo */
+  --color-indigo-bg: rgba(79, 70, 229, 0.06);
+  --color-cyan: #0891b2;          /* Cyan */
+  --color-cyan-bg: rgba(8, 145, 178, 0.06);
   
   --shadow-lg: 0 10px 30px -10px rgba(0, 0, 0, 0.08);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
@@ -790,7 +802,7 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
 /* Metrics Dashboard grid */
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 20px;
   margin-bottom: 24px;
 }
@@ -861,6 +873,30 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
 .card-green .metric-icon {
   background-color: var(--color-success-bg);
   color: var(--color-success);
+}
+
+.card-purple {
+  border-bottom: 3px solid var(--color-purple);
+}
+.card-purple .metric-icon {
+  background-color: var(--color-purple-bg);
+  color: var(--color-purple);
+}
+
+.card-indigo {
+  border-bottom: 3px solid var(--color-indigo);
+}
+.card-indigo .metric-icon {
+  background-color: var(--color-indigo-bg);
+  color: var(--color-indigo);
+}
+
+.card-cyan {
+  border-bottom: 3px solid var(--color-cyan);
+}
+.card-cyan .metric-icon {
+  background-color: var(--color-cyan-bg);
+  color: var(--color-cyan);
 }
 
 .card-red {

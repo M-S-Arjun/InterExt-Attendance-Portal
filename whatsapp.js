@@ -213,6 +213,11 @@ class WhatsAppManager extends EventEmitter {
         },
         puppeteer: {
           headless: true,
+          executablePath: fs.existsSync('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe')
+            ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+            : (fs.existsSync('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe')
+              ? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+              : undefined),
           protocolTimeout: 240000, // Terminate Protocol errors by setting 240s timeout (4 minutes for large accounts)
           args: [
             '--no-sandbox',
