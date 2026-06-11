@@ -26,8 +26,8 @@
   --glass-highlight: rgba(255, 255, 255, 0.1);
   
   --text-primary: #ffffff;
-  --text-secondary: #a1a1aa;
-  --text-tertiary: #71717a;
+  --text-secondary: #d4d4d8;       /* Brighter secondary text for better readability */
+  --text-tertiary: #a1a1aa;        /* Brighter tertiary text for better readability */
   
   --color-primary: #ff6b00;       /* sunset orange */
   --color-primary-hover: #e05e00;
@@ -72,25 +72,25 @@
   --glass-highlight: rgba(0, 0, 0, 0.02);
   
   --text-primary: #09090b;
-  --text-secondary: #52525b;
-  --text-tertiary: #8f9299;
+  --text-secondary: #3f3f46;       /* Darker/sharper secondary text for better contrast */
+  --text-tertiary: #52525b;        /* Darker/sharper tertiary text for better contrast */
   
   --color-primary: #ff6b00;       /* sunset orange */
   --color-primary-hover: #e05e00;
-  --color-success: #10b981;       /* Emerald */
-  --color-success-bg: rgba(16, 185, 129, 0.06);
-  --color-warning: #d97706;       /* Amber/Dark Gold */
-  --color-warning-bg: rgba(217, 119, 6, 0.06);
-  --color-error: #e11d48;         /* Rose */
-  --color-error-bg: rgba(225, 29, 72, 0.06);
-  --color-info: #e65100;          /* dark orange */
-  --color-info-bg: rgba(230, 81, 0, 0.06);
-  --color-purple: #8b5cf6;        /* Purple */
-  --color-purple-bg: rgba(139, 92, 246, 0.06);
-  --color-indigo: #4f46e5;        /* Indigo */
-  --color-indigo-bg: rgba(79, 70, 229, 0.06);
-  --color-cyan: #0891b2;          /* Cyan */
-  --color-cyan-bg: rgba(8, 145, 178, 0.06);
+  --color-success: #047857;       /* Darker emerald green for better readability */
+  --color-success-bg: rgba(4, 120, 87, 0.06);
+  --color-warning: #b45309;       /* Darker amber/gold for better readability */
+  --color-warning-bg: rgba(180, 83, 9, 0.06);
+  --color-error: #be123c;         /* Darker rose/red for better readability */
+  --color-error-bg: rgba(190, 18, 60, 0.06);
+  --color-info: #c2410c;          /* Darker orange/info for better readability */
+  --color-info-bg: rgba(194, 65, 12, 0.06);
+  --color-purple: #6d28d9;        /* Darker purple for better readability */
+  --color-purple-bg: rgba(109, 40, 217, 0.06);
+  --color-indigo: #3730a3;        /* Darker indigo for better readability */
+  --color-indigo-bg: rgba(55, 48, 163, 0.06);
+  --color-cyan: #0369a1;          /* Darker cyan/blue for better readability */
+  --color-cyan-bg: rgba(3, 105, 161, 0.06);
   
   --shadow-lg: 0 10px 30px -10px rgba(0, 0, 0, 0.08);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
@@ -921,6 +921,20 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   color: var(--color-warning);
 }
 
+.card-orange {
+  border-bottom: 3px solid #f97316;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+.card-orange:hover {
+  background-color: rgba(249, 115, 22, 0.05);
+  transform: translateY(-2px);
+}
+.card-orange .metric-icon {
+  background-color: rgba(249, 115, 22, 0.1);
+  color: #f97316;
+}
+
 /* ==========================================================================
    DASHBOARD GRID & PANELS
    ========================================================================== */
@@ -1030,6 +1044,7 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
 .badge-blue { background-color: var(--color-info-bg); color: var(--color-info); }
 .badge-secondary { background-color: var(--glass-border); color: var(--text-secondary); }
 .badge-orange { background-color: rgba(255, 107, 0, 0.12); color: var(--color-primary); }
+.badge-purple { background-color: var(--color-purple-bg); color: var(--color-purple); }
 
 .ticker-empty {
   display: flex;
@@ -1387,6 +1402,11 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   letter-spacing: 0.5px;
 }
 
+:root.light-theme .data-table th {
+  background-color: var(--bg-tertiary);
+  box-shadow: inset 0 -1px 0 rgba(9, 9, 11, 0.1);
+}
+
 .data-table tbody tr {
   transition: var(--transition-fast);
 }
@@ -1597,18 +1617,28 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   background-color: var(--bg-tertiary);
 }
 
+.form-control:disabled {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  color: var(--text-secondary) !important;
+  border-color: var(--glass-border) !important;
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
 .form-control::placeholder {
   color: var(--text-tertiary);
 }
 
-input[type="date"], input[type="datetime-local"] {
+input[type="date"], input[type="datetime-local"], input[type="month"], input[type="time"] {
   color: var(--text-primary);
   accent-color: var(--text-primary);
 }
 
 input[type="date"]::-webkit-calendar-picker-indicator,
 input[type="datetime-local"]::-webkit-clear-button,
-input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
   /* Default (dark theme): invert white icons to stay visible on dark backgrounds */
   filter: invert(1) opacity(0.85);
 }
@@ -1616,7 +1646,9 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator {
 /* Light theme: don't invert the native icon (keeps it dark on light backgrounds) */
 :root.light-theme input[type="date"]::-webkit-calendar-picker-indicator,
 :root.light-theme input[type="datetime-local"]::-webkit-clear-button,
-:root.light-theme input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+:root.light-theme input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+:root.light-theme input[type="month"]::-webkit-calendar-picker-indicator,
+:root.light-theme input[type="time"]::-webkit-calendar-picker-indicator {
   filter: invert(0) opacity(0.95);
 }
 
@@ -1830,6 +1862,18 @@ textarea.form-control {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-tertiary);
+}
+
+:root.light-theme ::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+:root.light-theme ::-webkit-scrollbar-thumb {
+  background: rgba(9, 9, 11, 0.15);
+}
+
+:root.light-theme ::-webkit-scrollbar-thumb:hover {
+  background: rgba(9, 9, 11, 0.3);
 }
 
 /* Responsive adjustments for Connection Center */
@@ -2409,6 +2453,21 @@ select.payroll-col-filter {
   border-color: var(--color-primary);
 }
 
+:root.light-theme .form-control {
+  border-color: rgba(9, 9, 11, 0.15);
+}
+
+:root.light-theme .form-control:focus {
+  background-color: #ffffff;
+  border-color: var(--color-primary);
+}
+
+:root.light-theme .form-control:disabled {
+  background-color: rgba(9, 9, 11, 0.03) !important;
+  color: var(--text-secondary) !important;
+  border-color: rgba(9, 9, 11, 0.1) !important;
+}
+
 /* ==========================================================================
    EXCEL-LIKE FLOATING COLUMN FILTERS & STICKY DASHBOARD HEADINGS
    ========================================================================== */
@@ -2647,6 +2706,69 @@ select.payroll-col-filter {
 :root.light-theme .filter-dropdown-content select:focus {
   background-color: #ffffff;
   border-color: var(--color-primary);
+}
+
+/* Highlight container box used in modals */
+.modal-highlight-box {
+  background-color: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-sm);
+  padding: 12px;
+  margin-bottom: 15px;
+}
+:root.light-theme .modal-highlight-box {
+  background-color: rgba(9, 9, 11, 0.02);
+  border-color: rgba(9, 9, 11, 0.1);
+}
+
+/* Dynamic details card box inside Dispute Inspector Modal */
+.dispute-meta-box {
+  text-align: left;
+  background-color: var(--bg-tertiary);
+  padding: 20px;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  font-size: 0.9rem;
+  line-height: 1.8;
+  color: var(--text-primary);
+}
+
+/* Selfie Modal Metadata Box override (removing inline styles from index.html) */
+#selfie-modal-meta {
+  margin-top: 15px;
+  text-align: left;
+  background-color: var(--bg-tertiary);
+  padding: 15px;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* Camera events log dynamic status badges */
+.status-badge.status-success {
+  background-color: var(--color-success-bg);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  color: var(--color-success);
+}
+:root.light-theme .status-badge.status-success {
+  border-color: rgba(4, 120, 87, 0.25);
+}
+
+.status-badge.status-info {
+  background-color: var(--color-indigo-bg);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  color: var(--color-indigo);
+}
+:root.light-theme .status-badge.status-info {
+  border-color: rgba(55, 48, 163, 0.25);
+}
+
+.status-badge.status-secondary {
+  background-color: var(--glass-highlight);
+  border: 1px solid var(--glass-border);
+  color: var(--text-secondary);
 }
 
 

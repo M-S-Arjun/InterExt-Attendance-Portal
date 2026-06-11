@@ -183,10 +183,11 @@ app.get('/api/stats', (req, res) => {
   const activeEmpCount = employees.filter(e => e.status === 'active').length;
   const attendanceToday = database.getAttendanceForDate(todayStr);
   
-  const presentCount = attendanceToday.filter(a => a.status === 'checked-in' || a.status === 'completed' || a.status === 'late' || a.status === 'Late Check-in' || a.status === 'Early Check-out').length;
-  const halfDayCount = attendanceToday.filter(a => a.isHalfDay === true || a.isHalfDay === 'true').length;
+  const presentCount = attendanceToday.filter(a => a.status === 'checked-in' || a.status === 'completed' || a.status === 'late' || a.status === 'Late Check-in' || a.status === 'Early Check-out' || a.status === 'half-day leave').length;
+  const halfDayCount = attendanceToday.filter(a => a.isHalfDay === true || a.isHalfDay === 'true' || a.status === 'half-day leave').length;
   const lateCount = attendanceToday.filter(a => a.status === 'Late Check-in' || a.status === 'late' || a.isLate === true || a.isLate === 'true').length;
   const earlyCount = attendanceToday.filter(a => a.status === 'Early Check-out' || a.isEarlyCheckout === true || a.isEarlyCheckout === 'true').length;
+  const leaveCount = attendanceToday.filter(a => a.status === 'leave').length;
   const absentCount = attendanceToday.filter(a => a.status === 'absent').length;
   const pendingCount = database.getPendingMessages().length;
 
@@ -196,6 +197,7 @@ app.get('/api/stats', (req, res) => {
     halfDayToday: halfDayCount,
     lateCheckInToday: lateCount,
     earlyCheckOutToday: earlyCount,
+    leaveToday: leaveCount,
     absentToday: absentCount,
     pendingExceptions: pendingCount
   });
@@ -1203,7 +1205,7 @@ app.post('/api/face/cctv-event', async (req, res) => {
       date: eventDate,
       imageBase64: image_base64,
       imageFilename: 'cctv_frame.jpg',
-      status: 'recognized',
+      status: req.body.status || 'recognized',
       confidence: confidence
     };
     

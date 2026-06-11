@@ -160,7 +160,7 @@
 
         <!-- Metrics Grid -->
         <div class="metrics-grid">
-          <div class="metric-card card-blue">
+          <div class="metric-card card-blue" style="cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'" onclick="showMetricEmployees('registry')">
             <div class="metric-icon"><i data-lucide="users"></i></div>
             <div class="metric-details">
               <h3>Active Registry</h3>
@@ -168,7 +168,7 @@
               <span class="metric-subtext">Registered Employees</span>
             </div>
           </div>
-          <div class="metric-card card-green">
+          <div class="metric-card card-green" style="cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'" onclick="showMetricEmployees('present')">
             <div class="metric-icon"><i data-lucide="user-check"></i></div>
             <div class="metric-details">
               <h3>Present Today</h3>
@@ -176,7 +176,7 @@
               <span class="metric-subtext" id="metric-present-percent">0% Attendance</span>
             </div>
           </div>
-          <div class="metric-card card-purple">
+          <div class="metric-card card-purple" style="cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'" onclick="showMetricEmployees('halfday')">
             <div class="metric-icon"><i data-lucide="user-minus"></i></div>
             <div class="metric-details">
               <h3>Half-Day</h3>
@@ -184,7 +184,7 @@
               <span class="metric-subtext">Half-Day Shifts Today</span>
             </div>
           </div>
-          <div class="metric-card card-indigo">
+          <div class="metric-card card-indigo" style="cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'" onclick="showMetricEmployees('late')">
             <div class="metric-icon"><i data-lucide="clock"></i></div>
             <div class="metric-details">
               <h3>Late Check-in</h3>
@@ -192,7 +192,7 @@
               <span class="metric-subtext">Late Check-ins Today</span>
             </div>
           </div>
-          <div class="metric-card card-cyan">
+          <div class="metric-card card-cyan" style="cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'" onclick="showMetricEmployees('early')">
             <div class="metric-icon"><i data-lucide="log-out"></i></div>
             <div class="metric-details">
               <h3>Early Check-out</h3>
@@ -200,7 +200,15 @@
               <span class="metric-subtext">Early Check-outs Today</span>
             </div>
           </div>
-          <div class="metric-card card-red">
+          <div class="metric-card card-orange" style="cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'" onclick="showMetricEmployees('leave')">
+            <div class="metric-icon"><i data-lucide="calendar"></i></div>
+            <div class="metric-details">
+              <h3>On Leave</h3>
+              <span class="metric-value" id="metric-leave">0</span>
+              <span class="metric-subtext">Approved Leave Today</span>
+            </div>
+          </div>
+          <div class="metric-card card-red" style="cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'" onclick="showMetricEmployees('absent')">
             <div class="metric-icon"><i data-lucide="user-x"></i></div>
             <div class="metric-details">
               <h3>Absent</h3>
@@ -329,6 +337,7 @@
                 <option value="late">Late (Pending)</option>
                 <option value="Late Check-in">Late Check-in</option>
                 <option value="Early Check-out">Early Check-out</option>
+                <option value="half-day leave">Half Day</option>
                 <option value="absent">Absent</option>
                 <option value="leave">Leave</option>
               </select>
@@ -442,7 +451,13 @@
               <h3><i data-lucide="users-round"></i> Employee Directory</h3>
               <p>Manage employee records, default locations, and payroll wage configurations</p>
             </div>
-            <div class="header-right">
+            <div class="header-right" style="display: flex; gap: 8px; align-items: center;">
+              <button id="btn-employee-undo" class="btn-undo" onclick="TransactionManager.undo()" title="Undo (Ctrl+Z)" disabled>
+                <i data-lucide="rotate-ccw"></i> Undo
+              </button>
+              <button id="btn-employee-redo" class="btn-redo" onclick="TransactionManager.redo()" title="Redo (Ctrl+Y)" disabled>
+                <i data-lucide="rotate-cw"></i> Redo
+              </button>
               <button class="btn btn-primary btn-icon" onclick="openEmployeeModal()"><i data-lucide="user-plus"></i> Add New Employee</button>
             </div>
           </div>
@@ -567,25 +582,6 @@
             </div>
           </div>
 
-          <div class="table-control-bar" style="flex-wrap: wrap; gap: 16px;">
-            <div class="table-control-left" style="flex: 1 1 320px; min-width: 320px;">
-              <div class="search-wrapper">
-                <i data-lucide="search"></i>
-                <input type="text" id="camera-search-input" class="form-control" placeholder="Search by employee, site, or event type..." oninput="applyCameraFilters()">
-              </div>
-            </div>
-            <div class="table-control-right" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-              <select id="camera-filter-type" class="table-control-select" onchange="applyCameraFilters()">
-                <option value="">-- All Event Types --</option>
-                <option value="entry">Entry</option>
-                <option value="exit">Exit</option>
-              </select>
-              <select id="camera-filter-site" class="table-control-select" onchange="applyCameraFilters()">
-                <option value="">-- All Sites --</option>
-              </select>
-            </div>
-          </div>
-
           <!-- Camera Control Grid Wrapper -->
           <div class="camera-attendance-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 20px; margin-bottom: 24px;">
             
@@ -612,10 +608,6 @@
                     <label for="camera-event-timestamp">Timestamp</label>
                     <input type="datetime-local" id="camera-event-timestamp" class="form-control">
                   </div>
-                  <div class="form-group" style="grid-column: span 2;">
-                    <label for="camera-image-file">Upload Employee Image (Optional File Test)</label>
-                    <input type="file" id="camera-image-file" class="form-control" accept="image/*">
-                  </div>
                 </div>
                 
                 <div class="face-recognition-panel" style="margin-top: 20px; margin-bottom: 20px;">
@@ -623,10 +615,7 @@
                     <i data-lucide="cpu" class="fr-header-icon"></i>
                     <span class="fr-header-title">Face Recognition Control Panel</span>
                   </div>
-                  <div class="fr-buttons-grid">
-                    <button type="button" class="btn-fr" onclick="recognizeFaceFromCamera()" title="Recognize employee from uploaded image">
-                      <i data-lucide="scan-face"></i> Recognize Face
-                    </button>
+                  <div class="fr-buttons-grid" style="grid-template-columns: 1fr 1fr;">
                     <button type="button" class="btn-fr" onclick="trainFaceRecognitionModel()" title="Train model with employee images">
                       <i data-lucide="brain"></i> Train Model
                     </button>
@@ -647,7 +636,7 @@
             <div class="glass-card webcam-scanner-card" style="padding: 24px; display: flex; flex-direction: column; gap: 16px; position: relative;">
               <div class="card-header" style="padding: 0 0 12px 0; margin-bottom: 0; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--glass-border);">
                 <h3 style="font-size: 0.95rem; margin: 0; display: flex; align-items: center; gap: 8px;"><i data-lucide="video" style="color: var(--color-primary); width: 18px; height: 18px;"></i> Live Webcam Scanner</h3>
-                <span class="badge" id="camera-status-badge" style="background: rgba(113, 113, 122, 0.1); color: var(--text-tertiary); border: 1px solid var(--glass-border); font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 12px; letter-spacing: 0.5px; text-transform: uppercase;">OFFLINE</span>
+                <span class="badge badge-secondary" id="camera-status-badge">OFFLINE</span>
               </div>
               
               <div class="webcam-viewport" style="width: 100%; height: 260px; background: #07070a; border: 1px solid var(--glass-border); border-radius: var(--border-radius-md); position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 20px rgba(0,0,0,0.8);">
@@ -713,7 +702,13 @@
                   Configure office CCTV RTSP cameras (or video feeds) to automatically recognize and record employee attendance.
                 </p>
               </div>
-              <div class="header-right">
+              <div class="header-right button-group" style="display: flex; gap: 8px; align-items: center;">
+                <button id="btn-cctv-undo" class="btn-undo" onclick="TransactionManager.undo()" title="Undo (Ctrl+Z)" disabled style="height: 32px; font-size: 0.8rem; padding: 6px 12px;">
+                  <i data-lucide="rotate-ccw"></i> Undo
+                </button>
+                <button id="btn-cctv-redo" class="btn-redo" onclick="TransactionManager.redo()" title="Redo (Ctrl+Y)" disabled style="height: 32px; font-size: 0.8rem; padding: 6px 12px;">
+                  <i data-lucide="rotate-cw"></i> Redo
+                </button>
                 <button type="button" class="btn btn-primary btn-sm btn-icon" onclick="openAddCctvModal()" style="padding: 6px 12px; font-size: 0.8rem; height: 32px;">
                   <i data-lucide="plus"></i> Add CCTV Camera
                 </button>
@@ -729,7 +724,37 @@
             </div>
           </div>
 
-          <div class="overflow-x">
+          <!-- Camera Events History Section -->
+          <div class="card-header flex-header" style="border-top: 1px solid var(--glass-border); padding: 18px 24px; margin-top: 24px; margin-bottom: 0;">
+            <div class="header-left">
+              <h3 style="font-size: 1.05rem; font-weight: 600; display: flex; align-items: center; gap: 10px; color: var(--text-primary);">
+                <i data-lucide="file-spreadsheet" style="color: var(--color-primary); width: 18px; height: 18px;"></i>
+                Camera Attendance Event History
+              </h3>
+              <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px;">View all real-time facial recognition logs, webcam check-ins, and direction transitions.</p>
+            </div>
+          </div>
+
+          <div class="table-control-bar" style="flex-wrap: wrap; gap: 16px; border-bottom: 1px solid var(--glass-border); padding: 10px 24px;">
+            <div class="table-control-left" style="flex: 1 1 320px; min-width: 320px;">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="camera-search-input" class="form-control" placeholder="Search by employee, site, or event type..." oninput="applyCameraFilters()">
+              </div>
+            </div>
+            <div class="table-control-right" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <select id="camera-filter-type" class="table-control-select" onchange="applyCameraFilters()">
+                <option value="">-- All Event Types --</option>
+                <option value="entry">Entry</option>
+                <option value="exit">Exit</option>
+              </select>
+              <select id="camera-filter-site" class="table-control-select" onchange="applyCameraFilters()">
+                <option value="">-- All Sites --</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="overflow-x" style="padding: 0 24px 24px 24px;">
             <table class="data-table" id="camera-events-table">
               <thead>
                 <tr>
@@ -789,8 +814,18 @@
 
           <!-- Site Registry List Right -->
           <div class="glass-card site-list-card">
-            <div class="card-header">
-              <h3><i data-lucide="map"></i> Registered Work Sites</h3>
+            <div class="card-header flex-header" style="display: flex; justify-content: space-between; align-items: center;">
+              <div class="header-left">
+                <h3><i data-lucide="map"></i> Registered Work Sites</h3>
+              </div>
+              <div class="header-right button-group" style="display: flex; gap: 8px;">
+                <button id="btn-site-undo" class="btn-undo" onclick="TransactionManager.undo()" title="Undo (Ctrl+Z)" disabled>
+                  <i data-lucide="rotate-ccw"></i> Undo
+                </button>
+                <button id="btn-site-redo" class="btn-redo" onclick="TransactionManager.redo()" title="Redo (Ctrl+Y)" disabled>
+                  <i data-lucide="rotate-cw"></i> Redo
+                </button>
+              </div>
             </div>
             <div class="overflow-x">
               <table class="data-table">
@@ -1446,9 +1481,17 @@
               <h3><i data-lucide="calendar"></i> Company Public Holidays</h3>
               <span class="badge badge-primary" id="holidays-count-badge">0 holidays</span>
             </div>
-            <button class="btn btn-primary btn-icon" onclick="openHolidayModal()">
-              <i data-lucide="calendar-plus"></i> Add Public Holiday
-            </button>
+            <div class="header-right button-group" style="display: flex; gap: 8px;">
+              <button id="btn-holiday-undo" class="btn-undo" onclick="TransactionManager.undo()" title="Undo (Ctrl+Z)" disabled>
+                <i data-lucide="rotate-ccw"></i> Undo
+              </button>
+              <button id="btn-holiday-redo" class="btn-redo" onclick="TransactionManager.redo()" title="Redo (Ctrl+Y)" disabled>
+                <i data-lucide="rotate-cw"></i> Redo
+              </button>
+              <button class="btn btn-primary btn-icon" onclick="openHolidayModal()">
+                <i data-lucide="calendar-plus"></i> Add Public Holiday
+              </button>
+            </div>
           </div>
           <div class="card-body">
             <div class="holiday-layout">
@@ -1573,7 +1616,7 @@
             </div>
           </div>
 
-          <div class="form-group" style="background: rgba(255, 255, 255, 0.02); padding: 15px; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); margin-bottom: 15px;">
+          <div class="form-group modal-highlight-box">
             <label style="display: block; margin-bottom: 10px; font-weight: 600; color: var(--color-primary);">Statutory Deductions Eligibility</label>
             <div style="display: flex; flex-direction: column; gap: 10px;">
               <label class="checkbox-container" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
@@ -1620,14 +1663,23 @@
 
           <div class="form-group">
             <label for="att-status">Attendance Status</label>
-            <select id="att-status" class="form-control" onchange="toggleManualTimeFields()">
+            <select id="att-status" class="form-control" onchange="toggleManualTimeFields(true)">
               <option value="checked-in">Checked-In (Active duty)</option>
               <option value="completed">Completed Shift (Present)</option>
               <option value="late">Late (Pending Scan)</option>
               <option value="Late Check-in">Late Check-in</option>
               <option value="Early Check-out">Early Check-out</option>
+              <option value="half-day leave">Half Day</option>
               <option value="absent">Absent</option>
               <option value="leave">On Leave / Excused</option>
+            </select>
+          </div>
+
+          <div class="form-group" id="att-halfday-period-group" style="display: none;">
+            <label for="att-halfday-period">Half-Day Period Selector</label>
+            <select id="att-halfday-period" class="form-control" onchange="updateHalfDayTimes()">
+              <option value="first">First Half (Start of Shift to Lunch Break: 01:00 PM)</option>
+              <option value="second">Second Half (Post Lunch Break: 02:00 PM to End of Shift)</option>
             </select>
           </div>
 
@@ -1638,7 +1690,7 @@
             </select>
           </div>
 
-          <div class="form-row" id="att-hospital-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; background: rgba(255, 255, 255, 0.02); padding: 12px; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border);">
+          <div class="form-row modal-highlight-box" id="att-hospital-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; padding: 12px;">
             <div class="override-checkbox-container" style="display: flex; align-items: center; gap: 8px;">
               <input type="checkbox" id="att-is-hospital" style="accent-color: var(--color-primary); width: 16px; height: 16px; cursor: pointer;">
               <label for="att-is-hospital" style="font-weight: 600; cursor: pointer; color: var(--text-primary);">Hospital Case</label>
@@ -1757,7 +1809,7 @@
       </div>
       <div class="modal-body" style="text-align: center; padding: 20px;">
         <img id="selfie-modal-img" src="" alt="Selfie Image" style="max-width: 100%; max-height: 60vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border);">
-        <div id="selfie-modal-meta" style="margin-top: 15px; text-align: left; background: rgba(0, 0, 0, 0.25); padding: 15px; border-radius: 8px; border: 1px solid var(--glass-border); font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary);">
+        <div id="selfie-modal-meta">
           <!-- Loaded dynamically -->
         </div>
       </div>
@@ -1793,6 +1845,19 @@
       <div class="modal-body">
         <form id="cctv-form" onsubmit="handleCctvSubmit(event)">
           <input type="hidden" id="cctv-id">
+          
+          <div class="form-group">
+            <label for="cctv-preset">Preset Camera Configuration (Quick Select)</label>
+            <select id="cctv-preset" class="form-control" onchange="quickFillCctv(this.value)">
+              <option value="">-- Custom Manual Configuration --</option>
+              <option value="entrance-1">Entrance CCTV 1 (Entry Only)</option>
+              <option value="entrance-2">Entrance CCTV 2 (Entry Only)</option>
+              <option value="entrance-3">Entrance CCTV 3 (Entry Only)</option>
+              <option value="exit-1">Exit CCTV 1 (Exit Only)</option>
+              <option value="exit-2">Exit CCTV 2 (Exit Only)</option>
+              <option value="exit-3">Exit CCTV 3 (Exit Only)</option>
+            </select>
+          </div>
           
           <div class="form-group">
             <label for="cctv-name">Camera Name</label>
@@ -1836,6 +1901,36 @@
             <button type="submit" class="btn btn-primary">Save Camera</button>
           </div>
         </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Metric Employees List Modal -->
+  <div class="modal" id="metric-employees-modal">
+    <div class="modal-content glass-card" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3 id="metric-modal-title"><i data-lucide="users"></i> Workers List</h3>
+        <button class="btn-close" onclick="closeMetricEmployeesModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height: 400px; overflow-y: auto;">
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Employee Name</th>
+                <th>Check-in</th>
+                <th>Check-out</th>
+                <th>Work Site</th>
+              </tr>
+            </thead>
+            <tbody id="metric-employees-list-body">
+              <!-- Generated Dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeMetricEmployeesModal()">Close</button>
       </div>
     </div>
   </div>
