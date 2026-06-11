@@ -724,7 +724,17 @@ class Database {
     }
 
     // Check if check-out time is supplied and check-in exists. If so, calculate math if not explicitly overridden by manual edit
-    if (record.checkIn && record.checkOut && !record.isManualOverride) {
+    // Safeguard: If manual override is enabled but all override values are zero, we fall back to auto-calculation to avoid accidental zeroing.
+    const isManualOverrideActuallyZero = record.isManualOverride && 
+      Number(record.regularHours) === 0 && 
+      Number(record.otHours) === 0 && 
+      Number(record.extraHours) === 0 && 
+      Number(record.calculatedWage) === 0;
+
+    if (record.checkIn && record.checkOut && (!record.isManualOverride || isManualOverrideActuallyZero)) {
+      if (isManualOverrideActuallyZero) {
+        record.isManualOverride = false;
+      }
       const shiftMath = this.calculateShift(employee, record.checkIn, record.checkOut, record);
       record.duration = shiftMath.durationMinutes;
       record.regularHours = shiftMath.regularHours;

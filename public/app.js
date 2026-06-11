@@ -272,11 +272,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initialize Chart.js layouts
   initCharts();
   
-  // If light theme, update Chart defaults
-  if (isLight) {
-    updateChartTheme(true);
-    updateThemeIcon(true);
-  }
+  // Sync chart options and toggle icons for the current theme on boot
+  updateChartTheme(isLight);
+  updateThemeIcon(isLight);
   
   // Load statistical values & active attendance logs
   await refreshDashboardData();
@@ -298,6 +296,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Set up automatic daily/hourly wage calculation when monthly wage is inputted
   initEmployeeWageAutoCalculation();
+
+  // Register live-calculating event listeners for attendance modal
+  document.getElementById('att-checkin').addEventListener('change', updateCalculatedHoursAndWage);
+  document.getElementById('att-checkout').addEventListener('change', updateCalculatedHoursAndWage);
+  document.getElementById('att-is-hospital').addEventListener('change', updateCalculatedHoursAndWage);
+  document.getElementById('att-hospital-hours').addEventListener('change', updateCalculatedHoursAndWage);
 });
 
 // Load core static schemas (employees, sites, settings)
@@ -768,6 +772,8 @@ async function fetchStats() {
 async function fetchPendingMessages() {
   try {
     const r = await fetch('/api/pending').then(r => r.json());
+    // Sort exceptions by timestamp descending (latest first)
+    r.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     state.pendingMessages = r;
     
     const list = document.getElementById('pending-messages-list');
@@ -1483,6 +1489,34 @@ async function getFaceRecognitionStatus() {
   }
 }
 
+function getEmployeeShiftHours(emp) {
+  let F = 8.0;
+  if (emp && emp.shiftStart && emp.shiftEnd) {
+    try {
+      const [startH, startM] = emp.shiftStart.split(':').map(Number);
+      const [endH, endM] = emp.shiftEnd.split(':').map(Number);
+      let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+      if (shiftMinutes < 0) shiftMinutes += 24 * 60;
+      const shiftHours = shiftMinutes / 60;
+      F = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
+    } catch (err) {
+      console.warn("Failed to parse shift times for", emp.name, err);
+    }
+  }
+  return F;
+}
+
+function getShiftDurationStr(start, end) {
+  if (!start || !end) return "";
+  const [startH, startM] = start.split(':').map(Number);
+  const [endH, endM] = end.split(':').map(Number);
+  let diffMin = (endH * 60 + endM) - (startH * 60 + startM);
+  if (diffMin < 0) diffMin += 24 * 60;
+  const h = Math.floor(diffMin / 60);
+  const m = diffMin % 60;
+  return `${h}:${m.toString().padStart(2, '0')}`;
+}
+
 // Workers Table list renderer
 function renderEmployeesTable() {
   applyFiltersEmployees();
@@ -1541,7 +1575,16 @@ function renderEmployeesTableBody(employees) {
     const monthlyDisplay = emp.monthlyWage ? `<strong>₹${emp.monthlyWage.toFixed(2)}</strong>` : "—";
     const hourlyDisplay = emp.hourlyRate ? `<strong>₹${emp.hourlyRate.toFixed(2)}</strong>` : "—";
     const phoneDisplay = emp.phone ? `<code style="font-size: 0.85rem; font-weight: 500;">+${emp.phone}</code>` : "—";
-    const shiftDisplay = emp.shiftStart && emp.shiftEnd ? `<span class="badge badge-blue" style="font-family: monospace; font-size: 0.8rem; text-transform: none; letter-spacing: normal;">${emp.shiftStart} - ${emp.shiftEnd}</span>` : "—";
+    let shiftDisplay = "—";
+    if (emp.shiftStart && emp.shiftEnd) {
+      const durStr = getShiftDurationStr(emp.shiftStart, emp.shiftEnd);
+      shiftDisplay = `
+        <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
+          <span class="badge badge-blue" style="font-family: monospace; font-size: 0.8rem; text-transform: none; letter-spacing: normal; margin-right: 0;">${emp.shiftStart} - ${emp.shiftEnd}</span>
+          <span class="badge badge-secondary" style="font-size: 0.75rem; text-transform: none; letter-spacing: normal;">${durStr} hrs/day</span>
+        </div>
+      `;
+    }
 
     tr.innerHTML = `
       <td><strong>${emp.userId || "—"}</strong></td>
@@ -1630,6 +1673,11 @@ function openEmployeeModal() {
   document.getElementById('emp-pf-enabled').checked = true;
   document.getElementById('emp-esic-enabled').checked = true;
   document.getElementById('emp-pt-enabled').checked = true;
+  
+  const durationEl = document.getElementById('emp-shift-duration-info');
+  if (durationEl) {
+    durationEl.textContent = "Shift Duration: —";
+  }
   
   document.getElementById('employee-modal').classList.add('active');
 }
@@ -1790,6 +1838,11 @@ function editEmployee(id) {
   document.getElementById('emp-esic-enabled').checked = emp.esicEnabled !== false;
   document.getElementById('emp-pt-enabled').checked = emp.ptEnabled !== false;
 
+  // Trigger wage and shift duration calculation for the modal display
+  if (typeof window.calculateWages === 'function') {
+    window.calculateWages();
+  }
+
   document.getElementById('employee-modal').classList.add('active');
 }
 
@@ -1807,6 +1860,20 @@ async function handleEmployeeSubmit(e) {
     shiftGroup = `${shiftStart}:00 to ${shiftEnd}:00`;
   }
   
+  let F = 8.0;
+  if (shiftStart && shiftEnd) {
+    try {
+      const [startH, startM] = shiftStart.split(':').map(Number);
+      const [endH, endM] = shiftEnd.split(':').map(Number);
+      let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+      if (shiftMinutes < 0) shiftMinutes += 24 * 60;
+      const shiftHours = shiftMinutes / 60;
+      F = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
+    } catch (err) {
+      console.warn("Failed to parse shift times in handleEmployeeSubmit:", err);
+    }
+  }
+
   const data = {
     id: document.getElementById('emp-id').value || null,
     userId: document.getElementById('emp-userid').value.trim(),
@@ -1818,7 +1885,7 @@ async function handleEmployeeSubmit(e) {
     siteId: (state.employees.find(e => e.id === document.getElementById('emp-id').value)?.siteId) || "",
     dailyRate: dailyRateVal !== "" ? Number(dailyRateVal) : 120.00,
     monthlyWage: monthlyWageVal !== "" ? Number(monthlyWageVal) : null,
-    hourlyRate: hourlyRateVal !== "" ? Number(hourlyRateVal) : (dailyRateVal !== "" ? Number((Number(dailyRateVal) / 8).toFixed(2)) : 20.00),
+    hourlyRate: hourlyRateVal !== "" ? Number(hourlyRateVal) : (dailyRateVal !== "" ? Number((Number(dailyRateVal) / F).toFixed(2)) : 20.00),
     shiftStart: shiftStart || "",
     shiftEnd: shiftEnd || "",
     shiftGroup: shiftGroup,
@@ -2037,12 +2104,19 @@ function openAttendanceAdjuster(id) {
   const overrideCheckbox = document.getElementById('att-override');
   overrideCheckbox.checked = !!log.isManualOverride;
   
-  document.getElementById('att-reg-hours').value = log.regularHours || 0.0;
-  document.getElementById('att-ot-hours').value = log.otHours || 0.0;
-  document.getElementById('att-extra-hours').value = log.extraHours || 0.0;
-  document.getElementById('att-wage').value = log.calculatedWage || 0.0;
-  document.getElementById('att-is-fd').checked = !!log.isFullDay;
-  document.getElementById('att-is-hd').checked = !!log.isHalfDay;
+  if (log.isManualOverride) {
+    document.getElementById('att-reg-hours').value = log.regularHours || 0.0;
+    document.getElementById('att-ot-hours').value = log.otHours || 0.0;
+    document.getElementById('att-extra-hours').value = log.extraHours || 0.0;
+    document.getElementById('att-wage').value = log.calculatedWage || 0.0;
+    document.getElementById('att-is-fd').checked = !!log.isFullDay;
+    document.getElementById('att-is-hd').checked = !!log.isHalfDay;
+  } else {
+    // Dynamically calculate and pre-populate fields
+    setTimeout(() => {
+      updateCalculatedHoursAndWage();
+    }, 0);
+  }
 
   // Load hospital case values
   document.getElementById('att-is-hospital').checked = !!log.isHospitalCase;
@@ -2107,6 +2181,8 @@ function toggleManualTimeFields(fromUserClick = false) {
 
   if (fromUserClick && status === 'half-day leave') {
     updateHalfDayTimes();
+  } else {
+    updateCalculatedHoursAndWage();
   }
 }
 
@@ -2128,6 +2204,124 @@ function updateHalfDayTimes() {
     document.getElementById('att-checkin').value = `${datePrefix}T14:00`;
     document.getElementById('att-checkout').value = `${datePrefix}T${shiftEnd}`;
   }
+  updateCalculatedHoursAndWage();
+}
+
+function updateCalculatedHoursAndWage() {
+  const status = document.getElementById('att-status').value;
+  const checkInVal = document.getElementById('att-checkin').value;
+  const checkOutVal = document.getElementById('att-checkout').value;
+  const empId = document.getElementById('att-emp-id').value;
+  const isHospitalCase = document.getElementById('att-is-hospital').checked;
+  const hospitalHours = Number(document.getElementById('att-hospital-hours').value || 0.0);
+
+  const employee = (state.employees || []).find(e => e.id === empId);
+  if (!employee) return;
+
+  let regularHours = 0.0;
+  let otHours = 0.0;
+  let extraHours = 0.0;
+  let isHalfDay = false;
+  let isFullDay = false;
+  let calculatedWage = 0.0;
+
+  const validStatus = (status === 'completed' || status === 'late' || status === 'Late Check-in' || status === 'Early Check-out' || status === 'half-day leave');
+
+  if (validStatus && checkInVal && checkOutVal) {
+    try {
+      const checkIn = new Date(checkInVal);
+      const checkOut = new Date(checkOutVal);
+      let diffMs = checkOut - checkIn;
+
+      if (isHospitalCase && hospitalHours) {
+        diffMs += hospitalHours * 3600000;
+      }
+
+      const durationMinutes = Math.max(0, Math.floor(diffMs / 60000));
+      const totalHours = Number((durationMinutes / 60).toFixed(2));
+
+      // Calculate shift limits matching database.js exactly
+      const settings = state.settings || {};
+      let F = settings.standardFullDayHours || 8.0;
+      let h = settings.standardHalfDayHours || 4.0;
+
+      if (employee.shiftStart && employee.shiftEnd) {
+        const [startH, startM] = employee.shiftStart.split(':').map(Number);
+        const [endH, endM] = employee.shiftEnd.split(':').map(Number);
+        let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+        if (shiftMinutes < 0) shiftMinutes += 24 * 60;
+        const shiftHours = shiftMinutes / 60;
+        F = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
+        h = F / 2.0;
+      }
+
+      let dailyRate = Number(employee.dailyRate) || 0.0;
+      let hourlyRate = Number(employee.hourlyRate) || 0.0;
+      if (hourlyRate === 0 && F > 0 && dailyRate > 0) {
+        hourlyRate = Number((dailyRate / F).toFixed(2));
+      }
+
+      // Check if shift falls on a holiday (excluding Sundays) for office staff
+      try {
+        const dateStr = checkInVal.split('T')[0];
+        const isSunday = checkIn.getDay() === 0;
+        const holidays = stateHolidays || [];
+        const isHoliday = holidays.some(hol => hol.date === dateStr);
+        const isOfficeStaff = employee.modeOfWork && employee.modeOfWork.toLowerCase().trim() === 'office staff';
+        if (isHoliday && !isSunday && isOfficeStaff) {
+          dailyRate = dailyRate * 2.0;
+          hourlyRate = hourlyRate * 2.0;
+        }
+      } catch (e) {
+        console.error("Failed to check holiday multiplier:", e);
+      }
+
+      const forceHalfDay = status === 'half-day leave';
+      const isOfficeStaff = employee.modeOfWork && employee.modeOfWork.toLowerCase().trim() === 'office staff';
+
+      if (totalHours >= F && !forceHalfDay) {
+        isFullDay = true;
+        regularHours = F;
+        if (isOfficeStaff) {
+          otHours = 0.0;
+          calculatedWage = dailyRate;
+        } else {
+          const exactOT = totalHours - F;
+          if (exactOT > 0) {
+            const otMinutes = Math.round(exactOT * 60);
+            if (otMinutes < 50) {
+              otHours = 0.0;
+            } else {
+              const hoursPart = Math.floor(otMinutes / 60);
+              const minutesPart = otMinutes % 60;
+              otHours = minutesPart >= 50 ? hoursPart + 1.0 : hoursPart * 1.0;
+            }
+          }
+          calculatedWage = Number((dailyRate + (otHours * (dailyRate / 10.0))).toFixed(2));
+        }
+      } else if (totalHours >= h || forceHalfDay) {
+        isHalfDay = true;
+        regularHours = h;
+        if (totalHours > h) {
+          extraHours = Number((totalHours - h).toFixed(2));
+        }
+        calculatedWage = Number(((dailyRate * 0.5) + (extraHours * hourlyRate)).toFixed(2));
+      } else {
+        regularHours = totalHours;
+        calculatedWage = Number((totalHours * hourlyRate).toFixed(2));
+      }
+    } catch (err) {
+      console.error("Error auto-calculating hours/wages:", err);
+    }
+  }
+
+  // Pre-populate override inputs and checkboxes
+  document.getElementById('att-reg-hours').value = regularHours;
+  document.getElementById('att-ot-hours').value = otHours;
+  document.getElementById('att-extra-hours').value = extraHours;
+  document.getElementById('att-wage').value = calculatedWage;
+  document.getElementById('att-is-fd').checked = isFullDay;
+  document.getElementById('att-is-hd').checked = isHalfDay;
 }
 
 function toggleOverrideFields() {
@@ -2537,15 +2731,16 @@ function scrollToExceptions() {
 // DATA ANALYTICS GRAPHICS (CHART.JS)
 // ==========================================================================
 function initCharts() {
-  // Chart.js global dark theme settings overrides
-  Chart.defaults.color = '#a1a1aa';
-  Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.03)';
+  const isLight = document.documentElement.classList.contains('light-theme');
+  // Chart.js global theme settings overrides
+  Chart.defaults.color = isLight ? '#71717a' : '#a1a1aa';
+  Chart.defaults.borderColor = isLight ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.03)';
   
   // 1. Site distribution doughnut
   const siteCtx = document.getElementById('siteChart').getContext('2d');
   // Helper: theme-aware palette for site doughnut (avoid pure white)
-  function getSitePalette(isLight) {
-    if (isLight) {
+  function getSitePalette(isLightVal) {
+    if (isLightVal) {
       return ['#ff6b00', '#0284c7', '#ff9547', '#e05e00', '#047857', '#a855f7'];
     }
     return ['#ff6b00', '#0284c7', '#ff9547', '#e05e00', '#10b981', '#a855f7'];
@@ -2559,7 +2754,7 @@ function initCharts() {
         data: [],
         backgroundColor: [
           // Use theme-aware palette; default to dark-theme palette at init
-          ...getSitePalette(false)
+          ...getSitePalette(isLight)
         ],
         borderWidth: 0
       }]
@@ -2616,6 +2811,9 @@ function initCharts() {
       }
     }
   });
+
+  // Call theme sync directly to configure scales grid lines and tick colors immediately
+  updateChartTheme(isLight);
 }
 
 function updateCharts() {
@@ -3656,12 +3854,15 @@ function applyFiltersTravel() {
     if (emp) {
       if (emp.hourlyRate) {
         hourlyRate = Number(emp.hourlyRate);
-      } else if (emp.dailyRate) {
-        hourlyRate = Number((Number(emp.dailyRate) / 8.0).toFixed(2));
       } else {
-        const actualSalary = Number(emp.monthlyWage) || 0.0;
-        const stdWorkingDays = Number(emp.stdWorkingDays) || 30;
-        hourlyRate = Number((actualSalary / stdWorkingDays / 8).toFixed(2));
+        const shiftF = getEmployeeShiftHours(emp);
+        if (emp.dailyRate) {
+          hourlyRate = Number((Number(emp.dailyRate) / shiftF).toFixed(2));
+        } else {
+          const actualSalary = Number(emp.monthlyWage) || 0.0;
+          const stdWorkingDays = Number(emp.stdWorkingDays) || 30;
+          hourlyRate = Number((actualSalary / stdWorkingDays / shiftF).toFixed(2));
+        }
       }
     }
 
@@ -3703,12 +3904,15 @@ function applyFiltersTravel() {
     if (emp) {
       if (emp.hourlyRate) {
         hourlyRate = Number(emp.hourlyRate);
-      } else if (emp.dailyRate) {
-        hourlyRate = Number((Number(emp.dailyRate) / 8.0).toFixed(2));
       } else {
-        const actualSalary = Number(emp.monthlyWage) || 0.0;
-        const stdWorkingDays = Number(emp.stdWorkingDays) || 30;
-        hourlyRate = Number((actualSalary / stdWorkingDays / 8).toFixed(2));
+        const shiftF = getEmployeeShiftHours(emp);
+        if (emp.dailyRate) {
+          hourlyRate = Number((Number(emp.dailyRate) / shiftF).toFixed(2));
+        } else {
+          const actualSalary = Number(emp.monthlyWage) || 0.0;
+          const stdWorkingDays = Number(emp.stdWorkingDays) || 30;
+          hourlyRate = Number((actualSalary / stdWorkingDays / shiftF).toFixed(2));
+        }
       }
     }
     const payout = paid * hourlyRate;
@@ -4789,12 +4993,24 @@ function initEmployeeWageAutoCalculation() {
         duration = (24 - startDecimal) + endDecimal;
       }
       
-      // Deduct lunch break (1 PM to 2 PM, i.e., 13:00 to 14:00) if shift spans it
-      if (startDecimal <= 13.0 && endDecimal >= 14.0) {
-        duration -= 1.0;
+      // Deduct lunch break (1 hour) if shift duration >= 9 hours
+      const shiftHours = duration;
+      workHours = Math.max(1, shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours);
+    }
+
+    // Update real-time modal duration indicator
+    const durationEl = document.getElementById('emp-shift-duration-info');
+    if (durationEl) {
+      if (shiftStart && shiftEnd) {
+        const durStr = getShiftDurationStr(shiftStart, shiftEnd);
+        const [h, m] = durStr.split(':').map(Number);
+        const rawHours = h + m / 60;
+        const netHours = rawHours >= 9.0 ? rawHours - 1.0 : rawHours;
+        const lunchText = rawHours >= 9.0 ? " (includes 1-hour lunch break deduction)" : "";
+        durationEl.textContent = `Shift: ${durStr} (${netHours.toFixed(2)} working hours${lunchText})`;
+      } else {
+        durationEl.textContent = "Shift Duration: —";
       }
-      
-      workHours = Math.max(1, duration);
     }
 
     if (!isDailyWageWorker && !isNaN(monthlyVal) && monthlyVal > 0) {
@@ -4822,6 +5038,9 @@ function initEmployeeWageAutoCalculation() {
   empShiftEnd.addEventListener('change', calculateWages);
   empShiftStart.addEventListener('input', calculateWages);
   empShiftEnd.addEventListener('input', calculateWages);
+
+  // Expose function globally so it can be triggered programmatically when opening/populating modal
+  window.calculateWages = calculateWages;
 }
 
 // ==========================================================================
