@@ -381,14 +381,31 @@ class Database {
 
   // --- Attendance Table with dynamic absenteeism & shift calculations ---
   
-  // Calculate attendance hours and wages based on checkIn, checkOut, and employee rates
   calculateShift(employee, checkInTime, checkOutTime, record = null) {
     const settings = this.getSettings();
-    const F = settings.standardFullDayHours; // Full Day Limit (e.g. 8)
-    const h = settings.standardHalfDayHours; // Half Day Limit (e.g. 4)
+    let F = settings.standardFullDayHours || 8.0; // Full Day Limit (e.g. 8)
+    let h = settings.standardHalfDayHours || 4.0; // Half Day Limit (e.g. 4)
+    
+    if (employee.shiftStart && employee.shiftEnd) {
+      try {
+        const [startH, startM] = employee.shiftStart.split(':').map(Number);
+        const [endH, endM] = employee.shiftEnd.split(':').map(Number);
+        let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+        if (shiftMinutes < 0) shiftMinutes += 24 * 60;
+        const shiftHours = shiftMinutes / 60;
+        
+        F = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
+        h = F / 2.0;
+      } catch (err) {
+        console.warn(`[calculateShift] Failed to parse custom shift times for ${employee.name}:`, err.message);
+      }
+    }
     
     let dailyRate = Number(employee.dailyRate) || 0.0;
     let hourlyRate = Number(employee.hourlyRate) || 0.0;
+    if (hourlyRate === 0 && F > 0 && dailyRate > 0) {
+      hourlyRate = Number((dailyRate / F).toFixed(2));
+    }
     
     // Check if shift falls on a holiday (excluding Sundays)
     try {
@@ -441,7 +458,8 @@ class Database {
     
     const isOfficeStaff = employee.modeOfWork && employee.modeOfWork.toLowerCase().trim() === 'office staff';
     
-    if (totalHours >= F) {
+    const forceHalfDay = record && record.status === 'half-day leave';
+    if (totalHours >= F && !forceHalfDay) {
       // Full Day + Overtime
       isFullDay = true;
       regularHours = F;
@@ -464,7 +482,7 @@ class Database {
         }
         calculatedWage = Number((dailyRate + (otHours * (dailyRate / 10.0))).toFixed(2));
       }
-    } else if (totalHours >= h) {
+    } else if (totalHours >= h || forceHalfDay) {
       // Half Day + Extra Hours
       isHalfDay = true;
       regularHours = h;
@@ -472,7 +490,7 @@ class Database {
         extraHours = 0.0;
         calculatedWage = Number((dailyRate * 0.5).toFixed(2));
       } else {
-        extraHours = Number((totalHours - h).toFixed(2));
+        extraHours = Math.max(0.0, Number((totalHours - h).toFixed(2)));
         calculatedWage = Number(((dailyRate * 0.5) + (extraHours * hourlyRate)).toFixed(2));
       }
     } else {
@@ -736,7 +754,9 @@ class Database {
       }
       record.isEarlyCheckout = isEarlyOut;
 
-      if (record.isEarlyCheckout) {
+      if (record.isHalfDay) {
+        record.status = "half-day leave";
+      } else if (record.isEarlyCheckout) {
         record.status = "Early Check-out";
       } else if (record.status === 'Late Check-in' || record.status === 'late' || record.isLate) {
         record.isLate = true;
@@ -861,7 +881,20 @@ class Database {
       return this.saveAttendance(record);
     } else if (parsedData.extractedAction === 'half-day-leave') {
       const targetDate = parsedData.leaveDate || targetDateStr;
-      const halfDayHours = this.getSettings().standardHalfDayHours || 4.0;
+      let halfDayHours = this.getSettings().standardHalfDayHours || 4.0;
+      if (employee.shiftStart && employee.shiftEnd) {
+        try {
+          const [startH, startM] = employee.shiftStart.split(':').map(Number);
+          const [endH, endM] = employee.shiftEnd.split(':').map(Number);
+          let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+          if (shiftMinutes < 0) shiftMinutes += 24 * 60;
+          const shiftHours = shiftMinutes / 60;
+          const fullDayHours = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
+          halfDayHours = fullDayHours / 2.0;
+        } catch (err) {
+          console.warn(`[half-day-leave] Failed to parse custom shift times for ${employee.name}:`, err.message);
+        }
+      }
       const halfWage = Number(((employee.dailyRate || 0) * 0.5).toFixed(2));
       const record = {
         employeeId: employee.id,
@@ -1305,7 +1338,20 @@ class Database {
         amount = Number((actualSalary * (workingDays / stdWorkingDays)).toFixed(2));
       }
       
-      const hourlyRate = Number(emp.hourlyRate) || Number((dailyRate / 8.0).toFixed(2)) || 0.0;
+      let F = 8.0;
+      if (emp.shiftStart && emp.shiftEnd) {
+        try {
+          const [startH, startM] = emp.shiftStart.split(':').map(Number);
+          const [endH, endM] = emp.shiftEnd.split(':').map(Number);
+          let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+          if (shiftMinutes < 0) shiftMinutes += 24 * 60;
+          const shiftHours = shiftMinutes / 60;
+          F = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
+        } catch (err) {
+          console.warn(`Failed to parse shift times for ${emp.name} in database payroll calculation:`, err.message);
+        }
+      }
+      const hourlyRate = Number(emp.hourlyRate) || Number((dailyRate / F).toFixed(2)) || 0.0;
       
       // OT Hours: Sum of otHours from logs (unless overridden)
       let defaultOtHours = 0.0;

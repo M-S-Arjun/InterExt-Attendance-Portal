@@ -11,6 +11,7 @@ let socket;
 let state = {
   employees: [],
   sites: [],
+  cctvCameras: [], // Cache for CCTV configurations to support deletion undo/redo
   settings: {},
   attendance: [],
   cameraEvents: [],
@@ -25,6 +26,214 @@ let state = {
     history: null
   }
 };
+
+// Global Transaction Manager for Deletions
+const TransactionManager = {
+  undoStack: [],
+  redoStack: [],
+
+  registerDelete(type, data, deleteFn, restoreFn) {
+    this.redoStack = [];
+    this.undoStack.push({
+      type,
+      data,
+      deleteFn,
+      restoreFn
+    });
+    this.updateButtons();
+    this.showToast(type, data);
+  },
+
+  async undo() {
+    if (this.undoStack.length === 0) return;
+    const transaction = this.undoStack.pop();
+    try {
+      await transaction.restoreFn(transaction.data);
+      this.redoStack.push(transaction);
+      this.updateButtons();
+      this.showStatusToast(`Restored deleted ${transaction.type}: ${this.getDisplayName(transaction.type, transaction.data)}`);
+    } catch (err) {
+      console.error("Undo failed:", err);
+      this.showStatusToast(`Failed to restore: ${err.message}`, true);
+    }
+  },
+
+  async redo() {
+    if (this.redoStack.length === 0) return;
+    const transaction = this.redoStack.pop();
+    try {
+      await transaction.deleteFn(transaction.data);
+      this.undoStack.push(transaction);
+      this.updateButtons();
+      this.showStatusToast(`Redone deletion of ${transaction.type}: ${this.getDisplayName(transaction.type, transaction.data)}`);
+    } catch (err) {
+      console.error("Redo failed:", err);
+      this.showStatusToast(`Failed to delete: ${err.message}`, true);
+    }
+  },
+
+  updateButtons() {
+    const hasUndo = this.undoStack.length > 0;
+    const hasRedo = this.redoStack.length > 0;
+
+    const undoBtns = ['btn-employee-undo', 'btn-site-undo', 'btn-holiday-undo', 'btn-cctv-undo'];
+    const redoBtns = ['btn-employee-redo', 'btn-site-redo', 'btn-holiday-redo', 'btn-cctv-redo'];
+
+    undoBtns.forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.disabled = !hasUndo;
+    });
+
+    redoBtns.forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.disabled = !hasRedo;
+    });
+  },
+
+  getDisplayName(type, data) {
+    if (type === 'employee') return data.name;
+    if (type === 'site') return data.name;
+    if (type === 'holiday') return data.name || data.date;
+    if (type === 'cctv') return data.name;
+    return '';
+  },
+
+  showToast(type, data) {
+    const container = document.getElementById('notification-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = 'glass-card toast-notification';
+    toast.style.cssText = `
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 18px;
+      border-radius: var(--border-radius-md);
+      background: rgba(20, 20, 25, 0.85);
+      border: 1px solid var(--glass-border);
+      backdrop-filter: blur(12px);
+      box-shadow: var(--glass-shadow);
+      color: var(--text-primary);
+      pointer-events: auto;
+      transform: translateX(120%);
+      transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      font-size: 0.85rem;
+      gap: 16px;
+      margin-top: 8px;
+      max-width: 350px;
+    `;
+
+    const displayName = this.getDisplayName(type, data);
+    const label = type.charAt(0).toUpperCase() + type.slice(1);
+
+    toast.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+        <i data-lucide="rotate-ccw" style="color: var(--color-warning); width: 18px; height: 18px; flex-shrink: 0;"></i>
+        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Deleted ${label}: <strong>${displayName}</strong></span>
+      </div>
+      <button class="btn-undo" style="border: none; padding: 4px 8px; height: 24px; font-size: 0.75rem; background: rgba(245, 158, 11, 0.15); color: var(--color-warning); border-radius: var(--border-radius-sm); font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+        Undo
+      </button>
+    `;
+
+    container.appendChild(toast);
+
+    const undoBtn = toast.querySelector('.btn-undo');
+    if (undoBtn) {
+      undoBtn.onclick = () => {
+        this.undo();
+        toast.style.transform = 'translateX(120%)';
+        setTimeout(() => toast.remove(), 400);
+      };
+    }
+
+    setTimeout(() => {
+      toast.style.transform = 'translateX(0)';
+    }, 100);
+
+    setTimeout(() => {
+      toast.style.transform = 'translateX(120%)';
+      setTimeout(() => toast.remove(), 400);
+    }, 10000);
+
+    if (window.lucide) window.lucide.createIcons();
+  },
+
+  showStatusToast(message, isError = false) {
+    const container = document.getElementById('notification-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = 'glass-card toast-notification';
+    toast.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 18px;
+      border-radius: var(--border-radius-md);
+      background: rgba(20, 20, 25, 0.85);
+      border: 1px solid var(--glass-border);
+      backdrop-filter: blur(12px);
+      box-shadow: var(--glass-shadow);
+      color: var(--text-primary);
+      pointer-events: auto;
+      transform: translateX(120%);
+      transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      font-size: 0.85rem;
+      margin-top: 8px;
+      max-width: 350px;
+    `;
+
+    const icon = isError ? 'alert-circle' : 'shield-check';
+    const color = isError ? 'var(--color-danger)' : '#2ed573';
+
+    toast.innerHTML = `
+      <i data-lucide="${icon}" style="color: ${color}; width: 18px; height: 18px; flex-shrink: 0;"></i>
+      <span style="flex: 1;">${message}</span>
+    `;
+
+    container.appendChild(toast);
+
+    setTimeout(() => {
+      toast.style.transform = 'translateX(0)';
+    }, 100);
+
+    setTimeout(() => {
+      toast.style.transform = 'translateX(120%)';
+      setTimeout(() => toast.remove(), 400);
+    }, 4000);
+
+    if (window.lucide) window.lucide.createIcons();
+  }
+};
+
+// Global Keyboard Shortcut Listeners for Undo / Redo
+document.addEventListener('keydown', function(event) {
+  const activeEl = document.activeElement;
+  if (activeEl && (
+    activeEl.tagName === 'INPUT' || 
+    activeEl.tagName === 'TEXTAREA' || 
+    activeEl.isContentEditable
+  )) {
+    return;
+  }
+
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+    if (event.shiftKey) {
+      event.preventDefault();
+      TransactionManager.redo();
+    } else {
+      event.preventDefault();
+      TransactionManager.undo();
+    }
+  }
+  
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') {
+    event.preventDefault();
+    TransactionManager.redo();
+  }
+});
 
 // ==========================================================================
 // BOOTSTRAP INITIALIZATION
@@ -533,6 +742,7 @@ async function fetchStats() {
     document.getElementById('metric-halfday').textContent = r.halfDayToday || 0;
     document.getElementById('metric-late').textContent = r.lateCheckInToday || 0;
     document.getElementById('metric-early').textContent = r.earlyCheckOutToday || 0;
+    document.getElementById('metric-leave').textContent = r.leaveToday || 0;
     document.getElementById('metric-absent').textContent = r.absentToday;
     document.getElementById('metric-pending').textContent = r.pendingExceptions;
 
@@ -975,7 +1185,7 @@ function renderAttendanceLogsTable(r) {
     } else if (row.status === 'Early Check-out') {
       statusBadge = `<span class="badge badge-orange">Early Check-out</span>`;
     } else if (row.status === 'half-day leave') {
-      statusBadge = `<span class="badge badge-amber">Half Day Leave</span>`;
+      statusBadge = `<span class="badge badge-purple">Half Day</span>`;
     } else if (row.status === 'out-for-lunch') {
       statusBadge = `<span class="badge badge-blue">Out for Lunch</span>`;
       tr.className = "table-row-checked-in";
@@ -1095,7 +1305,21 @@ function renderCameraEventsTable(events) {
     const row = document.createElement('tr');
     const eventLabel = event.eventType === 'entry' ? 'Entry' : 'Exit';
     const timestampText = new Date(event.timestamp).toLocaleString([], { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
-    const imageCell = event.imageUrl ? `<a href="${event.imageUrl}" target="_blank">View</a>` : '—';
+    const imageCell = event.imageUrl ? `
+      <img src="${event.imageUrl}" class="selfie-thumbnail" onclick="openSelfieLightbox('${event.imageUrl}', \`<strong>Employee:</strong> ${escapeHtml(event.employeeName)}<br><strong>Location:</strong> ${escapeHtml(event.siteName || 'Office')}<br><strong>Event:</strong> ${escapeHtml(eventLabel)}<br><strong>Time:</strong> ${timestampText}\`)" 
+        style="width: 48px; height: 48px; object-fit: cover; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); cursor: pointer; transition: transform 0.2s;" 
+        onmouseover="this.style.transform='scale(1.08)'" onmouseout="this.style.transform='scale(1)'">
+    ` : '—';
+
+    const statusVal = event.status || 'Recorded';
+    let statusBadgeHtml = '';
+    if (statusVal.toLowerCase().includes('correlated')) {
+      statusBadgeHtml = `<span class="status-badge status-success" style="font-size: 0.75rem; padding: 4px 8px; display: inline-block;">${escapeHtml(statusVal)}</span>`;
+    } else if (statusVal === 'recognized') {
+      statusBadgeHtml = `<span class="status-badge status-info" style="font-size: 0.75rem; padding: 4px 8px; display: inline-block;">Recognized</span>`;
+    } else {
+      statusBadgeHtml = `<span class="status-badge status-secondary" style="font-size: 0.75rem; padding: 4px 8px; display: inline-block;">${escapeHtml(statusVal)}</span>`;
+    }
 
     row.innerHTML = `
       <td>${event.date}</td>
@@ -1104,7 +1328,7 @@ function renderCameraEventsTable(events) {
       <td>${event.siteName || 'Office'}</td>
       <td>${timestampText}</td>
       <td>${imageCell}</td>
-      <td>${event.status || 'Recorded'}</td>
+      <td>${statusBadgeHtml}</td>
     `;
     tbody.appendChild(row);
   });
@@ -1124,7 +1348,6 @@ async function handleCameraEventSubmit(event) {
   const eventType = document.getElementById('camera-event-type')?.value;
   const siteName = document.getElementById('camera-site-select')?.value;
   const timestampInput = document.getElementById('camera-event-timestamp')?.value;
-  const fileInput = document.getElementById('camera-image-file');
 
   if (!employeeId || !eventType || !timestampInput) {
     alert('Please select an employee, event type, and timestamp.');
@@ -1138,19 +1361,7 @@ async function handleCameraEventSubmit(event) {
     timestamp: new Date(timestampInput).toISOString()
   };
 
-  const file = fileInput?.files?.[0];
-  if (file) {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = reader.result.split(',')[1];
-      payload.imageBase64 = base64;
-      payload.imageFilename = file.name;
-      await submitCameraEvent(payload);
-    };
-    reader.readAsDataURL(file);
-  } else {
-    await submitCameraEvent(payload);
-  }
+  await submitCameraEvent(payload);
 }
 
 async function submitCameraEvent(payload) {
@@ -1204,85 +1415,7 @@ async function checkFaceRecognitionService() {
   }
 }
 
-async function recognizeFaceFromCamera() {
-  try {
-    // Get current video frame or image from camera attendance
-    const fileInput = document.getElementById('camera-image-file');
-    if (!fileInput || !fileInput.files.length) {
-      alert('Please select or capture an image first');
-      return;
-    }
 
-    const file = fileInput.files[0];
-    const reader = new FileReader();
-    
-    reader.onload = async (e) => {
-      const imageBase64 = e.target.result;
-      
-      try {
-        const resp = await fetch('/api/face/recognize', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            imageBase64: imageBase64,
-            threshold: 0.58
-          })
-        });
-        
-        const result = await resp.json();
-        
-        if (result.recognized) {
-          const matches = result.matches || [
-            {
-              success: true,
-              employee: result.employee,
-              confidence: result.confidence,
-              eventType: result.eventType
-            }
-          ];
-          
-          let firstSuccess = null;
-          let errorMessages = [];
-          
-          matches.forEach(match => {
-            if (match.success && match.employee) {
-              if (!firstSuccess) firstSuccess = match;
-              showFloatingNotification(match.employee.name, match.confidence, match.eventType);
-            } else {
-              errorMessages.push(`${match.employee ? match.employee.name : match.employee_id}: ${match.message}`);
-            }
-          });
-          
-          if (firstSuccess) {
-            // Auto-populate form
-            document.getElementById('camera-emp-select').value = firstSuccess.employee.id;
-            document.getElementById('camera-event-type').value = firstSuccess.eventType;
-            setCameraEventTimestampNow();
-          }
-          
-          if (errorMessages.length > 0) {
-            setTimeout(() => {
-              alert(`Some scans were rejected:\n\n${errorMessages.join('\n')}`);
-            }, 800);
-          }
-          
-          console.log("Face recognition result:", result);
-        } else {
-          const errMsg = result.message || 'No matching employee found in database\nPlease select manually or train more images';
-          alert(`✗ Face Match Rejected:\n${errMsg}`);
-        }
-      } catch (err) {
-        console.error('Face recognition error:', err);
-        alert('Face recognition failed: ' + err.message);
-      }
-    };
-    
-    reader.readAsDataURL(file);
-  } catch (err) {
-    console.error('Error in recognizeFaceFromCamera:', err);
-    alert('Error processing image');
-  }
-}
 
 async function trainFaceRecognitionModel() {
   try {
@@ -1505,6 +1638,134 @@ function closeEmployeeModal() {
   document.getElementById('employee-modal').classList.remove('active');
 }
 
+function showMetricEmployees(metricType) {
+  try {
+    const modal = document.getElementById('metric-employees-modal');
+    const title = document.getElementById('metric-modal-title');
+    const tbody = document.getElementById('metric-employees-list-body');
+    if (!modal || !title || !tbody) return;
+
+    tbody.innerHTML = "";
+    let list = [];
+    let modalTitle = "";
+
+    const attendance = state.attendance || [];
+    const employees = state.employees || [];
+
+    // Safe helper function to format times and avoid RangeError: Invalid time value
+    const formatTimeSafely = (timeStr) => {
+      if (!timeStr || timeStr === "—" || timeStr === "null" || timeStr === "undefined") return "—";
+      try {
+        const d = new Date(timeStr);
+        if (isNaN(d.getTime())) return "—";
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } catch (err) {
+        return "—";
+      }
+    };
+
+    if (metricType === 'registry') {
+      modalTitle = "Active Registry";
+      list = employees.filter(e => e.status === 'active').map(e => {
+        const log = attendance.find(a => a.employeeId === e.id);
+        return {
+          name: e.name,
+          checkIn: log ? log.checkIn : null,
+          checkOut: log ? log.checkOut : null,
+          siteName: log ? (log.siteName || '—') : (e.siteId ? ((state.sites || []).find(s => s.id === e.siteId)?.name || 'Office') : '—'),
+          status: log ? log.status : 'absent'
+        };
+      });
+    } else if (metricType === 'present') {
+      modalTitle = "Present Today";
+      list = attendance.filter(a => a.status === 'checked-in' || a.status === 'completed' || a.status === 'late' || a.status === 'Late Check-in' || a.status === 'Early Check-out' || a.status === 'half-day leave').map(a => ({
+        name: a.employeeName,
+        checkIn: a.checkIn,
+        checkOut: a.checkOut,
+        siteName: a.siteName || 'Office',
+        status: a.status
+      }));
+    } else if (metricType === 'halfday') {
+      modalTitle = "Half-Day Today";
+      list = attendance.filter(a => a.isHalfDay === true || a.isHalfDay === 'true' || a.status === 'half-day leave').map(a => ({
+        name: a.employeeName,
+        checkIn: a.checkIn,
+        checkOut: a.checkOut,
+        siteName: a.siteName || 'Office',
+        status: a.status
+      }));
+    } else if (metricType === 'late') {
+      modalTitle = "Late Check-in Today";
+      list = attendance.filter(a => a.status === 'Late Check-in' || a.status === 'late' || a.isLate === true || a.isLate === 'true').map(a => ({
+        name: a.employeeName,
+        checkIn: a.checkIn,
+        checkOut: a.checkOut,
+        siteName: a.siteName || 'Office',
+        status: a.status
+      }));
+    } else if (metricType === 'early') {
+      modalTitle = "Early Check-out Today";
+      list = attendance.filter(a => a.status === 'Early Check-out' || a.isEarlyCheckout === true || a.isEarlyCheckout === 'true').map(a => ({
+        name: a.employeeName,
+        checkIn: a.checkIn,
+        checkOut: a.checkOut,
+        siteName: a.siteName || 'Office',
+        status: a.status
+      }));
+    } else if (metricType === 'leave') {
+      modalTitle = "On Leave Today";
+      list = attendance.filter(a => a.status === 'leave').map(a => ({
+        name: a.employeeName,
+        checkIn: null,
+        checkOut: null,
+        siteName: a.siteName || '—',
+        status: a.status
+      }));
+    } else if (metricType === 'absent') {
+      modalTitle = "Absent Today";
+      list = attendance.filter(a => a.status === 'absent').map(a => ({
+        name: a.employeeName,
+        checkIn: null,
+        checkOut: null,
+        siteName: '—',
+        status: a.status
+      }));
+    }
+
+    title.innerHTML = `<i data-lucide="users"></i> ${modalTitle} (${list.length})`;
+
+    if (list.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-tertiary);">No workers in this category today.</td></tr>`;
+    } else {
+      list.forEach(item => {
+        const inTime = formatTimeSafely(item.checkIn);
+        const outTime = formatTimeSafely(item.checkOut);
+        
+        tbody.innerHTML += `
+          <tr>
+            <td><strong>${escapeHtml(item.name || '—')}</strong></td>
+            <td>${inTime}</td>
+            <td>${outTime}</td>
+            <td>${escapeHtml(item.siteName || '—')}</td>
+          </tr>
+        `;
+      });
+    }
+
+    modal.classList.add('active');
+    
+    if (window.lucide) {
+      window.lucide.createIcons();
+    }
+  } catch (err) {
+    console.error("Error displaying metric employees modal:", err);
+  }
+}
+
+function closeMetricEmployeesModal() {
+  document.getElementById('metric-employees-modal').classList.remove('active');
+}
+
 function editEmployee(id) {
   const emp = state.employees.find(e => e.id === id);
   if (!emp) return;
@@ -1592,14 +1853,38 @@ async function handleEmployeeSubmit(e) {
 }
 
 async function deleteEmployee(id) {
+  const emp = state.employees.find(e => e.id === id);
+  if (!emp) return;
   if (!confirm("Are you sure you want to delete this employee? This will stop dynamic absent tracking for them.")) return;
   try {
     await fetch(`/api/employees/${id}`, { method: 'DELETE' });
     await loadDatabaseCore();
     renderEmployeesTable();
     refreshDashboardData();
+
+    TransactionManager.registerDelete(
+      'employee',
+      emp,
+      async (data) => {
+        await fetch(`/api/employees/${data.id}`, { method: 'DELETE' });
+        await loadDatabaseCore();
+        renderEmployeesTable();
+        refreshDashboardData();
+      },
+      async (data) => {
+        await fetch('/api/employees', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        await loadDatabaseCore();
+        renderEmployeesTable();
+        refreshDashboardData();
+      }
+    );
   } catch (err) {
     console.error("Delete employee failed:", err);
+    TransactionManager.showStatusToast(`Delete employee failed: ${err.message}`, true);
   }
 }
 
@@ -1654,13 +1939,35 @@ function resetSiteForm() {
 }
 
 async function deleteSite(id) {
+  const site = state.sites.find(s => s.id === id);
+  if (!site) return;
   if (!confirm("Are you sure you want to delete this site?")) return;
   try {
     await fetch(`/api/sites/${id}`, { method: 'DELETE' });
     await loadDatabaseCore();
     renderSitesTable();
+
+    TransactionManager.registerDelete(
+      'site',
+      site,
+      async (data) => {
+        await fetch(`/api/sites/${data.id}`, { method: 'DELETE' });
+        await loadDatabaseCore();
+        renderSitesTable();
+      },
+      async (data) => {
+        await fetch('/api/sites', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        await loadDatabaseCore();
+        renderSitesTable();
+      }
+    );
   } catch (err) {
     console.error("Delete site failed:", err);
+    TransactionManager.showStatusToast(`Delete site failed: ${err.message}`, true);
   }
 }
 
@@ -1741,6 +2048,23 @@ function openAttendanceAdjuster(id) {
   document.getElementById('att-is-hospital').checked = !!log.isHospitalCase;
   document.getElementById('att-hospital-hours').value = log.hospitalHours || 0.0;
 
+  if (log.status === 'half-day leave') {
+    let selectedPeriod = 'first';
+    if (log.checkIn) {
+      try {
+        const cin = new Date(log.checkIn);
+        const hours = cin.getHours();
+        if (hours >= 13) {
+          selectedPeriod = 'second';
+        }
+      } catch (err) {
+        console.warn("Failed to check existing checkIn time for half-day period:", err);
+      }
+    }
+    const periodEl = document.getElementById('att-halfday-period');
+    if (periodEl) periodEl.value = selectedPeriod;
+  }
+
   // Toggle visible elements
   toggleManualTimeFields();
   toggleOverrideFields();
@@ -1748,12 +2072,21 @@ function openAttendanceAdjuster(id) {
   document.getElementById('attendance-modal').classList.add('active');
 }
 
-function toggleManualTimeFields() {
+function toggleManualTimeFields(fromUserClick = false) {
   const status = document.getElementById('att-status').value;
   const timesRow = document.getElementById('att-times-row');
   const checkoutGroup = document.getElementById('att-checkout-group');
   const overrideBox = document.getElementById('att-override-box');
   const siteGroup = document.getElementById('att-site-group');
+  const halfdayPeriodGroup = document.getElementById('att-halfday-period-group');
+
+  if (halfdayPeriodGroup) {
+    if (status === 'half-day leave') {
+      halfdayPeriodGroup.style.display = 'block';
+    } else {
+      halfdayPeriodGroup.style.display = 'none';
+    }
+  }
 
   if (status === 'absent' || status === 'leave') {
     timesRow.style.display = 'none';
@@ -1770,6 +2103,30 @@ function toggleManualTimeFields() {
     checkoutGroup.style.display = 'block';
     overrideBox.style.display = 'block';
     siteGroup.style.display = 'block';
+  }
+
+  if (fromUserClick && status === 'half-day leave') {
+    updateHalfDayTimes();
+  }
+}
+
+function updateHalfDayTimes() {
+  const empId = document.getElementById('att-emp-id').value;
+  const datePrefix = document.getElementById('att-date').value;
+  const period = document.getElementById('att-halfday-period').value;
+
+  const employee = (state.employees || []).find(e => e.id === empId);
+  if (!employee) return;
+
+  const shiftStart = employee.shiftStart || "09:00";
+  const shiftEnd = employee.shiftEnd || "17:00";
+
+  if (period === 'first') {
+    document.getElementById('att-checkin').value = `${datePrefix}T${shiftStart}`;
+    document.getElementById('att-checkout').value = `${datePrefix}T13:00`;
+  } else {
+    document.getElementById('att-checkin').value = `${datePrefix}T14:00`;
+    document.getElementById('att-checkout').value = `${datePrefix}T${shiftEnd}`;
   }
 }
 
@@ -1814,7 +2171,7 @@ async function handleAttendanceSubmit(e) {
   } else {
     data.checkIn = new Date(document.getElementById('att-checkin').value).toISOString();
     
-    if (status === 'completed' || status === 'late' || status === 'Late Check-in' || status === 'Early Check-out') {
+    if (status === 'completed' || status === 'late' || status === 'Late Check-in' || status === 'Early Check-out' || status === 'half-day leave') {
       const checkoutVal = document.getElementById('att-checkout').value;
       if (checkoutVal) {
         data.checkOut = new Date(checkoutVal).toISOString();
@@ -2189,9 +2546,9 @@ function initCharts() {
   // Helper: theme-aware palette for site doughnut (avoid pure white)
   function getSitePalette(isLight) {
     if (isLight) {
-      return ['#ff6b00', '#f3f4f6', '#ff9547', '#e05e00', '#6b7280', '#ffc08a'];
+      return ['#ff6b00', '#0284c7', '#ff9547', '#e05e00', '#047857', '#a855f7'];
     }
-    return ['#ff6b00', '#e6edf0', '#ff9547', '#e05e00', '#71717a', '#ffc08a'];
+    return ['#ff6b00', '#0284c7', '#ff9547', '#e05e00', '#10b981', '#a855f7'];
   }
 
   state.charts.site = new Chart(siteCtx, {
@@ -2282,14 +2639,14 @@ function updateCharts() {
     const isLight = document.documentElement.classList.contains('light-theme');
     state.charts.site.data.labels = ["No Workers Today"];
     state.charts.site.data.datasets[0].data = [1];
-    state.charts.site.data.datasets[0].backgroundColor = [isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.05)'];
+    state.charts.site.data.datasets[0].backgroundColor = [isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.05)'];
   } else {
     state.charts.site.data.labels = siteLabels;
     state.charts.site.data.datasets[0].data = siteData;
     const isLight = document.documentElement.classList.contains('light-theme');
     // Use the same palette helper from initCharts (fallback inline)
     const palette = (function(isLight) {
-      return isLight ? ['#ff6b00', '#f3f4f6', '#ff9547', '#e05e00', '#6b7280', '#ffc08a'] : ['#ff6b00', '#e6edf0', '#ff9547', '#e05e00', '#71717a', '#ffc08a'];
+      return isLight ? ['#ff6b00', '#0284c7', '#ff9547', '#e05e00', '#047857', '#a855f7'] : ['#ff6b00', '#0284c7', '#ff9547', '#e05e00', '#10b981', '#a855f7'];
     })(isLight);
     state.charts.site.data.datasets[0].backgroundColor = palette;
   }
@@ -2360,8 +2717,8 @@ function updateThemeIcon(isLight) {
 function updateChartTheme(isLight) {
   if (!state.charts.site || !state.charts.history) return;
   
-  const textColor = isLight ? '#52525b' : '#a1a1aa';
-  const gridColor = isLight ? 'rgba(0, 0, 0, 0.04)' : 'rgba(255, 255, 255, 0.03)';
+  const textColor = isLight ? '#3f3f46' : '#d4d4d8';
+  const gridColor = isLight ? 'rgba(0, 0, 0, 0.08)' : 'rgba(255, 255, 255, 0.03)';
   
   Chart.defaults.color = textColor;
   Chart.defaults.borderColor = gridColor;
@@ -2375,7 +2732,7 @@ function updateChartTheme(isLight) {
   // Update doughnut labels
   state.charts.site.options.plugins.legend.labels.color = textColor;
   // Update doughnut palette to match theme
-  const palette = isLight ? ['#ff6b00', '#f3f4f6', '#ff9547', '#e05e00', '#6b7280', '#ffc08a'] : ['#ff6b00', '#e6edf0', '#ff9547', '#e05e00', '#71717a', '#ffc08a'];
+  const palette = isLight ? ['#ff6b00', '#0284c7', '#ff9547', '#e05e00', '#047857', '#a855f7'] : ['#ff6b00', '#0284c7', '#ff9547', '#e05e00', '#10b981', '#a855f7'];
   state.charts.site.data.datasets[0].backgroundColor = palette;
   
   // Dynamic gradient fill for line chart
@@ -2729,7 +3086,22 @@ function recalculatePayrollRow(inputEl) {
     amount = Number((actualSalaryCalculated * (workingDays / stdWorkingDays)).toFixed(2));
   }
   
-  const hourlyRate = Number((dailyRate / 8).toFixed(2));
+  const empId = tr.dataset.empId;
+  const employee = (state.employees || []).find(e => e.id === empId);
+  let F = 8.0;
+  if (employee && employee.shiftStart && employee.shiftEnd) {
+    try {
+      const [startH, startM] = employee.shiftStart.split(':').map(Number);
+      const [endH, endM] = employee.shiftEnd.split(':').map(Number);
+      let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+      if (shiftMinutes < 0) shiftMinutes += 24 * 60;
+      const shiftHours = shiftMinutes / 60;
+      F = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
+    } catch (err) {
+      console.warn("Failed to parse shift times for payroll row recalculation:", err);
+    }
+  }
+  const hourlyRate = Number((dailyRate / F).toFixed(2));
 
   // OT Payout
   const otPayout = isDailyWageWorker
@@ -3126,16 +3498,16 @@ async function openDisputeInspector(employeeId, employeeName, date) {
           </div>
         `}
         
-        <div style="text-align: left; background: rgba(0, 0, 0, 0.2); padding: 20px; border-radius: 8px; border: 1px solid var(--glass-border); font-size: 0.9rem; line-height: 1.8; color: var(--text-primary);">
-          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 8px; margin-bottom: 8px;">
+        <div class="dispute-meta-box">
+          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; border-bottom: 1px solid var(--glass-border); padding-bottom: 8px; margin-bottom: 8px;">
             <span style="color: var(--text-secondary); font-weight: 500;">Employee:</span>
             <strong style="color: var(--color-primary);">${escapeHtml(employeeName)}</strong>
           </div>
-          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 8px; margin-bottom: 8px;">
+          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; border-bottom: 1px solid var(--glass-border); padding-bottom: 8px; margin-bottom: 8px;">
             <span style="color: var(--text-secondary); font-weight: 500;">Camera:</span>
             <strong>${escapeHtml(match.siteName || 'Entry Gate')}</strong>
           </div>
-          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 8px; margin-bottom: 8px;">
+          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; border-bottom: 1px solid var(--glass-border); padding-bottom: 8px; margin-bottom: 8px;">
             <span style="color: var(--text-secondary); font-weight: 500;">Time:</span>
             <strong>${formattedTime}</strong>
           </div>
@@ -3561,6 +3933,8 @@ async function handleHolidaySubmit(event) {
 }
 
 async function deleteHoliday(date) {
+  const holiday = stateHolidays.find(h => h.date === date);
+  if (!holiday) return;
   if (!confirm(`Are you sure you want to remove the holiday on ${date}?`)) return;
   
   try {
@@ -3569,9 +3943,26 @@ async function deleteHoliday(date) {
     }).then(r => r.json());
     
     loadHolidaysTab();
+
+    TransactionManager.registerDelete(
+      'holiday',
+      holiday,
+      async (data) => {
+        await fetch(`/api/holidays/${data.date}`, { method: 'DELETE' }).then(r => r.json());
+        loadHolidaysTab();
+      },
+      async (data) => {
+        await fetch('/api/holidays', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        }).then(r => r.json());
+        loadHolidaysTab();
+      }
+    );
   } catch (err) {
     console.error("Failed to delete holiday:", err);
-    alert("Failed to delete holiday: " + err.message);
+    TransactionManager.showStatusToast(`Failed to delete holiday: ${err.message}`, true);
   }
 }
 
@@ -3631,9 +4022,8 @@ async function toggleWebcam() {
 
     btn.innerHTML = `<i data-lucide="video"></i> Start Camera`;
     statusBadge.textContent = "OFFLINE";
-    statusBadge.style.background = "rgba(113, 113, 122, 0.1)";
-    statusBadge.style.color = "var(--text-tertiary)";
-    statusBadge.style.borderColor = "var(--glass-border)";
+    statusBadge.className = "badge badge-secondary";
+    statusBadge.style.cssText = "";
 
     scanBtn.disabled = true;
     scanBtn.style.opacity = '0.5';
@@ -3656,9 +4046,8 @@ async function toggleWebcam() {
 
       btn.innerHTML = `<i data-lucide="video-off"></i> Stop Camera`;
       statusBadge.textContent = "ACTIVE SCANNING";
-      statusBadge.style.background = "rgba(255, 107, 0, 0.1)";
-      statusBadge.style.color = "var(--color-primary)";
-      statusBadge.style.borderColor = "rgba(255, 107, 0, 0.2)";
+      statusBadge.className = "badge badge-orange";
+      statusBadge.style.cssText = "";
 
       scanBtn.disabled = false;
       scanBtn.style.opacity = '1';
@@ -3821,9 +4210,8 @@ function startAutoScanLoop() {
   const statusBadge = document.getElementById('camera-status-badge');
   if (statusBadge) {
     statusBadge.textContent = "AUTO SCAN ACTIVE";
-    statusBadge.style.background = "rgba(46, 213, 115, 0.1)";
-    statusBadge.style.color = "#2ed573";
-    statusBadge.style.borderColor = "rgba(46, 213, 115, 0.2)";
+    statusBadge.className = "badge badge-green";
+    statusBadge.style.cssText = "";
   }
   
   isAutoScanningFrame = false;
@@ -3851,9 +4239,8 @@ function stopAutoScanLoop() {
   const statusBadge = document.getElementById('camera-status-badge');
   if (statusBadge && webcamStream) {
     statusBadge.textContent = "ACTIVE SCANNING";
-    statusBadge.style.background = "rgba(255, 107, 0, 0.1)";
-    statusBadge.style.color = "var(--color-primary)";
-    statusBadge.style.borderColor = "rgba(255, 107, 0, 0.2)";
+    statusBadge.className = "badge badge-orange";
+    statusBadge.style.cssText = "";
   }
 }
 
@@ -4114,6 +4501,7 @@ async function loadCctvCameras() {
   try {
     const resp = await fetch('/api/cctv');
     const cameras = await resp.json();
+    state.cctvCameras = cameras;
     
     const sitesResp = await fetch('/api/sites');
     const sites = await sitesResp.json();
@@ -4202,8 +4590,11 @@ function openAddCctvModal() {
   document.getElementById('cctv-event-type').value = 'auto';
   document.getElementById('cctv-status').value = 'active';
   
+  const presetSelect = document.getElementById('cctv-preset');
+  if (presetSelect) presetSelect.value = '';
+  
   const modal = document.getElementById('cctv-modal');
-  if (modal) modal.style.display = 'flex';
+  if (modal) modal.classList.add('active');
 }
 
 function openEditCctvModal(cam) {
@@ -4215,13 +4606,52 @@ function openEditCctvModal(cam) {
   document.getElementById('cctv-event-type').value = cam.eventType;
   document.getElementById('cctv-status').value = cam.status;
   
+  const presetSelect = document.getElementById('cctv-preset');
+  if (presetSelect) presetSelect.value = '';
+  
   const modal = document.getElementById('cctv-modal');
-  if (modal) modal.style.display = 'flex';
+  if (modal) modal.classList.add('active');
+}
+
+function quickFillCctv(val) {
+  if (!val) return;
+  const nameInput = document.getElementById('cctv-name');
+  const sourceInput = document.getElementById('cctv-source');
+  const eventTypeSelect = document.getElementById('cctv-event-type');
+  const statusSelect = document.getElementById('cctv-status');
+  
+  if (val === 'entrance-1') {
+    nameInput.value = "Entrance CCTV 1";
+    sourceInput.value = "rtsp://192.168.1.101:554/live";
+    eventTypeSelect.value = "entry";
+  } else if (val === 'entrance-2') {
+    nameInput.value = "Entrance CCTV 2";
+    sourceInput.value = "rtsp://192.168.1.102:554/live";
+    eventTypeSelect.value = "entry";
+  } else if (val === 'entrance-3') {
+    nameInput.value = "Entrance CCTV 3";
+    sourceInput.value = "rtsp://192.168.1.103:554/live";
+    eventTypeSelect.value = "entry";
+  } else if (val === 'exit-1') {
+    nameInput.value = "Exit CCTV 1";
+    sourceInput.value = "rtsp://192.168.1.201:554/live";
+    eventTypeSelect.value = "exit";
+  } else if (val === 'exit-2') {
+    nameInput.value = "Exit CCTV 2";
+    sourceInput.value = "rtsp://192.168.1.202:554/live";
+    eventTypeSelect.value = "exit";
+  } else if (val === 'exit-3') {
+    nameInput.value = "Exit CCTV 3";
+    sourceInput.value = "rtsp://192.168.1.203:554/live";
+    eventTypeSelect.value = "exit";
+  }
+  
+  statusSelect.value = "active";
 }
 
 function closeCctvModal() {
   const modal = document.getElementById('cctv-modal');
-  if (modal) modal.style.display = 'none';
+  if (modal) modal.classList.remove('active');
 }
 
 async function handleCctvSubmit(event) {
@@ -4256,6 +4686,8 @@ async function handleCctvSubmit(event) {
 }
 
 async function deleteCctvCamera(id) {
+  const camera = (state.cctvCameras || []).find(c => c.id === id);
+  if (!camera) return;
   if (!confirm("Are you sure you want to delete this CCTV camera?")) {
     return;
   }
@@ -4267,12 +4699,30 @@ async function deleteCctvCamera(id) {
     
     if (resp.ok) {
       loadCctvCameras();
+
+      TransactionManager.registerDelete(
+        'cctv',
+        camera,
+        async (data) => {
+          await fetch(`/api/cctv/${data.id}`, { method: 'DELETE' });
+          loadCctvCameras();
+        },
+        async (data) => {
+          await fetch('/api/cctv', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+          });
+          loadCctvCameras();
+        }
+      );
     } else {
       const err = await resp.json();
-      alert(`Delete failed: ${err.error || 'Server error'}`);
+      TransactionManager.showStatusToast(`Delete failed: ${err.error || 'Server error'}`, true);
     }
   } catch (err) {
-    alert("Connection error: " + err.message);
+    console.error("Delete CCTV camera failed:", err);
+    TransactionManager.showStatusToast(`Connection error: ${err.message}`, true);
   }
 }
 
@@ -4432,6 +4882,28 @@ document.addEventListener('click', function(event) {
     document.querySelectorAll('.filter-dropdown-content.show').forEach(el => {
       el.classList.remove('show');
     });
+  }
+  
+  // Close modals when clicking outside the modal box (on the backdrop)
+  if (event.target.classList.contains('modal')) {
+    const id = event.target.id;
+    if (id === 'metric-employees-modal') {
+      closeMetricEmployeesModal();
+    } else if (id === 'attendance-modal') {
+      closeAttendanceModal();
+    } else if (id === 'employee-modal') {
+      closeEmployeeModal();
+    } else if (id === 'holiday-modal') {
+      closeHolidayModal();
+    } else if (id === 'selfie-modal') {
+      closeSelfieModal();
+    } else if (id === 'dispute-modal') {
+      closeDisputeModal();
+    } else if (id === 'cctv-modal') {
+      closeCctvModal();
+    } else {
+      event.target.classList.remove('active');
+    }
   }
 });
 
