@@ -49,8 +49,81 @@ function stringSimilarity(s1, s2) {
   return Number((1.0 - distance / maxLength).toFixed(2));
 }
 
+// Spell-corrects a single word using a direct map and fuzzy matching against a target vocabulary.
+// Safe-guarded to avoid correcting JID components, employee names, or site names.
+function spellCorrectWord(word, employees = [], sites = []) {
+  const cleanWord = word.toLowerCase().replace(/[^a-z]/g, '');
+  if (cleanWord.length < 3) return word; // too short to correct safely
+
+  const lowerWord = cleanWord.trim();
+
+  // Safeguard: do not spell-correct if the word matches or is very close to an active employee name
+  const matchesEmployee = employees.some(e => {
+    if (!e || !e.name) return false;
+    const nameWords = e.name.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/);
+    return nameWords.some(nw => nw === lowerWord || levenshteinDistance(nw, lowerWord) <= 1);
+  });
+  if (matchesEmployee) return word;
+
+  // Safeguard: do not spell-correct if the word matches or is very close to a site name
+  const matchesSite = sites.some(s => {
+    if (!s || !s.name) return false;
+    const siteWords = s.name.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/);
+    return siteWords.some(sw => sw === lowerWord || levenshteinDistance(sw, lowerWord) <= 1);
+  });
+  if (matchesSite) return word;
+
+  // Direct manual mappings for common spelling mistakes and abbreviations
+  const directMap = {
+    // leave keywords
+    'leav': 'leave', 'leve': 'leave', 'laeve': 'leave', 'leves': 'leave', 'leavs': 'leave', 'leavin': 'leave', 'leving': 'leave',
+    // half-day keywords
+    'haf': 'half', 'haaf': 'half', 'haff': 'half',
+    'dey': 'day', 'da': 'day',
+    // session / section
+    'sesion': 'session', 'seson': 'session', 'secion': 'session', 'seccion': 'session', 'sektion': 'session', 
+    'section': 'session', 'sectionn': 'session', 'seccionn': 'session',
+    // morning keywords
+    'morng': 'morning', 'mornig': 'morning', 'mornng': 'morning', 'mrng': 'morning', 'morining': 'morning', 'mornin': 'morning',
+    // afternoon keywords
+    'aftrnoon': 'afternoon', 'aftnoon': 'afternoon', 'aftrenoon': 'afternoon', 'afternon': 'afternoon', 'afrnoon': 'afternoon', 'aftn': 'afternoon',
+    // evening keywords
+    'evng': 'evening', 'eveg': 'evening', 'eveing': 'evening',
+    // absent keywords
+    'abscent': 'absent', 'abesent': 'absent', 'absend': 'absent',
+    // travel keywords
+    'travl': 'travel', 'traval': 'travel', 'travelling': 'travel', 'traveling': 'travel', 'travaling': 'travel', 'travalin': 'travel', 'travling': 'travel',
+    // hours keywords
+    'hour': 'hour', 'hours': 'hours', 'hr': 'hour', 'hrs': 'hours'
+  };
+
+  if (directMap[cleanWord]) {
+    return directMap[cleanWord];
+  }
+
+  // Fuzzy match general keywords using Levenshtein distance
+  const KEYWORDS = ['leave', 'half', 'day', 'session', 'morning', 'afternoon', 'evening', 'absent', 'travel', 'hour', 'hours'];
+  let bestWord = null;
+  let bestDistance = 999;
+  for (const kw of KEYWORDS) {
+    const dist = levenshteinDistance(cleanWord, kw);
+    const maxAllowedDist = kw.length <= 6 ? 1 : 2;
+    if (dist <= maxAllowedDist && dist < bestDistance) {
+      bestDistance = dist;
+      bestWord = kw;
+    }
+  }
+
+  if (bestWord) {
+    return bestWord;
+  }
+
+  return word;
+}
+
 // Smart, typo-tolerant first-name, initial-based, and space-free matching for employee directory
 function smartNameMatch(part, validEmployees) {
+
   if (!part) return null;
   const cleanPart = part.toLowerCase().trim().replace(/[^a-z\s]/g, '');
   if (cleanPart.length < 2) return null;
@@ -300,7 +373,8 @@ class AttendanceParser {
     'kannur', 'kasaragod', 'kollam', 'pathanamthitta', 'alappuzha', 'thiruvananthapuram',
     'palakkad', 'thiruvananthapuram', 'cochin', 'trivandrum', 'coimbatore', 'bangalore',
     'mangalore', 'calicut', 'kozhikode', 'mattancherry', 'fort kochi', 'munnar',
-    'vagamon', 'thekkady', 'varkala', 'alleppey', 'kumarakom', 'backwaters', 'kerala'
+    'vagamon', 'thekkady', 'varkala', 'alleppey', 'kumarakom', 'backwaters', 'kerala',
+    'cavili', 'choondi', 'chamakkala', 'raju joseph', 'joseph'
   ]);
 
   // Helper to robustly classify leaves semantically
@@ -488,7 +562,7 @@ class AttendanceParser {
     });
     
     // Clean up punctuation and spacing
-    nameLineClean = nameLineClean.replace(/[,;\-|:()]/g, ' ').replace(/\s+/g, ' ').trim();
+    nameLineClean = nameLineClean.replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
 
     // Try exact substring first (e.g. "Maya Sunil" in the line)
     const exactSub = validEmployees
@@ -1024,8 +1098,16 @@ class AttendanceParser {
       ? new Date(messageTimestamp).toISOString().split('T')[0]
       : new Date().toISOString().split('T')[0];
     
+    // Preprocess stuck time ranges like "9to6", "9 to6", "9to 6"
+    let preprocessedText = rawText.replace(/(\d+(?:\s*(?:am|pm))?)(to)/gi, '$1 to');
+    preprocessedText = preprocessedText.replace(/(to)(\d+(?:\s*(?:am|pm))?)/gi, 'to $2');
+
+    const employees = (database.getEmployees() || []).filter(e => e && e.status === 'active');
+    const sites = (database.getSites() || []).filter(s => s && s.name);
+    const correctedText = preprocessedText.replace(/\b[a-zA-Z]+\b/g, match => spellCorrectWord(match, employees, sites));
+
     // Split into individual clean lines (preserve blanks for group detection)
-    const allRawLines = rawText.split(/\r?\n/).map(l => l.trim());
+    const allRawLines = correctedText.split(/\r?\n/).map(l => l.trim());
     const lines = allRawLines.filter(l => l.length > 0);
     
     if (lines.length === 0) {
@@ -1057,22 +1139,26 @@ class AttendanceParser {
     //   Arun George
     //   (9-6 pm Chamakkala market)
     // ============================================================
-    const hasBlankLineSeparation = allRawLines.some(l => l.trim() === '');
-    if (hasBlankLineSeparation && lines.length >= 3) {
-      // Split into raw groups by blank lines
+    if (lines.length >= 3) {
+      // Split into raw groups by blank lines if present, otherwise treat as a single group
+      const hasBlankLineSeparation = allRawLines.some(l => l.trim() === '');
       const rawGroups = [];
-      let currentGroup = [];
-      for (const line of allRawLines) {
-        if (line.trim() === '') {
-          if (currentGroup.length > 0) {
-            rawGroups.push(currentGroup);
-            currentGroup = [];
+      if (hasBlankLineSeparation) {
+        let currentGroup = [];
+        for (const line of allRawLines) {
+          if (line.trim() === '') {
+            if (currentGroup.length > 0) {
+              rawGroups.push(currentGroup);
+              currentGroup = [];
+            }
+          } else {
+            currentGroup.push(line.trim());
           }
-        } else {
-          currentGroup.push(line.trim());
         }
+        if (currentGroup.length > 0) rawGroups.push(currentGroup);
+      } else {
+        rawGroups.push(lines);
       }
-      if (currentGroup.length > 0) rawGroups.push(currentGroup);
 
       // Extract global date from first group or first line
       let globalDate = todayStr;
@@ -1105,10 +1191,10 @@ class AttendanceParser {
         // Date line
         if (/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/.test(line)) return { type: 'date' };
         // Travel time (may be whole line or suffix after paren e.g. "(9-6 site)2hr travel")
-        const travelM = line.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*trav(?:el|eling|elling|alling)/i);
+        const travelM = line.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*trav[a-z]*/i);
         if (travelM) {
           // If whole line is just travel info, classify as travel
-          const stripped = line.replace(travelM[0], '').trim();
+          const stripped = line.replace(travelM[0], '').replace(/[.,:;]+$/, '').trim();
           if (stripped.length === 0) return { type: 'travel', hours: parseFloat(travelM[1]) };
           // Else paren + travel tail — handle as paren_block below
         }
@@ -1118,7 +1204,7 @@ class AttendanceParser {
           const inner = parenBlock[1].trim();
           const tail = parenBlock[2].trim();
           // Extract travel from tail
-          const tailTravel = tail.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*trav(?:el|eling|elling|alling)/i);
+          const tailTravel = tail.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*trav[a-z]*/i);
           return {
             type: 'paren_block',
             inner,
@@ -1132,8 +1218,10 @@ class AttendanceParser {
         // Relative date
         if (/\b(?:yesterday|today|tomorrow|innale|innu|nale)\b/i.test(lower)) return { type: 'date' };
         // Site keywords — strong indicators
+        // Site keywords and place names — strong indicators
         const hasSiteKw = /\b(?:house|site|yard|office|station|building|ground|road|street|town|city|room|block|zone|field|shop|store|market|company|project|ksrtc|quarters|cavili|choondi|munnar|ernakulam|kothamangalam|muvattupuzha|chamakkala|wireless|gokulam)\b/i.test(lower);
-        if (hasSiteKw) return { type: 'site_hint', raw: line };
+        const hasPlaceWord = lower.split(/\s+/).some(w => AttendanceParser.INDIAN_PLACE_NAMES.has(w.replace(/[.]+$/, '').trim()));
+        if (hasSiteKw || hasPlaceWord) return { type: 'site_hint', raw: line };
         // Name-like (alphabetic, no numbers)
         const isAlpha = /^[a-zA-Z\s.'\-]+$/.test(line);
         if (isAlpha && line.length > 1) {
@@ -1172,7 +1260,7 @@ class AttendanceParser {
             // "(9-6 pm Raju Joseph)2hr travel" — extract timing from inner, rest is site
             const inner = cls.inner;
             const trm = inner.match(/\b(\d{1,2}(?:\s*(?:am|pm))?)\s*(?:to|-)\s*(\d{1,2}(?:\s*(?:am|pm))?)\b/i);
-            if (trm) groupTiming = inner;
+             if (trm) groupTiming = trm[0];
             // Remove timing from inner to get site hint
             const siteHint = inner
               .replace(/\b\d{1,2}(?:\s*(?:am|pm))?\s*(?:to|-)\s*\d{1,2}(?:\s*(?:am|pm))?\s*(?:pm|am)?\b/i, '')
@@ -1221,7 +1309,6 @@ class AttendanceParser {
         }
       }
 
-      // Only use multi-group results if we found at least 2 valid groups with names
       const validGroupCount = rawGroups.filter(grp => {
         let hasName = false, hasDetail = false;
         for (const line of grp) {
@@ -1232,63 +1319,62 @@ class AttendanceParser {
         return hasName && hasDetail;
       }).length;
 
-      if (multiGroupValid && validGroupCount >= 2 && multiGroupResults.length > 0) {
-        console.log(`[Parser] Detected Multi-Group Supervisor Report: ${rawGroups.length} groups, ${multiGroupResults.length} employees.`);
+      const isMultiGroup = rawGroups.length >= 2 && validGroupCount >= 2;
+      const isSingleGroupList = rawGroups.length === 1 && validGroupCount === 1 && multiGroupResults.length >= 2;
+
+      if (multiGroupValid && (isMultiGroup || isSingleGroupList) && multiGroupResults.length > 0) {
+        console.log(`[Parser] Detected Group Supervisor Report: ${rawGroups.length} groups, ${multiGroupResults.length} employees.`);
         return { isList: true, items: multiGroupResults };
       }
     }
 
-    // A. Pre-process to extract travel hours and identify explicit site line
-    let reportedTravelHours = 0;
-    let paidTravelHours = 0;
+    // A. Pre-process to extract travel hours and identify explicit site line (supporting both global and per-line travel)
+    let globalPaidTravelHours = 0;
     let explicitSiteLine = null;
+    const lineTravelMap = new Map();
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const travelMatch = line.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*(?:traveling|travel|travel\s*time)/i);
-      if (travelMatch) {
-        reportedTravelHours = parseFloat(travelMatch[1]);
-        const settings = database.getSettings();
-        const ratio = settings.travelTimePaidRatio !== undefined ? Number(settings.travelTimePaidRatio) : 0.50;
-        paidTravelHours = Number((reportedTravelHours * ratio).toFixed(2));
-
-        const isWholeLine = line.toLowerCase().replace(travelMatch[0].toLowerCase(), '').trim().length === 0;
-        if (isWholeLine && i > 0) {
-          // The line immediately before the travel line is the site name!
-          const prevLine = lines[i - 1];
-          // Ensure it's not a date line
-          if (!prevLine.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/)) {
-            explicitSiteLine = prevLine;
-          }
-        }
-        break;
-      }
-    }
-
-    // B. Clean travel time from lines
     const cleanLines = [];
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      const travelMatch = line.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*(?:traveling|travel|travel\s*time)/i);
+      // Normalize time ranges that are stuck together (e.g. 9-6pm)
+      const processedLine = line.replace(/(\d+)-(\d+)(am|pm)/gi, '$1-$2 $3');
+      const travelMatch = processedLine.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*trav[a-z]*/i);
       if (travelMatch) {
-        const isWholeLine = line.toLowerCase().replace(travelMatch[0].toLowerCase(), '').trim().length === 0;
-        if (!isWholeLine) {
+        const reported = parseFloat(travelMatch[1]);
+        const settings = database.getSettings();
+        const ratio = settings.travelTimePaidRatio !== undefined ? Number(settings.travelTimePaidRatio) : 0.50;
+        const paid = Number((reported * ratio).toFixed(2));
+
+        const isWholeLine = line.toLowerCase().replace(travelMatch[0].toLowerCase(), '').replace(/[.,:;]+$/, '').trim().length === 0;
+        if (isWholeLine) {
+          globalPaidTravelHours = paid;
+          if (i > 0) {
+            const prevLine = lines[i - 1];
+            if (!prevLine.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/)) {
+              explicitSiteLine = prevLine;
+            }
+          }
+        } else {
           const rest = line.replace(travelMatch[0], '').trim();
           if (rest.length > 0) {
             cleanLines.push(rest);
+            lineTravelMap.set(rest.toLowerCase(), paid);
           }
         }
-        // Skip whole line travel indicators
       } else {
         cleanLines.push(line);
       }
     }
 
-    // Use cleanLines for the rest of parsing
     const activeLines = cleanLines;
 
+    const getTravelHoursForLine = (lineText) => {
+      const clean = lineText.toLowerCase().trim();
+      const lineTravel = lineTravelMap.get(clean) || 0;
+      return lineTravel > 0 ? lineTravel : globalPaidTravelHours;
+    };
+
     // 1. Detect Default Site mapping in headers (e.g. "Site: Site A" or first line being site name)
-    const sites = database.getSites();
     let defaultSiteObj = null;
     
     // Check first 2 lines for "site:" keyword
@@ -1332,7 +1418,7 @@ class AttendanceParser {
               const res = this.parseSingleLine(virtual.toLowerCase(), d, defaultSiteObj, senderPhone, messageTimestamp);
               res.rawSender = senderPhone;
               res.originalLineText = virtual;
-              res.travelHours = paidTravelHours;
+              res.travelHours = getTravelHoursForLine(virtual);
               return res;
             });
             return {
@@ -1343,7 +1429,7 @@ class AttendanceParser {
             const res = this.parseSingleLine(virtual.toLowerCase(), targetDates[0], defaultSiteObj, senderPhone, messageTimestamp);
             res.rawSender = senderPhone;
             res.isList = false;
-            res.travelHours = paidTravelHours;
+            res.travelHours = getTravelHoursForLine(virtual);
             return res;
           }
         }
@@ -1377,7 +1463,7 @@ class AttendanceParser {
       const res = this.parseSingleWorkerMultiLine(activeLines, singleWorkerDate, defaultSiteObj, senderPhone);
       res.rawSender = senderPhone;
       res.isList = false;
-      res.travelHours = paidTravelHours;
+      res.travelHours = getTravelHoursForLine(activeLines.join('\n'));
       return res;
     }
 
@@ -1465,7 +1551,7 @@ class AttendanceParser {
           const res = this.parseSingleLine(virtualLine.toLowerCase(), targetDate, defaultSiteObj, "", messageTimestamp);
           res.rawSender = senderPhone;
           res.originalLineText = virtualLine;
-          res.travelHours = paidTravelHours;
+          res.travelHours = getTravelHoursForLine(virtualLine);
           results.push(res);
         });
 
@@ -1533,7 +1619,7 @@ class AttendanceParser {
         const res = this.parseSingleLine(cleanLine, targetDate, defaultSiteObj, "", messageTimestamp);
         res.rawSender = senderPhone;
         res.originalLineText = line;
-        res.travelHours = paidTravelHours;
+        res.travelHours = getTravelHoursForLine(cleanLine);
         results.push(res);
       });
       
@@ -1551,7 +1637,7 @@ class AttendanceParser {
           const res = this.parseSingleLine(cleanLine, d, defaultSiteObj, senderPhone, messageTimestamp);
           res.rawSender = senderPhone;
           res.originalLineText = cleanLine;
-          res.travelHours = paidTravelHours;
+          res.travelHours = getTravelHoursForLine(cleanLine);
           return res;
         });
         return {
@@ -1562,7 +1648,7 @@ class AttendanceParser {
         const res = this.parseSingleLine(cleanLine, targetDates[0], defaultSiteObj, senderPhone, messageTimestamp);
         res.rawSender = senderPhone;
         res.isList = false;
-        res.travelHours = paidTravelHours;
+        res.travelHours = getTravelHoursForLine(cleanLine);
         return res;
       }
     }
