@@ -2271,6 +2271,7 @@ function updateCalculatedHoursAndWage() {
       const settings = state.settings || {};
       let F = settings.standardFullDayHours || 8.0;
       let h = settings.standardHalfDayHours || 4.0;
+      let overtimeBaseHours = F;
 
       if (employee.shiftStart && employee.shiftEnd) {
         const [startH, startM] = employee.shiftStart.split(':').map(Number);
@@ -2280,6 +2281,7 @@ function updateCalculatedHoursAndWage() {
         const shiftHours = shiftMinutes / 60;
         F = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
         h = F / 2.0;
+        overtimeBaseHours = shiftHours;
       }
 
       let dailyRate = Number(employee.dailyRate) || 0.0;
@@ -2313,7 +2315,7 @@ function updateCalculatedHoursAndWage() {
           otHours = 0.0;
           calculatedWage = dailyRate;
         } else {
-          const exactOT = totalHours - F;
+          const exactOT = totalHours - overtimeBaseHours;
           if (exactOT > 0) {
             const otMinutes = Math.round(exactOT * 60);
             if (otMinutes < 50) {
@@ -2324,7 +2326,7 @@ function updateCalculatedHoursAndWage() {
               otHours = minutesPart >= 50 ? hoursPart + 1.0 : hoursPart * 1.0;
             }
           }
-          calculatedWage = Number((dailyRate + (otHours * (dailyRate / 10.0))).toFixed(2));
+          calculatedWage = Number((dailyRate + (otHours * hourlyRate)).toFixed(2));
         }
       } else if (totalHours >= h || forceHalfDay) {
         isHalfDay = true;
@@ -3365,11 +3367,14 @@ function recalculatePayrollRow(inputEl) {
       console.warn("Failed to parse shift times for payroll row recalculation:", err);
     }
   }
-  const hourlyRate = Number((dailyRate / F).toFixed(2));
+  let hourlyRate = employee ? (Number(employee.hourlyRate) || 0.0) : 0.0;
+  if (hourlyRate === 0 && F > 0 && dailyRate > 0) {
+    hourlyRate = Number((dailyRate / F).toFixed(2));
+  }
 
   // OT Payout
   const otPayout = isDailyWageWorker
-    ? Number((otHours * (dailyRate / 10.0)).toFixed(2))
+    ? Number((otHours * hourlyRate).toFixed(2))
     : Number((otHours * hourlyRate * overtimeRateMultiplier).toFixed(2));
 
   // Travel Time Payout
@@ -5059,7 +5064,6 @@ function initEmployeeWageAutoCalculation() {
         duration = (24 - startDecimal) + endDecimal;
       }
       
-      // Deduct lunch break (1 hour) if shift duration >= 9 hours
       const shiftHours = duration;
       workHours = Math.max(1, shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours);
     }
