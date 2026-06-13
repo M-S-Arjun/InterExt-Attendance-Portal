@@ -2090,19 +2090,23 @@ function openAttendanceAdjuster(id) {
   // Date and Times formatting helper
   const datePrefix = log.date;
   
+  const employee = (state.employees || []).find(e => e.id === log.employeeId);
+  const shiftStart = employee?.shiftStart || "09:00";
+  const shiftEnd = employee?.shiftEnd || "17:00";
+  
   // Format check-in to datetime-local compatible string YYYY-MM-DDTHH:MM
   if (log.checkIn) {
     const cin = new Date(log.checkIn);
     document.getElementById('att-checkin').value = toLocalISOString(cin).substring(0, 16);
   } else {
-    document.getElementById('att-checkin').value = `${datePrefix}T08:00`;
+    document.getElementById('att-checkin').value = `${datePrefix}T${shiftStart}`;
   }
 
   if (log.checkOut) {
     const cout = new Date(log.checkOut);
     document.getElementById('att-checkout').value = toLocalISOString(cout).substring(0, 16);
   } else {
-    document.getElementById('att-checkout').value = `${datePrefix}T17:00`;
+    document.getElementById('att-checkout').value = `${datePrefix}T${shiftEnd}`;
   }
 
   // Load Override states
@@ -2184,11 +2188,29 @@ function toggleManualTimeFields(fromUserClick = false) {
     siteGroup.style.display = 'block';
   }
 
-  if (fromUserClick && status === 'half-day leave') {
-    updateHalfDayTimes();
-  } else {
-    updateCalculatedHoursAndWage();
+  if (fromUserClick) {
+    const empId = document.getElementById('att-emp-id').value;
+    const datePrefix = document.getElementById('att-date').value;
+    const employee = (state.employees || []).find(e => e.id === empId);
+    const shiftStart = employee?.shiftStart || "09:00";
+    const shiftEnd = employee?.shiftEnd || "17:00";
+
+    if (status === 'completed' || status === 'Late Check-in' || status === 'Early Check-out') {
+      document.getElementById('att-checkin').value = `${datePrefix}T${shiftStart}`;
+      document.getElementById('att-checkout').value = `${datePrefix}T${shiftEnd}`;
+    } else if (status === 'checked-in' || status === 'late') {
+      document.getElementById('att-checkin').value = `${datePrefix}T${shiftStart}`;
+      document.getElementById('att-checkout').value = "";
+    } else if (status === 'absent' || status === 'leave') {
+      document.getElementById('att-checkin').value = "";
+      document.getElementById('att-checkout').value = "";
+    } else if (status === 'half-day leave') {
+      updateHalfDayTimes();
+      return;
+    }
   }
+
+  updateCalculatedHoursAndWage();
 }
 
 function updateHalfDayTimes() {

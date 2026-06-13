@@ -966,6 +966,9 @@ class Database {
     } else if (parsedData.extractedAction === 'half-day-leave') {
       const targetDate = parsedData.leaveDate || targetDateStr;
       let halfDayHours = this.getSettings().standardHalfDayHours || 4.0;
+      let checkInISO = null;
+      let checkOutISO = null;
+
       if (employee.shiftStart && employee.shiftEnd) {
         try {
           const [startH, startM] = employee.shiftStart.split(':').map(Number);
@@ -975,20 +978,45 @@ class Database {
           const shiftHours = shiftMinutes / 60;
           const fullDayHours = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
           halfDayHours = fullDayHours / 2.0;
+
+          // Compute check-in/out based on which half of the day
+          const period = parsedData.halfDayPeriod || 'second'; // default: afternoon leave
+          const makeISO = (datePart, h, m) => {
+            const d = new Date(`${datePart}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`);
+            return d.toISOString();
+          };
+
+          if (period === 'first') {
+            // Morning leave: worked 0 hours in morning, present in afternoon
+            // Check-in = after lunch (14:00), Check-out = shiftEnd
+            checkInISO = makeISO(targetDate, 14, 0);
+            checkOutISO = makeISO(targetDate, endH, endM);
+          } else {
+            // Afternoon/evening leave: present in morning, leaves at noon
+            // Check-in = shiftStart, Check-out = noon (13:00)
+            checkInISO = makeISO(targetDate, startH, startM);
+            checkOutISO = makeISO(targetDate, 13, 0);
+          }
+
+          // Recalculate half-day hours from the resolved check-in/out window
+          const actualMinutes = (new Date(checkOutISO) - new Date(checkInISO)) / 60000;
+          if (actualMinutes > 0) halfDayHours = actualMinutes / 60;
+
         } catch (err) {
           console.warn(`[half-day-leave] Failed to parse custom shift times for ${employee.name}:`, err.message);
         }
       }
+
       const halfWage = Number(((employee.dailyRate || 0) * 0.5).toFixed(2));
       const record = {
         employeeId: employee.id,
         employeeName: employee.name,
         siteName: site.name || "—",
         date: targetDate,
-        checkIn: null,
-        checkOut: null,
-        duration: 0,
-        regularHours: halfDayHours,
+        checkIn: checkInISO,
+        checkOut: checkOutISO,
+        duration: Math.round(halfDayHours * 60),
+        regularHours: Number(halfDayHours.toFixed(2)),
         otHours: 0.0,
         extraHours: 0.0,
         isHalfDay: true,

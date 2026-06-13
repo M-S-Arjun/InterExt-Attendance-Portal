@@ -342,10 +342,91 @@ class AttendanceParser {
   }
 
   detectIsHalfDayLeave(line) {
-    const clean = line.toLowerCase();
-    const isHalfDayText = /\bhalf[-\s]*day\b/i.test(clean);
-    const hasLeaveSignal = /\b(?:leave|off|absent|rest|not coming|unable to come|cannot come|can't come|cannot attend|wont come|will not come|sick|unwell|hospital)\b/i.test(clean);
-    return isHalfDayText && hasLeaveSignal;
+    const clean = line.toLowerCase().trim();
+
+    // --- Tier 1: Explicit "half day" phrases (exact and misspelled) ---
+    const halfDayExplicit = [
+      /\bhalf[-\s]*day\b/i,
+      /\bhaf[-\s]*day\b/i,          // typo: haf day
+      /\bhaalf[-\s]*day\b/i,         // typo: haalf day
+      /\bhalf[-\s]*dey\b/i,          // typo: half dey
+      /\bh[- ]?day\b/i,              // abbreviation: h-day
+    ];
+    const isHalfDayExplicit = halfDayExplicit.some(r => r.test(clean));
+    const hasLeaveSignal = /\b(?:leave|off|absent|rest|not coming|unable to come|cannot come|can't come|cannot attend|wont come|will not come|sick|unwell|hospital|varilla|kazhiyilla)\b/i.test(clean);
+    if (isHalfDayExplicit && hasLeaveSignal) return true;
+
+    // --- Tier 2: Session-based patterns ---
+    // Matches: "leave afternoon session", "on leave for afternoon", "leave evening",
+    //          "morning leave", "first half leave", "second half absent", etc.
+    const sessionHalfDayPatterns = [
+      // Afternoon / evening / post-lunch = second half leave
+      /\b(?:leave|absent|off|not\s+coming|cant\s+come|cannot\s+come|wont\s+come)\b.{0,40}\b(?:afternoon|evening|post[-\s]*lunch|second[-\s]*half|2nd[-\s]*half|lunch\s*break\s*onwards|after\s*lunch)\b/i,
+      /\b(?:afternoon|evening|post[-\s]*lunch|second[-\s]*half|2nd[-\s]*half|after\s*lunch)\b.{0,40}\b(?:leave|absent|off|not\s+coming|session|only)\b/i,
+      /\bon\s+leave\s+(?:for\s+)?(?:the\s+)?afternoon/i,
+      /\bon\s+leave\s+(?:for\s+)?(?:the\s+)?evening/i,
+      /\bafternoon\s+session\b.{0,20}(?:leave|absent|off)/i,
+      /\b(?:leave|absent|off)\b.{0,20}\bafternoon\s+session\b/i,
+      /\bleave\s+after\s+(?:lunch|noon|12|1\s*pm|one\s*pm)/i,
+      // Morning / first half leave
+      /\b(?:leave|absent|off|not\s+coming|cant\s+come|cannot\s+come|wont\s+come)\b.{0,40}\b(?:morning|first[-\s]*half|1st[-\s]*half|before\s*lunch|forenoon|am\s*session)\b/i,
+      /\b(?:morning|first[-\s]*half|1st[-\s]*half|before\s*lunch|forenoon|am\s*session)\b.{0,40}\b(?:leave|absent|off|not\s+coming|session|only)\b/i,
+      /\bon\s+leave\s+(?:for\s+)?(?:the\s+)?morning/i,
+      /\bmorning\s+session\b.{0,20}(?:leave|absent|off)/i,
+      /\b(?:leave|absent|off)\b.{0,20}\bmorning\s+session\b/i,
+      // Generic "leave for [session]" / "[session] leave"
+      /\bonly\s+(?:half|morning|afternoon|evening|first|second)\b.{0,20}(?:leave|absent|off|available|present)/i,
+      /\bhalf\s+(?:leave|day\s+leave|day\s+absent)\b/i,
+      // Malayalam transliterations for half-day
+      /\bharth\s*day\b/i,  // accent variation
+      /\bhalf\s*da\b/i,    // abbreviated
+      /\boru\s+session/i,  // "one session" in Malayalam-English
+      /\b(?:leave|absent)\s+(?:oru|one)\s+session/i,
+    ];
+    if (sessionHalfDayPatterns.some(r => r.test(clean))) return true;
+
+    // --- Tier 3: Semantic intent patterns - words together imply partial absence ---
+    // e.g. "I will be absent in the afternoon", "not coming for evening"
+    const semanticPatterns = [
+      /\bnot\s+(?:coming|available|present)\s+(?:for\s+)?(?:the\s+)?(?:afternoon|evening|morning)/i,
+      /\b(?:afternoon|morning|evening)\s+(?:session|work|shift)\s+(?:leave|absent|off)/i,
+      /\bworking\s+only\s+(?:morning|half|afternoon|till\s+noon)/i,
+      /\bleaving\s+at\s+(?:noon|lunch|1\s*pm|12\s*pm|one\s*pm|twelve)/i,
+      /\bwill\s+(?:be\s+)?(?:available|come|present)\s+only\s+(?:in\s+the\s+)?(?:morning|afternoon)/i,
+      /\bcoming\s+only\s+(?:for\s+)?(?:morning|afternoon|half)/i,
+    ];
+    if (semanticPatterns.some(r => r.test(clean))) return true;
+
+    return false;
+  }
+
+  /**
+   * Detect whether the half-day leave is for the FIRST half (morning) or SECOND half (afternoon).
+   * Returns 'first' or 'second'. Defaults to 'second' if ambiguous.
+   */
+  detectHalfDayPeriod(line) {
+    const clean = line.toLowerCase().trim();
+
+    // Signals that indicate FIRST half (morning leave)
+    const firstHalfSignals = [
+      /\b(?:morning|first[-\s]*half|1st[-\s]*half|before\s*lunch|forenoon|am\s*session)\b/i,
+      /\bnot\s+(?:coming|available|present)\s+(?:in\s+)?(?:the\s+)?morning/i,
+      /\bmorning\s+session\b.{0,30}(?:leave|absent|off)/i,
+      /\bleave\s+(?:in\s+)?(?:the\s+)?morning/i,
+    ];
+    if (firstHalfSignals.some(r => r.test(clean))) return 'first';
+
+    // Signals that indicate SECOND half (afternoon/evening leave) — also the default
+    const secondHalfSignals = [
+      /\b(?:afternoon|evening|post[-\s]*lunch|second[-\s]*half|2nd[-\s]*half|after\s*lunch|pm\s*session)\b/i,
+      /\bnot\s+(?:coming|available|present)\s+(?:in\s+)?(?:the\s+)?afternoon/i,
+      /\bafternoon\s+session\b/i,
+      /\bleave\s+(?:in\s+)?(?:the\s+)?afternoon/i,
+    ];
+    if (secondHalfSignals.some(r => r.test(clean))) return 'second';
+
+    // Default: treat ambiguous half-day as second half (afternoon)
+    return 'second';
   }
 
   // Parse a single text line/message
@@ -554,8 +635,13 @@ class AttendanceParser {
     }
 
     // 4. Leave & Time Range / Late check-in extraction
-    const isLeave = this.detectIsLeave(cleanLine);
-    const isHalfDayLeave = isLeave && this.detectIsHalfDayLeave(cleanLine);
+    // NOTE: detectIsHalfDayLeave is evaluated independently — some half-day patterns
+    // (e.g. "leave afternoon session") imply leave AND half-day simultaneously, so we
+    // detect half-day FIRST, then fall back to full-leave if not half-day.
+    const isHalfDayLeave = this.detectIsHalfDayLeave(cleanLine);
+    const halfDayPeriod = isHalfDayLeave ? this.detectHalfDayPeriod(cleanLine) : null;
+    // If message is already identified as half-day, we still confirm it has a leave signal
+    const isLeave = isHalfDayLeave || this.detectIsLeave(cleanLine);
 
     let checkInTimestamp = null;
     let checkOutTimestamp = null;
@@ -772,7 +858,7 @@ class AttendanceParser {
       matchedEmployeeId: matchedEmployee ? matchedEmployee.id : null,
       matchedSiteId: matchedSite ? matchedSite.id : null,
       extractedName: extractedName || parts[0] || cleanLine.substring(0, 15),
-      extractedSite: actionType === 'leave' && (!extractedSite || extractedSite === "—") ? "—" : (extractedSite || "—"),
+      extractedSite: (actionType === 'leave' || actionType === 'half-day-leave') && (!extractedSite || extractedSite === "—") ? "—" : (extractedSite || "—"),
       extractedAction: actionType,
       checkInTime: checkInTimestamp,
       checkOutTime: checkOutTimestamp,
@@ -782,7 +868,8 @@ class AttendanceParser {
       confidence: Number(((employeeConfidence + siteConfidence) / 2).toFixed(2)),
       isLate: hasParsedLate,
       isHospitalCase: isHospitalCase && (hasParsedLate || hasParsedEarly),
-      hospitalHours: hospitalHours
+      hospitalHours: hospitalHours,
+      halfDayPeriod: halfDayPeriod   // 'first' | 'second' | null
     };
   }
 
@@ -937,8 +1024,9 @@ class AttendanceParser {
       ? new Date(messageTimestamp).toISOString().split('T')[0]
       : new Date().toISOString().split('T')[0];
     
-    // Split into individual clean lines
-    const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+    // Split into individual clean lines (preserve blanks for group detection)
+    const allRawLines = rawText.split(/\r?\n/).map(l => l.trim());
+    const lines = allRawLines.filter(l => l.length > 0);
     
     if (lines.length === 0) {
       return {
@@ -950,6 +1038,204 @@ class AttendanceParser {
         confidence: 0,
         rawSender: senderPhone
       };
+    }
+
+    // ============================================================
+    // STEP 0: Multi-Group Supervisor Report Detection
+    // Detects messages with blank-line-separated groups where each
+    // group has: [names...] + (timing + site info)
+    // Example:
+    //   12/6/26
+    //   Sumesh
+    //   Sreeraj
+    //   (9-6 pm cavili choondi) 2 hour travel
+    //
+    //   Aneesh
+    //   Sunil Rana
+    //   (9-6 Pm Raju Joseph)
+    //
+    //   Arun George
+    //   (9-6 pm Chamakkala market)
+    // ============================================================
+    const hasBlankLineSeparation = allRawLines.some(l => l.trim() === '');
+    if (hasBlankLineSeparation && lines.length >= 3) {
+      // Split into raw groups by blank lines
+      const rawGroups = [];
+      let currentGroup = [];
+      for (const line of allRawLines) {
+        if (line.trim() === '') {
+          if (currentGroup.length > 0) {
+            rawGroups.push(currentGroup);
+            currentGroup = [];
+          }
+        } else {
+          currentGroup.push(line.trim());
+        }
+      }
+      if (currentGroup.length > 0) rawGroups.push(currentGroup);
+
+      // Extract global date from first group or first line
+      let globalDate = todayStr;
+      for (const grp of rawGroups) {
+        for (const line of grp) {
+          const dm = line.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
+          if (dm) {
+            let d = parseInt(dm[1]), m = parseInt(dm[2]), y = parseInt(dm[3]);
+            if (y < 100) y += 2000;
+            globalDate = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+            break;
+          }
+          const hasRel = /\b(?:yesterday|today|tomorrow|innale|innu|nale)\b/i.test(line);
+          if (hasRel) {
+            const rd = extractTargetDates(line, messageTimestamp);
+            if (rd.length > 0) { globalDate = rd[0]; break; }
+          }
+        }
+        if (globalDate !== todayStr) break;
+      }
+
+      // Helper: classify a line within a group
+      const settings2 = database.getSettings();
+      const travelRatio2 = settings2.travelTimePaidRatio !== undefined ? Number(settings2.travelTimePaidRatio) : 0.50;
+      const allSites2 = database.getSites();
+      const allEmployees2 = (database.getEmployees() || []).filter(e => e && e.status === 'active');
+
+      const classifyGroupLine = (line, groupHasTiming) => {
+        const lower = line.toLowerCase();
+        // Date line
+        if (/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/.test(line)) return { type: 'date' };
+        // Travel time (may be whole line or suffix after paren e.g. "(9-6 site)2hr travel")
+        const travelM = line.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*trav(?:el|eling|elling|alling)/i);
+        if (travelM) {
+          // If whole line is just travel info, classify as travel
+          const stripped = line.replace(travelM[0], '').trim();
+          if (stripped.length === 0) return { type: 'travel', hours: parseFloat(travelM[1]) };
+          // Else paren + travel tail — handle as paren_block below
+        }
+        // Parenthesized block often contains timing AND site: "(9-6 pm Raju Joseph)2hr travel"
+        const parenBlock = line.match(/^\((.+?)\)\s*(.*)$/);
+        if (parenBlock) {
+          const inner = parenBlock[1].trim();
+          const tail = parenBlock[2].trim();
+          // Extract travel from tail
+          const tailTravel = tail.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*trav(?:el|eling|elling|alling)/i);
+          return {
+            type: 'paren_block',
+            inner,
+            tail,
+            travelFromTail: tailTravel ? parseFloat(tailTravel[1]) : 0
+          };
+        }
+        // Timing: "9-6pm", "9 to 6", "9am to 7pm"
+        const timeRange = line.match(/\b\d{1,2}(?:\s*(?:am|pm))?(?:\s*(?:to|-)\s*\d{1,2}(?:\s*(?:am|pm))?)/i);
+        if (timeRange) return { type: 'timing', raw: line };
+        // Relative date
+        if (/\b(?:yesterday|today|tomorrow|innale|innu|nale)\b/i.test(lower)) return { type: 'date' };
+        // Site keywords — strong indicators
+        const hasSiteKw = /\b(?:house|site|yard|office|station|building|ground|road|street|town|city|room|block|zone|field|shop|store|market|company|project|ksrtc|quarters|cavili|choondi|munnar|ernakulam|kothamangalam|muvattupuzha|chamakkala|wireless|gokulam)\b/i.test(lower);
+        if (hasSiteKw) return { type: 'site_hint', raw: line };
+        // Name-like (alphabetic, no numbers)
+        const isAlpha = /^[a-zA-Z\s.'\-]+$/.test(line);
+        if (isAlpha && line.length > 1) {
+          // If timing has already been found in this group, subsequent alpha lines are more likely site names
+          if (groupHasTiming && AttendanceParser.INDIAN_PLACE_NAMES.has(lower.replace(/[.]+$/, '').trim())) {
+            return { type: 'site_hint', raw: line };
+          }
+          return { type: 'name_candidate', raw: line };
+        }
+        return { type: 'unknown', raw: line };
+      };
+
+      // Process each group
+      const multiGroupResults = [];
+      let multiGroupValid = false;
+
+      for (const grp of rawGroups) {
+        const names = [];
+        let groupTiming = null;
+        let groupSiteWords = [];
+        let groupTravel = 0;
+        let groupDate = globalDate;
+
+        for (const line of grp) {
+          const cls = classifyGroupLine(line, groupTiming !== null);
+          if (cls.type === 'date') {
+            const dm = line.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
+            if (dm) {
+              let d = parseInt(dm[1]), m = parseInt(dm[2]), y = parseInt(dm[3]);
+              if (y < 100) y += 2000;
+              groupDate = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+            }
+          } else if (cls.type === 'travel') {
+            groupTravel = cls.hours;
+          } else if (cls.type === 'paren_block') {
+            // "(9-6 pm Raju Joseph)2hr travel" — extract timing from inner, rest is site
+            const inner = cls.inner;
+            const trm = inner.match(/\b(\d{1,2}(?:\s*(?:am|pm))?)\s*(?:to|-)\s*(\d{1,2}(?:\s*(?:am|pm))?)\b/i);
+            if (trm) groupTiming = inner;
+            // Remove timing from inner to get site hint
+            const siteHint = inner
+              .replace(/\b\d{1,2}(?:\s*(?:am|pm))?\s*(?:to|-)\s*\d{1,2}(?:\s*(?:am|pm))?\s*(?:pm|am)?\b/i, '')
+              .trim();
+            if (siteHint) groupSiteWords.push(siteHint);
+            // Travel can be in the tail: "(9-6 site)2 hour travel"
+            if (cls.travelFromTail && cls.travelFromTail > 0) {
+              groupTravel = cls.travelFromTail;
+            }
+          } else if (cls.type === 'timing') {
+            groupTiming = line;
+          } else if (cls.type === 'site_hint') {
+            groupSiteWords.push(line);
+          } else if (cls.type === 'name_candidate') {
+            const lc = line.toLowerCase().replace(/[.]+$/, '').trim();
+            const hasSiteKw = /\b(?:house|site|yard|office|station|building|ground|road|street|town|city|room|block|zone|field|shop|store|market|company|project|ksrtc|quarters)\b/i.test(lc);
+            // If timing already found, alpha lines after are likely location names, not person names
+            const isAfterTiming = groupTiming !== null;
+            if (!hasSiteKw && !isAfterTiming && !AttendanceParser.INDIAN_PLACE_NAMES.has(lc)) {
+              names.push(line.replace(/[.]+$/, '').trim());
+            } else {
+              groupSiteWords.push(line);
+            }
+          }
+        }
+
+        // A valid group needs at least 1 name AND (timing or site info)
+        if (names.length > 0 && (groupTiming || groupSiteWords.length > 0)) {
+          multiGroupValid = true;
+          const paidTravel = Number((groupTravel * travelRatio2).toFixed(2));
+          // Build a clean site name from site words, stripping duplicates
+          const siteName = [...new Set(groupSiteWords)].join(' ').trim();
+
+          for (const name of names) {
+            // Build virtual line: "Name, site, timing"
+            const parts = [name];
+            if (siteName) parts.push(siteName);
+            if (groupTiming) parts.push(groupTiming);
+            const virtualLine = parts.join(', ');
+            const res = this.parseSingleLine(virtualLine.toLowerCase(), groupDate, null, "", messageTimestamp);
+            res.rawSender = senderPhone;
+            res.originalLineText = virtualLine;
+            res.travelHours = paidTravel;
+            multiGroupResults.push(res);
+          }
+        }
+      }
+
+      // Only use multi-group results if we found at least 2 valid groups with names
+      const validGroupCount = rawGroups.filter(grp => {
+        let hasName = false, hasDetail = false;
+        for (const line of grp) {
+          const cls = classifyGroupLine(line, false);
+          if (cls.type === 'name_candidate') hasName = true;
+          if (cls.type === 'timing' || cls.type === 'paren_block' || cls.type === 'site_hint' || cls.type === 'travel') hasDetail = true;
+        }
+        return hasName && hasDetail;
+      }).length;
+
+      if (multiGroupValid && validGroupCount >= 2 && multiGroupResults.length > 0) {
+        console.log(`[Parser] Detected Multi-Group Supervisor Report: ${rawGroups.length} groups, ${multiGroupResults.length} employees.`);
+        return { isList: true, items: multiGroupResults };
+      }
     }
 
     // A. Pre-process to extract travel hours and identify explicit site line

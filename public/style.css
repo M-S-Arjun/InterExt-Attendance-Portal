@@ -536,6 +536,16 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   background-color: var(--glass-border);
 }
 
+#btn-refresh-logs {
+  min-width: 140px;
+  justify-content: center;
+}
+
+#btn-refresh-chats {
+  min-width: 160px;
+  justify-content: center;
+}
+
 .btn-danger {
   background-color: var(--color-error);
   color: white;
@@ -1826,6 +1836,9 @@ textarea.form-control {
 
 .animate-spin {
   animation: spin 1.2s linear infinite;
+  display: inline-block;
+  transform-origin: center center;
+  will-change: transform;
 }
 
 /* Live glowing ticker feed pulse dot */
