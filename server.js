@@ -209,6 +209,27 @@ app.post('/api/chats/refresh', async (req, res) => {
   res.json(chats);
 });
 
+// Dynamic scan and re-evaluate WhatsApp logs
+app.post('/api/whatsapp/refresh', async (req, res) => {
+  try {
+    if (whatsapp.status !== 'ready') {
+      return res.status(400).json({ error: 'WhatsApp client is not ready. Please verify connection.' });
+    }
+    console.log('[API] Triggering WhatsApp logs refresh and re-evaluation...');
+    const result = await whatsapp.refreshWhatsAppLogs();
+    
+    // Broadcast WebSockets to sync UI elements
+    io.emit('attendance_updated');
+    io.emit('pending_updated');
+    io.emit('stats_updated');
+    
+    res.json({ success: true, clearedCount: result.clearedCount });
+  } catch (err) {
+    console.error('[API] WhatsApp logs refresh failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Trigger a WhatsApp client reconnect (logout + reinitialize)
 app.post('/api/whatsapp/reconnect', async (req, res) => {
   try {
@@ -372,9 +393,43 @@ app.post('/api/attendance/save', (req, res) => {
 
 // Camera attendance events
 app.get('/api/attendance/camera/events', (req, res) => {
-  const events = database.getCameraEvents();
-  const sorted = [...events].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  res.json(sorted);
+  const { employeeId, date, limit, search } = req.query;
+  let events = database.getCameraEvents() || [];
+
+  if (employeeId) {
+    events = events.filter(e => e.employeeId === employeeId);
+  }
+  if (date) {
+    events = events.filter(e => e.date === date);
+  }
+  if (search) {
+    const q = search.toLowerCase();
+    events = events.filter(e => 
+      (e.employeeName && e.employeeName.toLowerCase().includes(q)) ||
+      (e.siteName && e.siteName.toLowerCase().includes(q)) ||
+      (e.eventType && e.eventType.toLowerCase().includes(q)) ||
+      (e.status && e.status.toLowerCase().includes(q))
+    );
+  }
+
+  // Sort descending by timestamp
+  events = [...events].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+  if (limit) {
+    const parsedLimit = parseInt(limit, 10);
+    if (!isNaN(parsedLimit) && parsedLimit > 0) {
+      events = events.slice(0, parsedLimit);
+    }
+  } else if (!employeeId && !date && !search) {
+    // Default to latest 500 events to prevent massive payload size (13.3MB -> ~300KB)
+    events = events.slice(0, 500);
+  }
+
+  const sanitized = events.map(e => {
+    const { imageBase64, ...rest } = e;
+    return rest;
+  });
+  res.json(sanitized);
 });
 
 app.post('/api/attendance/camera', (req, res) => {
@@ -1952,6 +2007,399 @@ app.get('/api/payroll', (req, res) => {
   res.json(database.getMonthlySalarySheet(targetMonth));
 });
 
+// Welders Weekly Report Routes
+app.get('/api/welders-weekly', (req, res) => {
+  const { friday } = req.query;
+  if (!friday) {
+    // Return all available unique Fridays in logs (sorted latest first)
+    const db = database.read();
+    const uniqueDates = Array.from(new Set(db.attendance.map(a => a.date)));
+    const fridays = uniqueDates.filter(d => {
+      try {
+        return new Date(d).getDay() === 5; // Friday is 5
+      } catch (e) {
+        return false;
+      }
+    }).sort((a, b) => b.localeCompare(a));
+    return res.json({ fridays });
+  }
+  
+  try {
+    const reportData = database.getWeldersWeeklyReportData(friday);
+    res.json({ success: true, friday, data: reportData });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get('/api/export/welders-weekly/excel', async (req, res) => {
+  const { friday } = req.query;
+  if (!friday) {
+    return res.status(400).send("Friday date parameter is required.");
+  }
+  
+  try {
+    const reportData = database.getWeldersWeeklyReportData(friday);
+    if (!reportData || reportData.length === 0) {
+      return res.status(404).send("No report data found for the selected Friday.");
+    }
+    
+    // Sort welders alphabetically
+    reportData.sort((a, b) => a.welderName.localeCompare(b.welderName));
+    
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    
+    // 1. Build Attendance Sheet
+    const wsAtt = workbook.addWorksheet("Weekly Attendance");
+    
+    const dayNames = ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"];
+    // Build headers for attendance
+    const attHeaders = ["Welder ID", "Welder Name"];
+    reportData[0].dailyDetails.forEach((d, idx) => {
+      attHeaders.push(`${dayNames[idx]} (${d.date})`);
+    });
+    attHeaders.push("Total Hours", "Days Present");
+    
+    wsAtt.addRow(attHeaders);
+    
+    reportData.forEach(w => {
+      const row = [w.welderId || "—", w.welderName];
+      w.dailyDetails.forEach(d => {
+        if (d.status === "ABSENT") {
+          row.push("ABSENT");
+        } else if (d.status === "LEAVE") {
+          row.push("LEAVE");
+        } else {
+          row.push(`${d.status} (${d.hours} hrs)`);
+        }
+      });
+      row.push(w.totalHours, w.totalPresentDays);
+      wsAtt.addRow(row);
+    });
+    
+    // Auto-fit attendance column widths
+    wsAtt.columns.forEach(col => {
+      let maxLen = 0;
+      col.eachCell({ includeEmpty: true }, (cell) => {
+        const valStr = cell.value ? String(cell.value) : '';
+        if (valStr.length > maxLen) {
+          maxLen = valStr.length;
+        }
+      });
+      col.width = Math.max(12, maxLen + 3);
+    });
+    wsAtt.views = [{ showGridLines: true }];
+    
+    // Style attendance header
+    const attHeaderRow = wsAtt.getRow(1);
+    attHeaderRow.height = 24;
+    attHeaderRow.eachCell((cell) => {
+      cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF475569' } // Darker slate grey for attendance
+      };
+    });
+    
+    // 2. Build Weekly Payroll Summary Sheet
+    const wsSummary = workbook.addWorksheet("Weekly Payroll Summary");
+    
+    const summaryHeaders = [
+      "User ID", "Employee Name", "Daily Rate", "Weekly Regular Wage", 
+      "Weekly Overtime Pay", "Weekly Travel Pay", "Total Weekly Earnings"
+    ];
+    
+    wsSummary.addRow(summaryHeaders);
+    
+    reportData.forEach(w => {
+      wsSummary.addRow([
+        w.welderId || "—",
+        w.welderName,
+        w.dailyRate,
+        w.weeklyRegularWage,
+        w.weeklyOtPay,
+        w.weeklyTravelPay,
+        w.totalWeeklyEarnings
+      ]);
+    });
+    
+    const lastSummaryDataRow = reportData.length + 1;
+    const totalSummaryRowIndex = reportData.length + 2;
+    
+    // Add total row
+    const totalSummaryRowObj = wsSummary.addRow([]);
+    totalSummaryRowObj.getCell(1).value = "Total";
+    totalSummaryRowObj.getCell(7).value = { formula: `=SUM(G2:G${lastSummaryDataRow})` };
+    
+    // Auto-fit summary column widths
+    wsSummary.columns.forEach(col => {
+      let maxLen = 0;
+      col.eachCell({ includeEmpty: true }, (cell) => {
+        const valStr = cell.value ? String(cell.value) : '';
+        if (valStr.length > maxLen) {
+          maxLen = valStr.length;
+        }
+      });
+      col.width = Math.max(12, maxLen + 3);
+    });
+    
+    // Style summary header row (row 1)
+    const summaryHeaderRow = wsSummary.getRow(1);
+    summaryHeaderRow.height = 28;
+    summaryHeaderRow.eachCell((cell) => {
+      cell.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1E293B' } // Dark slate slate/blue #1E293B
+      };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        bottom: { style: 'medium', color: { argb: 'FF94A3B8' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+      };
+    });
+    
+    // Style data and total rows in Weekly Payroll Summary
+    wsSummary.eachRow((row, rowNum) => {
+      if (rowNum === 1) return; // skip header
+      
+      const isTotalRow = (rowNum === totalSummaryRowIndex);
+      row.height = isTotalRow ? 24 : 22;
+      
+      row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+        if (isTotalRow) {
+          cell.font = { name: 'Segoe UI', size: 10, bold: true };
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          
+          if (colNum === 1) {
+            cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          }
+          
+          if (colNum === 7) {
+            cell.numFormat = '"₹"#,##0.00';
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFF0FDF4' }
+            };
+          }
+          
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FF94A3B8' } },
+            bottom: { style: 'double', color: { argb: 'FF1E293B' } }
+          };
+        } else {
+          cell.font = { name: 'Segoe UI', size: 10 };
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          
+          // Left-align User ID (1) and Name (2)
+          if (colNum === 1 || colNum === 2) {
+            cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          }
+          
+          // Currency / Number formatting for financial columns (col 3 to 7)
+          const currencyCols = [3, 4, 5, 6, 7];
+          if (currencyCols.includes(colNum)) {
+            const val = Number(cell.value);
+            if (!isNaN(val) && cell.value !== "—" && cell.value !== "") {
+              cell.numFormat = '"₹"#,##0.00';
+            }
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          }
+          
+          // Total Weekly Earnings payout cell (Col 7)
+          if (colNum === 7) {
+            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFF0FDF4' }
+            };
+          }
+          
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+          };
+        }
+      });
+    });
+    
+    wsSummary.views = [{ showGridLines: true }];
+    
+    // 3. Build Weekly Payroll Detail Sheet (Monthly Format)
+    const wsDetail = workbook.addWorksheet("Weekly Payroll Detail");
+    
+    const detailHeaders = [
+      "Mode of Work", "User ID", "Employee Name", "Basic", "DA", "Other Allowances", 
+      "Monthly Wages", "Actual Working days", "Days Worked", "Daily Wages", "LOP Days", "LOP Amount", 
+      "OT Hours", "OT Amount", "Travel Time(hrs)", "Travel Time Amount", 
+      "Extra Days", "Extra Day Amount", "Missing Days", "Missing Days Amount", 
+      "Holidays", "Holiday Amount", "Gross Payable", "Advance Paid", "Net Payable", "Company"
+    ];
+    
+    wsDetail.addRow(detailHeaders);
+    
+    reportData.forEach(w => {
+      wsDetail.addRow([
+        w.modeOfWork || "—",
+        w.welderId || "—",
+        w.welderName,
+        "—", // Basic
+        "—", // DA
+        "—", // Other Allowances
+        "—", // Monthly Wages
+        "—", // Actual Working days
+        w.totalPresentDays, // Days Worked
+        w.dailyRate, // Daily Wages
+        "—", // LOP Days
+        "—", // LOP Amount
+        w.totalOtHours, // OT Hours
+        w.weeklyOtPay, // OT Amount
+        w.totalTravelHours, // Travel Time(hrs)
+        w.weeklyTravelPay, // Travel Time Amount
+        "—", // Extra Days
+        "—", // Extra Day Amount
+        "—", // Missing Days
+        "—", // Missing Days Amount
+        "—", // Holidays
+        "—", // Holiday Amount
+        w.totalWeeklyEarnings, // Gross Payable
+        0.0, // Advance Paid
+        w.totalWeeklyEarnings, // Net Payable
+        w.company || "—"
+      ]);
+    });
+    
+    const lastDetailDataRow = reportData.length + 1;
+    const totalDetailRowIndex = reportData.length + 2;
+    
+    // Add total row
+    const totalDetailRowObj = wsDetail.addRow([]);
+    totalDetailRowObj.getCell(1).value = "Total";
+    totalDetailRowObj.getCell(25).value = { formula: `=SUM(Y2:Y${lastDetailDataRow})` };
+    totalDetailRowObj.getCell(26).value = "";
+    
+    // Auto-fit detail column widths
+    wsDetail.columns.forEach(col => {
+      let maxLen = 0;
+      col.eachCell({ includeEmpty: true }, (cell) => {
+        const valStr = cell.value ? String(cell.value) : '';
+        if (valStr.length > maxLen) {
+          maxLen = valStr.length;
+        }
+      });
+      col.width = Math.max(12, maxLen + 3);
+    });
+    
+    // Style detail header row (row 1)
+    const detailHeaderRow = wsDetail.getRow(1);
+    detailHeaderRow.height = 28;
+    detailHeaderRow.eachCell((cell) => {
+      cell.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1E293B' } // Dark slate slate/blue #1E293B
+      };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        bottom: { style: 'medium', color: { argb: 'FF94A3B8' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+      };
+    });
+    
+    // Style data and total rows in Weekly Payroll Detail
+    wsDetail.eachRow((row, rowNum) => {
+      if (rowNum === 1) return; // skip header
+      
+      const isTotalRow = (rowNum === totalDetailRowIndex);
+      row.height = isTotalRow ? 24 : 22;
+      
+      row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+        if (isTotalRow) {
+          cell.font = { name: 'Segoe UI', size: 10, bold: true };
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          
+          if (colNum === 1) {
+            cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          }
+          
+          if (colNum === 25) {
+            cell.numFormat = '"₹"#,##0.00';
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFF0FDF4' }
+            };
+          }
+          
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FF94A3B8' } },
+            bottom: { style: 'double', color: { argb: 'FF1E293B' } }
+          };
+        } else {
+          cell.font = { name: 'Segoe UI', size: 10 };
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          
+          // Left-align User ID (2) and Name (3)
+          if (colNum === 2 || colNum === 3) {
+            cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          }
+          
+          // Currency / Number formatting for financial columns
+          const currencyCols = [4, 5, 6, 7, 10, 12, 14, 16, 18, 20, 22, 23, 24, 25];
+          if (currencyCols.includes(colNum)) {
+            const val = Number(cell.value);
+            if (!isNaN(val) && cell.value !== "—" && cell.value !== "") {
+              cell.numFormat = '"₹"#,##0.00';
+            }
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          }
+          
+          // Net Salary payout cell (Col 25)
+          if (colNum === 25) {
+            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF15803D' } };
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFF0FDF4' }
+            };
+          }
+          
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+          };
+        }
+      });
+    });
+    
+    wsDetail.views = [{ showGridLines: true }];
+    
+    const buffer = await workbook.xlsx.writeBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=Welders_Weekly_Report_${friday}.xlsx`);
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).send("Excel export failed: " + err.message);
+  }
+});
 app.post('/api/payroll/save', (req, res) => {
   try {
     const adj = database.savePayrollAdjustment(req.body);
@@ -2392,37 +2840,56 @@ whatsapp.on('status', async (status) => {
       let dbUpdated = false;
 
       if (db.pending_messages) {
+        const lidsToResolve = [];
         for (const msg of db.pending_messages) {
-          // Check if sender looks like a LID (e.g. 14 or 15-digit numeric string)
           if (msg.sender && msg.sender.length >= 14 && msg.sender.length <= 15 && /^\d+$/.test(msg.sender)) {
             const lidJid = msg.sender + '@lid';
-            console.log(`[Self-Healing] Resolving JID for pending message sender LID: ${lidJid}...`);
-            let resolvedPhone = null;
+            if (!lidsToResolve.includes(lidJid)) {
+              lidsToResolve.push(lidJid);
+            }
+          }
+        }
 
-            try {
-              if (client && typeof client.getContactLidAndPhone === 'function') {
-                const mappings = await client.getContactLidAndPhone([lidJid]);
-                if (mappings && mappings.length > 0 && mappings[0].pn) {
-                  resolvedPhone = mappings[0].pn.split('@')[0];
-                }
+        if (lidsToResolve.length > 0) {
+          console.log(`[Self-Healing] Bulk resolving ${lidsToResolve.length} LIDs for pending messages...`);
+          const mappingsMap = {};
+          
+          try {
+            if (client && typeof client.getContactLidAndPhone === 'function') {
+              const mappings = await client.getContactLidAndPhone(lidsToResolve);
+              if (mappings && mappings.length > 0) {
+                mappings.forEach(m => {
+                  if (m.lid && m.pn) {
+                    const cleanLid = m.lid.split('@')[0];
+                    const cleanPn = m.pn.split('@')[0].replace(/\D/g, '');
+                    mappingsMap[cleanLid] = cleanPn;
+                  }
+                });
               }
-            } catch (e) {}
+            }
+          } catch (e) {
+            console.warn("[Self-Healing] Bulk LID mapping query failed:", e.message);
+          }
 
-            if (!resolvedPhone) {
+          // Fallback to sequential getContactById only for those that didn't resolve in bulk
+          for (const lidJid of lidsToResolve) {
+            const cleanLid = lidJid.split('@')[0];
+            if (!mappingsMap[cleanLid]) {
               try {
                 const contact = await client.getContactById(lidJid);
                 if (contact && contact.number) {
-                  resolvedPhone = contact.number;
+                  mappingsMap[cleanLid] = contact.number;
                 }
               } catch (e) {}
             }
+          }
 
-            if (resolvedPhone) {
+          // Apply mapping
+          for (const msg of db.pending_messages) {
+            if (msg.sender && mappingsMap[msg.sender]) {
+              const resolvedPhone = mappingsMap[msg.sender];
               console.log(`[Self-Healing] Resolved pending sender LID ${msg.sender} -> ${resolvedPhone}`);
-              
-              // Map in server memory cache mapping table
               whatsapp.lidToPhoneMap[msg.sender] = resolvedPhone;
-              
               msg.sender = resolvedPhone;
               dbUpdated = true;
             }

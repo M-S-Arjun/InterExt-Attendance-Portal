@@ -64,6 +64,10 @@
           <i data-lucide="wallet"></i>
           <span>Monthly Payroll</span>
         </button>
+        <button class="nav-item" onclick="switchTab('welders')">
+          <i data-lucide="file-spreadsheet"></i>
+          <span>Welders Weekly</span>
+        </button>
         <button class="nav-item" onclick="switchTab('selfies')">
           <i data-lucide="camera"></i>
           <span>Selfie Verifications</span>
@@ -315,7 +319,7 @@
                 <input type="date" id="log-filter-end" class="form-control" onchange="checkRangeChange()">
               </div>
               <div class="filter-buttons">
-                <button class="btn btn-secondary btn-icon" onclick="resetDateFilters()"><i data-lucide="refresh-cw"></i> Reset</button>
+                <button class="btn btn-secondary btn-icon" id="btn-refresh-logs" onclick="refreshWhatsAppLogs()"><i data-lucide="refresh-cw"></i> Refresh</button>
                 <button class="btn btn-primary btn-icon" onclick="exportPayrollCSV()"><i data-lucide="download"></i> Export Excel</button>
               </div>
             </div>
@@ -1274,6 +1278,125 @@
                 </tr>
               </tfoot>
             </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 4.75: WELDERS WEEKLY REPORT -->
+      <div id="tab-welders" class="tab-view">
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="file-spreadsheet"></i> Welders Weekly Report</h3>
+              <p>Weekly attendance and payroll summary ending on Fridays (Saturday to Friday). Friday overtime is excluded.</p>
+            </div>
+            <div class="header-right flex-filters" style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <div class="filter-group" style="margin-bottom: 0;">
+                <label style="margin-bottom: 4px; font-size: 0.8rem; font-weight: 600;">Select Week (Friday)</label>
+                <select id="welders-friday-select" class="form-control" onchange="loadWeldersWeeklyReport()" style="min-width: 150px; height: 38px;"></select>
+              </div>
+              <div class="filter-buttons" style="margin-top: 18px;">
+                <button class="btn btn-primary btn-icon" onclick="exportWeldersWeeklyExcel()"><i data-lucide="download"></i> Download Excel Report</button>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top: 24px;">
+            <h4 style="margin-bottom: 12px; font-weight: 600; color: var(--text-primary);">Weekly Attendance Board</h4>
+            <div class="overflow-x" style="border: 1px solid var(--glass-border); background-color: rgba(0, 0, 0, 0.08); border-radius: var(--border-radius-sm); margin-bottom: 30px;">
+              <table class="data-table" id="welders-attendance-table">
+                <thead>
+                  <tr>
+                    <th>Welder ID</th>
+                    <th>Welder Name</th>
+                    <th>Sat</th>
+                    <th>Sun</th>
+                    <th>Mon</th>
+                    <th>Tue</th>
+                    <th>Wed</th>
+                    <th>Thu</th>
+                    <th>Fri</th>
+                    <th>Total Hours</th>
+                    <th>Days Present</th>
+                  </tr>
+                </thead>
+                <tbody id="welders-attendance-table-body">
+                  <!-- Generated Dynamically -->
+                </tbody>
+              </table>
+            </div>
+
+            <h4 style="margin-bottom: 12px; font-weight: 600; color: var(--text-primary);">Weekly Payroll Summary Board</h4>
+            <div class="overflow-x" style="border: 1px solid var(--glass-border); background-color: rgba(0, 0, 0, 0.08); border-radius: var(--border-radius-sm); margin-bottom: 30px;">
+              <table class="data-table" id="welders-payroll-summary-table">
+                <thead>
+                  <tr>
+                    <th>User ID</th>
+                    <th>Employee Name</th>
+                    <th>Daily Rate</th>
+                    <th>Weekly Regular Wage</th>
+                    <th>Weekly Overtime Pay</th>
+                    <th>Weekly Travel Pay</th>
+                    <th>Total Weekly Earnings</th>
+                  </tr>
+                </thead>
+                <tbody id="welders-payroll-summary-table-body">
+                  <!-- Generated Dynamically -->
+                </tbody>
+                <tfoot>
+                  <tr style="font-weight: bold; background: var(--bg-secondary); border-top: 2px solid var(--border-color);">
+                    <td colspan="6" style="text-align: left; padding: 12px; font-size: 0.95rem;">Total</td>
+                    <td id="welders-payroll-summary-total-net-payable" style="text-align: right; padding: 12px; font-size: 0.95rem; color: var(--color-success); font-weight: 700;">₹0.00</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            <h4 style="margin-bottom: 12px; font-weight: 600; color: var(--text-primary);">Weekly Detailed Payroll Board (Monthly Format)</h4>
+            <div class="overflow-x" style="border: 1px solid var(--glass-border); background-color: rgba(0, 0, 0, 0.08); border-radius: var(--border-radius-sm); margin-bottom: 30px;">
+              <table class="data-table" id="welders-payroll-table" style="min-width: 3390px;">
+                <thead>
+                  <tr>
+                    <th style="width: 140px;">Mode of Work</th>
+                    <th style="width: 110px;">User ID</th>
+                    <th style="width: 180px;">Employee Name</th>
+                    <th style="width: 120px;">Basic</th>
+                    <th style="width: 120px;">DA</th>
+                    <th style="width: 140px;">Other Allowances</th>
+                    <th style="width: 130px;">Monthly Wages</th>
+                    <th style="width: 140px;">Actual Working days</th>
+                    <th style="width: 120px;">Days Worked</th>
+                    <th style="width: 120px;">Daily Wages</th>
+                    <th style="width: 110px;">LOP Days</th>
+                    <th style="width: 130px;">LOP Amount</th>
+                    <th style="width: 110px;">OT Hours</th>
+                    <th style="width: 125px;">OT Amount</th>
+                    <th style="width: 130px;">Travel Time(hrs)</th>
+                    <th style="width: 140px;">Travel Time Amount</th>
+                    <th style="width: 110px;">Extra Days</th>
+                    <th style="width: 135px;">Extra Day Amount</th>
+                    <th style="width: 115px;">Missing Days</th>
+                    <th style="width: 145px;">Missing Days Amount</th>
+                    <th style="width: 120px;">Holidays</th>
+                    <th style="width: 140px;">Holiday Amount</th>
+                    <th style="width: 135px;">Gross Payable</th>
+                    <th style="width: 120px;">Advance Paid</th>
+                    <th style="width: 135px;">Net Payable</th>
+                    <th style="width: 140px;">Company</th>
+                  </tr>
+                </thead>
+                <tbody id="welders-payroll-table-body">
+                  <!-- Generated Dynamically -->
+                </tbody>
+                <tfoot>
+                  <tr style="font-weight: bold; background: var(--bg-secondary); border-top: 2px solid var(--border-color);">
+                    <td colspan="24" style="text-align: left; padding: 12px; font-size: 0.95rem;">Total</td>
+                    <td id="welders-payroll-total-net-payable" style="text-align: right; padding: 12px; font-size: 0.95rem; color: var(--color-success); font-weight: 700;">₹0.00</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
           </div>
         </div>
       </div>

@@ -49,9 +49,28 @@ const DEFAULT_DB = {
 
 class Database {
   constructor() {
-    this.init();
+    this.dbCache = null;
     this.isSyncingExcel = false;
     this.pendingExcelSync = false;
+    this.isBatching = false;
+    this.batchDb = null;
+    this.init();
+  }
+
+  startTransaction() {
+    this.isBatching = true;
+    this.batchDb = this.read();
+    console.log("[Database] Started batch update transaction (in-memory caching active).");
+  }
+
+  commitTransaction() {
+    if (this.isBatching && this.batchDb) {
+      this.isBatching = false;
+      this.writeAtomic(this.batchDb);
+      this.batchDb = null;
+      console.log("[Database] Committed batch update transaction (disk write finalized).");
+      this.syncToExcelAsync();
+    }
   }
 
   // Initialize DB file
@@ -61,14 +80,20 @@ class Database {
     }
 
     if (!fs.existsSync(DB_PATH)) {
+      this.dbCache = DEFAULT_DB;
       this.writeAtomic(DEFAULT_DB);
     } else {
       try {
-        // Test read
-        JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+        // Load and cache
+        this.dbCache = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
       } catch (err) {
         console.error("Corrupted database file. Attempting recovery from backups...", err);
-        this.recoverFromBackup() || this.writeAtomic(DEFAULT_DB);
+        if (this.recoverFromBackup()) {
+          // loaded by recoverFromBackup
+        } else {
+          this.dbCache = DEFAULT_DB;
+          this.writeAtomic(DEFAULT_DB);
+        }
       }
     }
 
@@ -105,9 +130,16 @@ class Database {
 
   // Read DB safely
   read() {
+    if (this.isBatching && this.batchDb) {
+      return this.batchDb;
+    }
+    if (this.dbCache) {
+      return this.dbCache;
+    }
     try {
       const data = fs.readFileSync(DB_PATH, 'utf8');
-      return JSON.parse(data);
+      this.dbCache = JSON.parse(data);
+      return this.dbCache;
     } catch (err) {
       console.error("Error reading database:", err);
       return DEFAULT_DB;
@@ -116,6 +148,11 @@ class Database {
 
   // Write DB atomically to prevent corruption
   writeAtomic(data) {
+    this.dbCache = data; // Keep cache updated
+    if (this.isBatching) {
+      this.batchDb = data;
+      return true;
+    }
     const tempPath = `${DB_PATH}.tmp`;
     try {
       fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8');
@@ -359,6 +396,39 @@ class Database {
       this.writeAtomic(db);
     }
   }
+
+  clearProcessedAndPendingMessages(msgIdsToClear, matchedMessages) {
+    const db = this.read();
+    let updated = false;
+
+    if (db.processed_message_ids && msgIdsToClear.length > 0) {
+      const initialLength = db.processed_message_ids.length;
+      db.processed_message_ids = db.processed_message_ids.filter(id => !msgIdsToClear.includes(id));
+      if (db.processed_message_ids.length !== initialLength) {
+        updated = true;
+      }
+    }
+
+    if (db.pending_messages && matchedMessages.length > 0) {
+      const initialLength = db.pending_messages.length;
+      db.pending_messages = db.pending_messages.filter(pendingMsg => {
+        const isMatch = matchedMessages.some(m => 
+          m.id === pendingMsg.id || 
+          (m.sender === pendingMsg.sender && m.body === pendingMsg.messageText)
+        );
+        return !isMatch;
+      });
+      if (db.pending_messages.length !== initialLength) {
+        updated = true;
+      }
+    }
+
+    if (updated) {
+      this.writeAtomic(db);
+    }
+    return updated;
+  }
+
 
   getHospitalUsageForMonth(employeeId, monthStr, excludeDate = null, db = null) {
     const activeDb = db || this.read();
@@ -804,6 +874,10 @@ class Database {
     // Insert or update
     const index = db.attendance.findIndex(a => a.id === record.id || (a.employeeId === record.employeeId && a.date === record.date));
     if (index >= 0) {
+      if (db.attendance[index].isManualOverride && !record.isManualOverride) {
+        console.log(`[Database] Skipping update for employee ${record.employeeName} on ${record.date} because a manual override is active.`);
+        return db.attendance[index];
+      }
       db.attendance[index] = { ...db.attendance[index], ...record };
     } else {
       db.attendance.push(record);
@@ -1196,6 +1270,28 @@ class Database {
       }
 
       XLSX.utils.book_append_sheet(wb, ws, "Attendance & Wages");
+
+      // Compile and append Welders Weekly Report sheet
+      try {
+        const weeklyRows = this.compileWeldersWeeklyReport(db);
+        if (weeklyRows && weeklyRows.length > 0) {
+          const wsWeekly = XLSX.utils.json_to_sheet(weeklyRows);
+          
+          // Auto-fit column widths for a professional finish!
+          const colsWeekly = Object.keys(weeklyRows[0]);
+          wsWeekly['!cols'] = colsWeekly.map(col => {
+            const maxCharLen = Math.max(
+              col.length,
+              ...weeklyRows.map(row => String(row[col] || '').length)
+            );
+            return { wch: Math.max(12, maxCharLen + 2) };
+          });
+          
+          XLSX.utils.book_append_sheet(wb, wsWeekly, "Welders Weekly Report");
+        }
+      } catch (errWeekly) {
+        console.error("[Excel Sync] Failed to compile Welders Weekly sheet:", errWeekly);
+      }
       
       // Atomic Excel file update
       const tempExcelPath = `${EXCEL_PATH}.tmp`;
@@ -1462,6 +1558,198 @@ class Database {
         lateLopDays: lateLopDays
       };
     });
+  }
+
+  // --- Welders Weekly Reports and Payroll Calculations ---
+  getWeldersWeeklyReportData(fridayDateStr, db = null) {
+    if (!db) db = this.read();
+    
+    const fridayDate = new Date(fridayDateStr);
+    const dayNames = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    const datesOfWeek = [];
+    for (let i = -6; i <= 0; i++) {
+      const d = new Date(fridayDate);
+      d.setDate(fridayDate.getDate() + i);
+      datesOfWeek.push(d.toISOString().split('T')[0]);
+    }
+    
+    const welders = (db.employees || []).filter(e => e && e.modeOfWork && e.modeOfWork.toLowerCase().includes('welder'));
+    const attendanceLogs = db.attendance || [];
+    
+    return welders.map(welder => {
+      const dailyDetails = [];
+      let totalHours = 0;
+      let totalPresentDays = 0;
+      let weeklyRegularWage = 0;
+      let weeklyOtPay = 0;
+      let weeklyTravelPay = 0;
+      let totalOtHours = 0;
+      let totalTravelHours = 0;
+      
+      datesOfWeek.forEach((dateStr, index) => {
+        const dayName = dayNames[index];
+        const log = attendanceLogs.find(a => a.employeeId === welder.id && a.date === dateStr);
+        
+        let status = "ABSENT";
+        let hours = 0;
+        let wage = 0;
+        let otHours = 0;
+        let travelHours = 0;
+        let checkIn = "—";
+        let checkOut = "—";
+        
+        if (log) {
+          status = log.status.toUpperCase();
+          const isPresent = log.status === 'completed' || log.status === 'checked-in' || log.status === 'late' || log.status === 'Late Check-in' || log.status === 'Early Check-out' || log.status === 'half-day leave';
+          
+          if (isPresent) {
+            totalPresentDays += 1;
+            hours = log.status === 'absent' || log.status === 'leave' ? 0.0 : Number((log.duration / 60).toFixed(2));
+            totalHours += hours;
+            
+            const isFriday = (index === 6);
+            // Overtime excluded on Friday
+            const actualOtHours = isFriday ? 0.0 : (Number(log.otHours) || 0.0);
+            otHours = actualOtHours;
+            
+            const dailyRate = Number(welder.dailyRate) || 0.0;
+            const hourlyRate = Number(welder.hourlyRate) || 0.0;
+            
+            let F = 8.0;
+            let h = 4.0;
+            if (welder.shiftStart && welder.shiftEnd) {
+              try {
+                const [startH, startM] = welder.shiftStart.split(':').map(Number);
+                const [endH, endM] = welder.shiftEnd.split(':').map(Number);
+                let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+                if (shiftMinutes < 0) shiftMinutes += 24 * 60;
+                const shiftHours = shiftMinutes / 60;
+                F = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
+                h = F / 2.0;
+              } catch(e) {}
+            }
+            
+            let dailyWage = 0.0;
+            const forceHalfDay = log.status === 'half-day leave';
+            
+            if (log.isManualOverride) {
+              const manualWage = Number(log.calculatedWage) || 0.0;
+              if (isFriday) {
+                const manualOt = Number(log.otHours) || 0.0;
+                const otPayout = Number((manualOt * (dailyRate / 10.0)).toFixed(2));
+                dailyWage = Math.max(0, Number((manualWage - otPayout).toFixed(2)));
+              } else {
+                dailyWage = manualWage;
+                const dailyOtHours = Number(log.otHours) || 0.0;
+                weeklyOtPay += Number((dailyOtHours * (dailyRate / 10.0)).toFixed(2));
+              }
+            } else {
+              if (hours >= F && !forceHalfDay) {
+                dailyWage = dailyRate;
+                if (!isFriday) {
+                  const dayOtPay = Number((otHours * (dailyRate / 10.0)).toFixed(2));
+                  weeklyOtPay += dayOtPay;
+                  dailyWage += dayOtPay;
+                }
+              } else if (hours >= h || forceHalfDay) {
+                const extraH = Math.max(0.0, Number((hours - h).toFixed(2)));
+                dailyWage = Number(((dailyRate * 0.5) + (extraH * hourlyRate)).toFixed(2));
+              } else {
+                dailyWage = Number((hours * hourlyRate).toFixed(2));
+              }
+            }
+            
+            wage = dailyWage;
+            travelHours = Number(log.travelHours) || 0.0;
+            weeklyTravelPay += Number((travelHours * hourlyRate).toFixed(2));
+            totalOtHours += otHours;
+            totalTravelHours += travelHours;
+            
+            checkIn = log.checkIn ? new Date(log.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : "—";
+            checkOut = log.checkOut ? new Date(log.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : (log.status === 'checked-in' ? "Checked-In" : "—");
+          }
+        }
+        
+        dailyDetails.push({
+          date: dateStr,
+          dayName,
+          status,
+          hours,
+          otHours,
+          wage,
+          travelHours,
+          checkIn,
+          checkOut
+        });
+      });
+      
+      const totalWage = dailyDetails.reduce((sum, d) => sum + d.wage, 0);
+      const totalWeeklyEarnings = Number((totalWage + weeklyTravelPay).toFixed(2));
+      
+      return {
+        welderId: welder.userId,
+        welderName: welder.name,
+        dailyRate: welder.dailyRate,
+        dailyDetails,
+        totalHours: Number(totalHours.toFixed(2)),
+        totalPresentDays,
+        weeklyRegularWage: Number((totalWage - weeklyOtPay).toFixed(2)),
+        weeklyOtPay: Number(weeklyOtPay.toFixed(2)),
+        weeklyTravelPay: Number(weeklyTravelPay.toFixed(2)),
+        totalWeeklyEarnings,
+        modeOfWork: welder.modeOfWork || "—",
+        company: welder.paymentMode || "—",
+        totalOtHours: Number(totalOtHours.toFixed(2)),
+        totalTravelHours: Number(totalTravelHours.toFixed(2))
+      };
+    });
+  }
+
+  compileWeldersWeeklyReport(db) {
+    const uniqueDates = Array.from(new Set(db.attendance.map(a => a.date)));
+    const fridays = uniqueDates.filter(d => {
+      try {
+        return new Date(d).getDay() === 5;
+      } catch (e) {
+        return false;
+      }
+    }).sort((a, b) => a.localeCompare(b));
+    
+    const rows = [];
+    fridays.forEach(fridayStr => {
+      const data = this.getWeldersWeeklyReportData(fridayStr, db);
+      data.forEach(w => {
+        const sat = w.dailyDetails[0];
+        const sun = w.dailyDetails[1];
+        const mon = w.dailyDetails[2];
+        const tue = w.dailyDetails[3];
+        const wed = w.dailyDetails[4];
+        const thu = w.dailyDetails[5];
+        const fri = w.dailyDetails[6];
+        
+        rows.push({
+          "Week Ending (Friday)": fridayStr,
+          "Welder ID": w.welderId,
+          "Welder Name": w.welderName,
+          "Daily Rate (₹)": w.dailyRate,
+          "Sat Hours": sat.hours || 0,
+          "Sun Hours": sun.hours || 0,
+          "Mon Hours": mon.hours || 0,
+          "Tue Hours": tue.hours || 0,
+          "Wed Hours": wed.hours || 0,
+          "Thu Hours": thu.hours || 0,
+          "Fri Hours": fri.hours || 0,
+          "Total Weekly Hours": w.totalHours,
+          "Total Present Days": w.totalPresentDays,
+          "Weekly Regular Wage (₹)": w.weeklyRegularWage,
+          "Weekly Overtime Pay (₹)": w.weeklyOtPay,
+          "Weekly Travel Pay (₹)": w.weeklyTravelPay,
+          "Total Weekly Earnings (₹)": w.totalWeeklyEarnings
+        });
+      });
+    });
+    
+    return rows;
   }
 
   // --- Holidays Collection CRUD ---

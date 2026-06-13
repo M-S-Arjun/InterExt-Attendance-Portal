@@ -368,8 +368,51 @@ class WhatsAppManager extends EventEmitter {
     });
   }
 
+  // Resolve a raw sender JID to a clean phone number, handles cache lookup and live LID API checks
+  async resolveSenderPhone(rawSenderJid, message = null, skipSlowLookup = false) {
+    if (!rawSenderJid) return "Unknown";
+    
+    let senderPhone = rawSenderJid.split('@')[0].replace(/\D/g, '');
+    
+    if (this.lidToPhoneMap[senderPhone]) {
+      return this.lidToPhoneMap[senderPhone].split('@')[0].replace(/\D/g, '');
+    }
+    
+    if (rawSenderJid.endsWith('@lid') && !skipSlowLookup) {
+      try {
+        if (this.client && typeof this.client.getContactLidAndPhone === 'function') {
+          const mappings = await this.client.getContactLidAndPhone([rawSenderJid]);
+          if (mappings && mappings.length > 0 && mappings[0].pn) {
+            const cleanPn = mappings[0].pn.split('@')[0].replace(/\D/g, '');
+            console.log(`[LID Resolver] Resolved JID ${rawSenderJid} -> ${cleanPn} via getContactLidAndPhone`);
+            this.lidToPhoneMap[rawSenderJid.split('@')[0]] = cleanPn;
+            return cleanPn;
+          }
+        }
+      } catch (lidErr) {
+        console.warn("[LID Resolver] getContactLidAndPhone failed:", lidErr.message);
+      }
+
+      if (message) {
+        try {
+          const contact = await message.getContact();
+          if (contact && contact.number) {
+            const cleanPn = contact.number.split('@')[0].replace(/\D/g, '');
+            console.log(`[LID Resolver] Resolved JID ${rawSenderJid} -> ${cleanPn} via contact.number`);
+            this.lidToPhoneMap[rawSenderJid.split('@')[0]] = cleanPn;
+            return cleanPn;
+          }
+        } catch (contactErr) {
+          console.warn("[LID Resolver] getContact failed:", contactErr.message);
+        }
+      }
+    }
+    
+    return senderPhone;
+  }
+
   // Process individual WhatsApp message (both live and recovered history)
-  async processMessage(message) {
+  async processMessage(message, skipSlowLookup = false, preResolvedGroupInfo = null) {
     this.lastMessageTime = Date.now(); // Update activity timestamp
     try {
       // Resolve the chat ID (accounting for outgoing messages from the client itself)
@@ -392,8 +435,8 @@ class WhatsAppManager extends EventEmitter {
         .map(id => id.trim())
         .filter(Boolean);
 
-      let groupName = this.groupNameCache[chatId];
-      let groupId = this.groupIdCache[chatId];
+      let groupName = preResolvedGroupInfo ? preResolvedGroupInfo.name : this.groupNameCache[chatId];
+      let groupId = preResolvedGroupInfo ? preResolvedGroupInfo.id : this.groupIdCache[chatId];
 
       if (!groupName) {
         if (targetGroupIds.includes(chatId)) {
@@ -468,39 +511,7 @@ class WhatsAppManager extends EventEmitter {
 
         // Get clean phone number of sender, resolving LID if necessary
         const rawSenderJid = message.author || message.from;
-        let senderPhone = rawSenderJid.split('@')[0].replace(/\D/g, '');
-        
-        if (this.lidToPhoneMap[senderPhone]) {
-          senderPhone = this.lidToPhoneMap[senderPhone].split('@')[0].replace(/\D/g, '');
-        } else if (rawSenderJid.endsWith('@lid')) {
-          try {
-            if (this.client && typeof this.client.getContactLidAndPhone === 'function') {
-              const mappings = await this.client.getContactLidAndPhone([rawSenderJid]);
-              if (mappings && mappings.length > 0 && mappings[0].pn) {
-                const cleanPn = mappings[0].pn.split('@')[0].replace(/\D/g, '');
-                console.log(`[LID Resolver] Resolved ${rawSenderJid} -> ${cleanPn} via getContactLidAndPhone`);
-                senderPhone = cleanPn;
-                this.lidToPhoneMap[rawSenderJid.split('@')[0]] = senderPhone;
-              }
-            }
-          } catch (lidErr) {
-            console.warn("[LID Resolver] getContactLidAndPhone failed:", lidErr.message);
-          }
-
-          if (senderPhone === rawSenderJid.split('@')[0].replace(/\D/g, '')) {
-            try {
-              const contact = await message.getContact();
-              if (contact && contact.number) {
-                const cleanPn = contact.number.split('@')[0].replace(/\D/g, '');
-                console.log(`[LID Resolver] Resolved ${rawSenderJid} -> ${cleanPn} via contact.number`);
-                senderPhone = cleanPn;
-                this.lidToPhoneMap[rawSenderJid.split('@')[0]] = senderPhone;
-              }
-            } catch (contactErr) {
-              console.warn("[LID Resolver] getContact failed:", contactErr.message);
-            }
-          }
-        }
+        const senderPhone = await this.resolveSenderPhone(rawSenderJid, message, skipSlowLookup);
 
         // Emit a lightweight raw message event for real-time UI feed only for the configured group
         try {
@@ -582,11 +593,11 @@ class WhatsAppManager extends EventEmitter {
   }
 
   // Historical Recovery Engine: Fetches and parses missed messages on system boot
-  async recoverMissedMessages(chat) {
+  async recoverMissedMessages(chat, preFetchedMessages = null) {
     console.log(`[Recovery Engine] Starting missed messages recovery for group: "${chat.name}"...`);
     try {
-      // Fetch the last 500 messages from the group
-      const messages = await chat.fetchMessages({ limit: 500 });
+      // Fetch the last 500 messages from the group if not pre-fetched
+      const messages = preFetchedMessages || await chat.fetchMessages({ limit: 500 });
       console.log(`[Recovery Engine] Fetched ${messages.length} historical messages from WhatsApp.`);
 
       const processedIds = database.getProcessedMessageIds();
@@ -597,12 +608,14 @@ class WhatsAppManager extends EventEmitter {
       // Chronological sort (oldest to newest) to process check-ins and check-outs sequentially
       const sortedMessages = [...messages].sort((a, b) => a.timestamp - b.timestamp);
 
+      const groupInfo = { name: chat.name, id: chat.id._serialized };
+
       for (const msg of sortedMessages) {
         const msgId = msg.id._serialized;
         if (!processedIds.includes(msgId)) {
           console.log(`[Recovery Engine] Found missed message from ${msg.author || msg.from} sent at ${new Date(msg.timestamp * 1000).toISOString()}: "${msg.body || ''}"`);
-          // Process this message using the processor logic
-          await this.processMessage(msg);
+          // Process this message using the processor logic, skipping slow lookup during bulk operations
+          await this.processMessage(msg, true, groupInfo);
           processedCount++;
         }
       }
@@ -955,6 +968,123 @@ class WhatsAppManager extends EventEmitter {
         }
       }
     }
+  }
+
+  async refreshWhatsAppLogs() {
+    if (this.status !== 'ready' || !this.client) {
+      throw new Error("WhatsApp client is not ready. Please verify connection status.");
+    }
+
+    const settings = database.getSettings();
+    const targetGroupIds = (settings.whatsappGroupId || '')
+      .split(',')
+      .map(id => id.trim())
+      .filter(Boolean);
+
+    if (targetGroupIds.length === 0) {
+      throw new Error("No target group chats configured in settings.");
+    }
+
+    const employees = database.getEmployees();
+    // Clean registered employee phone numbers for matching
+    const registeredPhones = new Set(
+      employees
+        .map(e => e.phone ? e.phone.replace(/\D/g, '') : null)
+        .filter(Boolean)
+    );
+
+    console.log(`[Refresh Engine] Scanned employee registry. Found ${registeredPhones.size} active phone numbers.`);
+
+    let totalCleared = 0;
+
+    // Start database transaction to optimize speed and reduce disk write overhead to a single atomic operation
+    database.startTransaction();
+
+    try {
+      for (const gid of targetGroupIds) {
+        try {
+          console.log(`[Refresh Engine] Fetching chat for ID: ${gid}`);
+          const chat = await this.client.getChatById(gid);
+          if (!chat) {
+            console.warn(`[Refresh Engine] Could not load group chat for ID: ${gid}`);
+            continue;
+          }
+
+          // Fetch last 500 messages
+          console.log(`[Refresh Engine] Fetching last 500 messages from "${chat.name}"...`);
+          const messages = await chat.fetchMessages({ limit: 500 });
+          console.log(`[Refresh Engine] Fetched ${messages.length} messages.`);
+
+          // Bulk resolve LIDs to avoid sequential roundtrips
+          const lidsToResolve = [];
+          for (const msg of messages) {
+            const rawSenderJid = msg.author || msg.from;
+            if (rawSenderJid && rawSenderJid.endsWith('@lid')) {
+              const cleanLid = rawSenderJid.split('@')[0];
+              if (!this.lidToPhoneMap[cleanLid]) {
+                lidsToResolve.push(rawSenderJid);
+              }
+            }
+          }
+
+          if (lidsToResolve.length > 0 && typeof this.client.getContactLidAndPhone === 'function') {
+            try {
+              console.log(`[Refresh Engine] Bulk resolving ${lidsToResolve.length} LIDs...`);
+              const mappings = await this.client.getContactLidAndPhone(lidsToResolve);
+              if (mappings && mappings.length > 0) {
+                mappings.forEach(m => {
+                  if (m.lid && m.pn) {
+                    const cleanLid = m.lid.split('@')[0];
+                    const cleanPn = m.pn.split('@')[0].replace(/\D/g, '');
+                    this.lidToPhoneMap[cleanLid] = cleanPn;
+                  }
+                });
+              }
+            } catch (err) {
+              console.warn("[Refresh Engine] Bulk LID resolution failed:", err.message);
+            }
+          }
+
+          const msgIdsToClear = [];
+          const matchedMessages = [];
+
+          for (const msg of messages) {
+            const rawSenderJid = msg.author || msg.from;
+            if (!rawSenderJid) continue;
+
+            const senderPhone = await this.resolveSenderPhone(rawSenderJid, msg, true);
+
+            if (registeredPhones.has(senderPhone)) {
+              msgIdsToClear.push(msg.id._serialized);
+              matchedMessages.push({
+                id: msg.id._serialized,
+                sender: senderPhone,
+                body: msg.body || ''
+              });
+            }
+          }
+
+          if (msgIdsToClear.length > 0) {
+            console.log(`[Refresh Engine] Found ${msgIdsToClear.length} messages from registered employees in "${chat.name}".`);
+            
+            // Atomically clear processed IDs and pending exceptions
+            database.clearProcessedAndPendingMessages(msgIdsToClear, matchedMessages);
+            totalCleared += msgIdsToClear.length;
+          }
+
+          // Chronologically recover all missed messages
+          await this.recoverMissedMessages(chat, messages);
+
+        } catch (err) {
+          console.error(`[Refresh Engine] Failed to refresh group ${gid}:`, err.message);
+        }
+      }
+    } finally {
+      // Commit transaction to disk and trigger a single Excel compilation
+      database.commitTransaction();
+    }
+
+    return { clearedCount: totalCleared };
   }
 
   // Cleanup intervals and client on shutdown

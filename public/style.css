@@ -121,6 +121,7 @@ body {
   display: flex;
   height: 100vh;
   width: 100vw;
+  overflow: hidden;
   background-image: 
     radial-gradient(at 10% 20%, var(--radial-glow-1) 0px, transparent 50%),
     radial-gradient(at 90% 80%, var(--radial-glow-2) 0px, transparent 50%);
@@ -439,7 +440,8 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
 /* Main Content Area */
 .main-content {
   flex-grow: 1;
-  height: 100%;
+  height: 100vh;
+  max-height: 100vh;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -1847,33 +1849,39 @@ textarea.form-control {
 
 /* Scrollbar Customization for modern look */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-secondary);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--glass-border);
+  background: rgba(0, 0, 0, 0.2);
   border-radius: 10px;
 }
 
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.4);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-tertiary);
+  background-color: var(--color-primary) !important;
 }
 
 :root.light-theme ::-webkit-scrollbar-track {
-  background: var(--bg-primary);
+  background: rgba(0, 0, 0, 0.05);
 }
 
 :root.light-theme ::-webkit-scrollbar-thumb {
-  background: rgba(9, 9, 11, 0.15);
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 :root.light-theme ::-webkit-scrollbar-thumb:hover {
-  background: rgba(9, 9, 11, 0.3);
+  background-color: var(--color-primary) !important;
 }
 
 /* Responsive adjustments for Connection Center */
@@ -2482,7 +2490,8 @@ select.payroll-col-filter {
 .tab-view#tab-settings,
 .tab-view#tab-holidays,
 .tab-view#tab-camera,
-.tab-view#tab-sites {
+.tab-view#tab-sites,
+.tab-view#tab-welders {
   overflow-y: auto !important;
   flex-grow: 1;
   flex-shrink: 1;
@@ -2547,7 +2556,8 @@ select.payroll-col-filter {
 
 /* Ensure multi-section tab tables do not clip vertically, but allow horizontal scrolling */
 .tab-view#tab-camera .overflow-x,
-.tab-view#tab-sites .overflow-x {
+.tab-view#tab-sites .overflow-x,
+.tab-view#tab-welders .overflow-x {
   overflow-x: auto !important;
   overflow-y: visible !important;
   height: auto !important;

@@ -462,6 +462,11 @@ function switchTab(tabName) {
       subtitle.textContent = "Manage official paid company holidays and visual calendars";
       loadHolidaysTab();
       break;
+    case 'welders':
+      title.textContent = "Welders Weekly Report";
+      subtitle.textContent = "Weekly attendance and payroll summary ending on Fridays (Saturday to Friday)";
+      loadWeldersFridaysDropdown();
+      break;
   }
 
   if (window.lucide) {
@@ -2682,6 +2687,45 @@ function resetDateFilters() {
   loadAttendanceLogs();
 }
 
+async function refreshWhatsAppLogs() {
+  const btn = document.getElementById('btn-refresh-logs');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<i data-lucide="refresh-cw" class="animate-spin"></i> Refreshing...`;
+    if (window.lucide) window.lucide.createIcons();
+  }
+  
+  TransactionManager.showStatusToast("Scanning WhatsApp messages...");
+
+  try {
+    const res = await fetch('/api/whatsapp/refresh', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || "Failed to refresh messages");
+    }
+
+    TransactionManager.showStatusToast(`Refresh complete! Re-evaluated messages.`);
+    // The server emits WebSockets which naturally refreshes data,
+    // but we can also trigger a manual refresh to ensure immediate responsiveness.
+    await refreshDashboardData();
+  } catch (err) {
+    console.error("WhatsApp refresh failed:", err);
+    TransactionManager.showStatusToast(`Refresh failed: ${err.message}`, true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<i data-lucide="refresh-cw"></i> Refresh`;
+      if (window.lucide) window.lucide.createIcons();
+    }
+  }
+}
+
 // CSV payroll reports trigger
 function exportPayrollCSV() {
   let start = state.selectedRangeStart;
@@ -3648,7 +3692,7 @@ async function openDisputeInspector(employeeId, employeeName, date) {
   if (window.lucide) window.lucide.createIcons();
 
   try {
-    const resp = await fetch('/api/attendance/camera/events');
+    const resp = await fetch(`/api/attendance/camera/events?employeeId=${encodeURIComponent(employeeId)}&date=${encodeURIComponent(date)}`);
     if (!resp.ok) throw new Error("HTTP Error " + resp.status);
     const events = await resp.json();
     
@@ -5158,6 +5202,174 @@ async function logoutWhatsApp() {
       if (window.lucide) window.lucide.createIcons();
     }
   }
+}
+
+// --- Welders Weekly Report UI controller functions ---
+async function loadWeldersFridaysDropdown() {
+  try {
+    const res = await fetch('/api/welders-weekly');
+    const data = await res.json();
+    const select = document.getElementById('welders-friday-select');
+    select.innerHTML = '';
+    
+    if (!data.fridays || data.fridays.length === 0) {
+      select.innerHTML = '<option value="">No Fridays found</option>';
+      document.getElementById('welders-attendance-table-body').innerHTML = '<tr><td colspan="11" style="text-align: center;">No weekly reports available</td></tr>';
+      document.getElementById('welders-payroll-summary-table-body').innerHTML = '<tr><td colspan="7" style="text-align: center;">No weekly reports available</td></tr>';
+      document.getElementById('welders-payroll-table-body').innerHTML = '<tr><td colspan="26" style="text-align: center;">No weekly reports available</td></tr>';
+      return;
+    }
+    
+    data.fridays.forEach(fri => {
+      const option = document.createElement('option');
+      option.value = fri;
+      option.textContent = fri;
+      select.appendChild(option);
+    });
+    
+    loadWeldersWeeklyReport();
+  } catch (err) {
+    console.error("Failed to load Welders Fridays dropdown:", err);
+  }
+}
+
+async function loadWeldersWeeklyReport() {
+  const select = document.getElementById('welders-friday-select');
+  const friday = select.value;
+  if (!friday) return;
+  
+  const attBody = document.getElementById('welders-attendance-table-body');
+  const paySummaryBody = document.getElementById('welders-payroll-summary-table-body');
+  const payDetailedBody = document.getElementById('welders-payroll-table-body');
+  
+  attBody.innerHTML = '<tr><td colspan="11" style="text-align: center;"><i class="animate-spin" data-lucide="loader"></i> Loading Attendance...</td></tr>';
+  paySummaryBody.innerHTML = '<tr><td colspan="7" style="text-align: center;"><i class="animate-spin" data-lucide="loader"></i> Loading Summary...</td></tr>';
+  payDetailedBody.innerHTML = '<tr><td colspan="26" style="text-align: center;"><i class="animate-spin" data-lucide="loader"></i> Loading Detailed Payroll...</td></tr>';
+  if (window.lucide) window.lucide.createIcons();
+  
+  try {
+    const res = await fetch(`/api/welders-weekly?friday=${friday}`);
+    const result = await res.json();
+    
+    if (!result.success || !result.data || result.data.length === 0) {
+      attBody.innerHTML = '<tr><td colspan="11" style="text-align: center;">No welder records found for this week.</td></tr>';
+      paySummaryBody.innerHTML = '<tr><td colspan="7" style="text-align: center;">No welder records found for this week.</td></tr>';
+      payDetailedBody.innerHTML = '<tr><td colspan="26" style="text-align: center;">No welder records found for this week.</td></tr>';
+      return;
+    }
+    
+    // Sort alphabetically by welderName
+    const reportData = result.data.sort((a, b) => a.welderName.localeCompare(b.welderName));
+    
+    // Render Attendance Table
+    attBody.innerHTML = '';
+    reportData.forEach(w => {
+      const tr = document.createElement('tr');
+      
+      const details = w.dailyDetails;
+      const formatDay = (d) => {
+        if (d.status === "ABSENT") return '<span style="color: var(--color-danger); font-weight: 500;">ABSENT</span>';
+        if (d.status === "LEAVE") return '<span style="color: var(--color-warning); font-weight: 500;">LEAVE</span>';
+        return `${d.hours}h${d.otHours > 0 ? ` (+${d.otHours}h OT)` : ''}`;
+      };
+      
+      tr.innerHTML = `
+        <td>${w.welderId || '—'}</td>
+        <td><strong>${w.welderName}</strong></td>
+        <td>${formatDay(details[0])}</td>
+        <td>${formatDay(details[1])}</td>
+        <td>${formatDay(details[2])}</td>
+        <td>${formatDay(details[3])}</td>
+        <td>${formatDay(details[4])}</td>
+        <td>${formatDay(details[5])}</td>
+        <td>${formatDay(details[6])}</td>
+        <td><strong>${w.totalHours} hrs</strong></td>
+        <td>${w.totalPresentDays} days</td>
+      `;
+      attBody.appendChild(tr);
+    });
+    
+    // Render Payroll Summary Table
+    let totalSummaryNetPayable = 0;
+    paySummaryBody.innerHTML = '';
+    reportData.forEach(w => {
+      totalSummaryNetPayable += w.totalWeeklyEarnings;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${w.welderId || '—'}</td>
+        <td><strong>${w.welderName}</strong></td>
+        <td>₹${Number(w.dailyRate).toFixed(2)}</td>
+        <td>₹${Number(w.weeklyRegularWage).toFixed(2)}</td>
+        <td>₹${Number(w.weeklyOtPay).toFixed(2)}</td>
+        <td>₹${Number(w.weeklyTravelPay).toFixed(2)}</td>
+        <td style="font-weight: 700; color: var(--color-success);">₹${Number(w.totalWeeklyEarnings).toFixed(2)}</td>
+      `;
+      paySummaryBody.appendChild(tr);
+    });
+    
+    const summaryTotalEl = document.getElementById('welders-payroll-summary-total-net-payable');
+    if (summaryTotalEl) {
+      summaryTotalEl.textContent = `₹${totalSummaryNetPayable.toFixed(2)}`;
+    }
+
+    // Render Detailed Payroll Table (Monthly Format)
+    let totalDetailedNetPayable = 0;
+    payDetailedBody.innerHTML = '';
+    reportData.forEach(w => {
+      totalDetailedNetPayable += w.totalWeeklyEarnings;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><strong>${w.modeOfWork || "—"}</strong></td>
+        <td><strong>${w.welderId || "—"}</strong></td>
+        <td><span class="worker-primary-name">${w.welderName}</span></td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>${w.totalPresentDays}</td>
+        <td>₹${Number(w.dailyRate).toFixed(2)}</td>
+        <td>—</td>
+        <td>—</td>
+        <td>${w.totalOtHours || 0}</td>
+        <td>₹${Number(w.weeklyOtPay).toFixed(2)}</td>
+        <td>${w.totalTravelHours || 0}</td>
+        <td>₹${Number(w.weeklyTravelPay).toFixed(2)}</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>₹${Number(w.totalWeeklyEarnings).toFixed(2)}</td>
+        <td>₹0.00</td>
+        <td style="font-weight: 700; color: var(--color-success);">₹${Number(w.totalWeeklyEarnings).toFixed(2)}</td>
+        <td><strong>${w.company || "—"}</strong></td>
+      `;
+      payDetailedBody.appendChild(tr);
+    });
+    
+    const detailedTotalEl = document.getElementById('welders-payroll-total-net-payable');
+    if (detailedTotalEl) {
+      detailedTotalEl.textContent = `₹${totalDetailedNetPayable.toFixed(2)}`;
+    }
+    
+  } catch (err) {
+    console.error("Failed to load Welders weekly report:", err);
+    attBody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--color-danger);">Error loading attendance data.</td></tr>';
+    paySummaryBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--color-danger);">Error loading payroll data.</td></tr>';
+    payDetailedBody.innerHTML = '<tr><td colspan="26" style="text-align: center; color: var(--color-danger);">Error loading payroll data.</td></tr>';
+  }
+}
+
+function exportWeldersWeeklyExcel() {
+  const select = document.getElementById('welders-friday-select');
+  const friday = select.value;
+  if (!friday) {
+    alert("Please select a week ending Friday first.");
+    return;
+  }
+  window.location.href = `/api/export/welders-weekly/excel?friday=${friday}`;
 }
 
 
