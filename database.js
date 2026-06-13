@@ -348,7 +348,7 @@ class Database {
 
   savePendingMessage(msg) {
     const db = this.read();
-    msg.id = msg.id || `msg_${Date.now()}`;
+    msg.id = msg.id || `msg_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
     msg.timestamp = msg.timestamp || new Date().toISOString();
     
     if (!db.pending_messages) db.pending_messages = [];
@@ -456,6 +456,8 @@ class Database {
     let F = settings.standardFullDayHours || 8.0; // Full Day Limit (e.g. 8)
     let h = settings.standardHalfDayHours || 4.0; // Half Day Limit (e.g. 4)
     
+    let overtimeBaseHours = F;
+    
     if (employee.shiftStart && employee.shiftEnd) {
       try {
         const [startH, startM] = employee.shiftStart.split(':').map(Number);
@@ -466,6 +468,7 @@ class Database {
         
         F = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
         h = F / 2.0;
+        overtimeBaseHours = shiftHours;
       } catch (err) {
         console.warn(`[calculateShift] Failed to parse custom shift times for ${employee.name}:`, err.message);
       }
@@ -537,7 +540,7 @@ class Database {
         otHours = 0.0;
         calculatedWage = dailyRate;
       } else {
-        const exactOT = totalHours - F;
+        const exactOT = totalHours - overtimeBaseHours;
         if (exactOT > 0) {
           const otMinutes = Math.round(exactOT * 60);
           if (otMinutes < 50) {
@@ -550,7 +553,7 @@ class Database {
         } else {
           otHours = 0.0;
         }
-        calculatedWage = Number((dailyRate + (otHours * (dailyRate / 10.0))).toFixed(2));
+        calculatedWage = Number((dailyRate + (otHours * hourlyRate)).toFixed(2));
       }
     } else if (totalHours >= h || forceHalfDay) {
       // Half Day + Extra Hours
@@ -667,7 +670,7 @@ class Database {
     if (!db.cameraEvents) db.cameraEvents = [];
 
     // Ensure event metadata
-    event.id = event.id || `cam_${Date.now()}`;
+    event.id = event.id || `cam_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
     event.employeeName = event.employeeName || '';
     event.eventType = event.eventType || 'entry';
     event.siteName = event.siteName || 'Office';
@@ -720,7 +723,7 @@ class Database {
     const db = this.read();
     if (!db.cctvCameras) db.cctvCameras = [];
 
-    camera.id = camera.id || `cctv_${Date.now()}`;
+    camera.id = camera.id || `cctv_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
     camera.name = camera.name || 'CCTV Camera';
     camera.source = camera.source || '';
     camera.siteId = camera.siteId || '';
@@ -765,7 +768,7 @@ class Database {
     }
 
     // Set defaults
-    record.id = record.id || `att_${Date.now()}`;
+    record.id = record.id || `att_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
     record.employeeName = employee.name;
     record.date = record.date || new Date().toISOString().split('T')[0];
     record.regularHours = Number(record.regularHours) || 0.0;
@@ -949,6 +952,54 @@ class Database {
       }
     };
 
+    // Robust Out-of-Order and Split-Message Merging logic
+    const isStandardPunch = parsedData.extractedAction === 'in' || parsedData.extractedAction === 'out' || parsedData.extractedAction === 'completed';
+    if (existingLogIndex >= 0 && isStandardPunch) {
+      const existing = db.attendance[existingLogIndex];
+      const incomingTimeStr = parsedData.checkInTime || parsedData.checkOutTime || getFallbackTimestamp();
+      
+      if (existing && existing.checkIn) {
+        const existingCheckInTime = new Date(existing.checkIn).getTime();
+        const incomingTime = new Date(incomingTimeStr).getTime();
+        
+        if (!existing.checkOut) {
+          // Case 1: Existing check-in exists, check-out is null
+          if (incomingTime - existingCheckInTime >= 3 * 60 * 60 * 1000) {
+            // New time is >= 3 hours after existing check-in -> treat as check-out
+            console.log(`[Database] Employee ${employee.name} already checked in at ${existing.checkIn}. Converting subsequent message to check-out.`);
+            parsedData.extractedAction = 'out';
+            parsedData.checkOutTime = incomingTimeStr;
+            parsedData.checkInTime = null;
+          } else if (existingCheckInTime - incomingTime >= 3 * 60 * 60 * 1000) {
+            // New time is >= 3 hours BEFORE existing check-in -> treat new time as check-in, existing as check-out
+            console.log(`[Database] Employee ${employee.name} has check-in at ${existing.checkIn}. Incoming time ${incomingTimeStr} is earlier. Shifting check-in to check-out.`);
+            parsedData.extractedAction = 'out';
+            parsedData.checkOutTime = existing.checkIn;
+            parsedData.checkInTime = incomingTimeStr;
+            existing.checkIn = incomingTimeStr;
+          }
+        } else {
+          // Case 2: Existing check-in and check-out are both set
+          const existingCheckOutTime = new Date(existing.checkOut).getTime();
+          if (incomingTime < existingCheckInTime) {
+            // New time is earlier than check-in -> update check-in
+            console.log(`[Database] Employee ${employee.name} already has full shift. Incoming time ${incomingTimeStr} is earlier than check-in. Updating check-in.`);
+            existing.checkIn = incomingTimeStr;
+            parsedData.extractedAction = 'out';
+            parsedData.checkOutTime = existing.checkOut;
+            parsedData.checkInTime = incomingTimeStr;
+          } else if (incomingTime > existingCheckOutTime) {
+            // New time is later than check-out -> update check-out
+            console.log(`[Database] Employee ${employee.name} already has full shift. Incoming time ${incomingTimeStr} is later than check-out. Updating check-out.`);
+            existing.checkOut = incomingTimeStr;
+            parsedData.extractedAction = 'out';
+            parsedData.checkOutTime = incomingTimeStr;
+            parsedData.checkInTime = existing.checkIn;
+          }
+        }
+      }
+    }
+
     if (parsedData.extractedAction === 'completed') {
       // Option 1 Completed Range (Both times supplied in single text)
       const record = {
@@ -1055,7 +1106,14 @@ class Database {
     } else if (parsedData.extractedAction === 'out-for-lunch') {
       if (existingLogIndex >= 0) {
         const existing = db.attendance[existingLogIndex];
-        existing.messageText = existing.messageText ? `${existing.messageText} | ${rawText}` : rawText;
+        if (existing.messageText) {
+          const parts = existing.messageText.split(' | ').map(p => p.trim());
+          if (!parts.includes(rawText.trim())) {
+            existing.messageText = [...parts, rawText.trim()].join(' | ');
+          }
+        } else {
+          existing.messageText = rawText;
+        }
         existing.status = 'out-for-lunch';
         if (parsedData.breakStart) existing.breakStart = parsedData.breakStart;
         if (parsedData.breakEnd) existing.breakEnd = parsedData.breakEnd;
@@ -1095,13 +1153,27 @@ class Database {
         const existing = db.attendance[existingLogIndex];
         // Apply check-out
         existing.checkOut = timestamp;
-        existing.messageText += ` | ${rawText}`;
-        if (parsedData.travelHours) {
-          existing.travelHours = (existing.travelHours || 0.0) + parsedData.travelHours;
+        
+        let isNewMessageText = true;
+        if (existing.messageText) {
+          const parts = existing.messageText.split(' | ').map(p => p.trim());
+          if (parts.includes(rawText.trim())) {
+            isNewMessageText = false;
+          } else {
+            existing.messageText = [...parts, rawText.trim()].join(' | ');
+          }
+        } else {
+          existing.messageText = rawText;
         }
-        if (parsedData.isHospitalCase) {
-          existing.isHospitalCase = true;
-          existing.hospitalHours = (existing.hospitalHours || 0.0) + parsedData.hospitalHours;
+
+        if (isNewMessageText) {
+          if (parsedData.travelHours) {
+            existing.travelHours = (existing.travelHours || 0.0) + parsedData.travelHours;
+          }
+          if (parsedData.isHospitalCase) {
+            existing.isHospitalCase = true;
+            existing.hospitalHours = (existing.hospitalHours || 0.0) + parsedData.hospitalHours;
+          }
         }
         return this.saveAttendance(existing);
       } else {
@@ -1499,7 +1571,7 @@ class Database {
       
       const otHours = adj.otHours !== undefined ? Number(adj.otHours) : Number(defaultOtHours.toFixed(2));
       const otPayout = isDailyWageWorker
-        ? Number((otHours * (dailyRate / 10.0)).toFixed(2))
+        ? Number((otHours * hourlyRate).toFixed(2))
         : Number((otHours * hourlyRate * overtimeRateMultiplier).toFixed(2));
       
       // Travel Time Hours
@@ -1664,18 +1736,18 @@ class Database {
               const manualWage = Number(log.calculatedWage) || 0.0;
               if (isFriday) {
                 const manualOt = Number(log.otHours) || 0.0;
-                const otPayout = Number((manualOt * (dailyRate / 10.0)).toFixed(2));
+                const otPayout = Number((manualOt * hourlyRate).toFixed(2));
                 dailyWage = Math.max(0, Number((manualWage - otPayout).toFixed(2)));
               } else {
                 dailyWage = manualWage;
                 const dailyOtHours = Number(log.otHours) || 0.0;
-                weeklyOtPay += Number((dailyOtHours * (dailyRate / 10.0)).toFixed(2));
+                weeklyOtPay += Number((dailyOtHours * hourlyRate).toFixed(2));
               }
             } else {
               if (hours >= F && !forceHalfDay) {
                 dailyWage = dailyRate;
                 if (!isFriday) {
-                  const dayOtPay = Number((otHours * (dailyRate / 10.0)).toFixed(2));
+                  const dayOtPay = Number((otHours * hourlyRate).toFixed(2));
                   weeklyOtPay += dayOtPay;
                   dailyWage += dayOtPay;
                 }
@@ -1837,7 +1909,7 @@ class Database {
     if (index >= 0) {
       db.selfies[index] = { ...db.selfies[index], ...selfie };
     } else {
-      selfie.id = selfie.id || `selfie_${Date.now()}`;
+      selfie.id = selfie.id || `selfie_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
       selfie.createdAt = new Date().toISOString();
       db.selfies.push(selfie);
     }
