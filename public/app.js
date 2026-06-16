@@ -254,6 +254,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Set default filter date to today in log view
   document.getElementById('log-filter-date').value = state.selectedFilterDate;
+  const punchesFilterDate = document.getElementById('punches-filter-date');
+  if (punchesFilterDate) {
+    punchesFilterDate.value = state.selectedFilterDate;
+  }
 
   // Set default filter month for payroll
   const payrollMonthInput = document.getElementById('payroll-month');
@@ -286,6 +290,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (window.lucide) {
     window.lucide.createIcons();
   }
+
+  // ── Auto-Refresh: silently reload attendance & dashboard data every 30 seconds ──
+  // This ensures new WhatsApp check-ins appear without requiring a manual Refresh click.
+  setInterval(async () => {
+    try {
+      // Only fetch if the attendance or dashboard tab is visible (save resources)
+      if (state.activeTab === 'logs' || state.activeTab === 'dashboard') {
+        await loadAttendanceLogs();
+      }
+      // Always refresh stats/counts in background for the header counters
+      const statsRes = await fetch('/api/stats').then(r => r.json()).catch(() => null);
+      if (statsRes && typeof updateStatCards === 'function') {
+        updateStatCards(statsRes);
+      }
+    } catch (e) {
+      // Silent fail — auto-refresh should never break the UI
+    }
+  }, 30000); // every 30 seconds
+
 
   // Register Service Worker for PWA Standalone App Install on Dashboard
   if ('serviceWorker' in navigator) {
@@ -356,6 +379,11 @@ function populateFilterDropdowns() {
     const siteOptionsHtml = state.sites.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
     cameraSiteFilter.innerHTML = `<option value="">-- All Sites --</option>` + siteOptionsHtml;
   }
+  const punchesSiteFilter = document.getElementById('punches-filter-site');
+  if (punchesSiteFilter) {
+    const siteOptionsHtml = state.sites.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+    punchesSiteFilter.innerHTML = `<option value="">-- All Sites --</option>` + siteOptionsHtml;
+  }
   
   const empModeFilter = document.getElementById('emp-filter-mode');
   const payModeFilter = document.getElementById('pay-filter-mode');
@@ -418,6 +446,11 @@ function switchTab(tabName) {
     case 'logs':
       title.textContent = "Attendance Master Log";
       subtitle.textContent = "Analyze daily logs, apply manual adjustments, and export wage CSVs";
+      loadAttendanceLogs();
+      break;
+    case 'punches':
+      title.textContent = "Punches Master Registry";
+      subtitle.textContent = "Track and filter the chronological check-in and check-out punches for all employees";
       loadAttendanceLogs();
       break;
     case 'travel':
@@ -1098,8 +1131,12 @@ async function loadAttendanceLogs() {
     const r = await fetch(url).then(r => r.json());
     state.attendance = r;
     
+    // Sync date filters across views
+    syncDateFilterInputs();
+    
     // Apply filters which will trigger standard table rendering
     applyFiltersLogs();
+    applyFiltersPunches();
     if (typeof applyFiltersTravel === 'function') {
       applyFiltersTravel();
     }
@@ -1161,7 +1198,7 @@ function renderAttendanceLogsTable(r) {
   tbody.innerHTML = "";
   
   if (r.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: var(--text-tertiary);">No attendance logs match the filter criteria.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" style="text-align: center; color: var(--text-tertiary);">No attendance logs match the filter criteria.</td></tr>`;
     return;
   }
 
@@ -1245,6 +1282,24 @@ function renderAttendanceLogsTable(r) {
         ${row.messageText ? `<span class="cell-sub-desc" title="${row.messageText}">Text: ${row.messageText.substring(0, 30)}${row.messageText.length > 30 ? '...' : ''}</span>` : ''}
       </td>
       <td>${statusBadge}</td>
+      <td>
+        ${row.punches && row.punches.length > 0 ? `
+          <div class="punches-timeline" style="font-size: 0.75rem;">
+            <strong style="color: var(--color-primary); font-size: 0.75rem; display: block; margin-bottom: 2px;">Punches (${row.punches.length}):</strong>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+              ${row.punches.map(p => {
+                let tStr = "—";
+                try {
+                  tStr = new Date(p.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                } catch(e) {}
+                const badgeClass = p.type === 'in' ? 'badge-blue' : 'badge-purple';
+                const srcStr = p.source ? ` (${p.source})` : '';
+                return `<span class="badge ${badgeClass}" style="font-size: 0.7rem; padding: 2px 5px; border-radius: 4px; display: inline-flex; align-items: center;" title="${p.siteName}">${p.type.toUpperCase()} ${tStr}${srcStr}</span>`;
+              }).join('')}
+            </div>
+          </div>
+        ` : '—'}
+      </td>
       <td>${row.siteName}</td>
       <td>${inTime}</td>
       <td>${outTime}</td>
@@ -1262,6 +1317,156 @@ function renderAttendanceLogsTable(r) {
           ` : ''}
         </div>
       </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  if (window.lucide) {
+    window.lucide.createIcons();
+  }
+}
+
+function applyFiltersPunches() {
+  const searchQuery = document.getElementById('punches-search-input')?.value.toLowerCase().trim() || '';
+  const siteFilter = document.getElementById('punches-filter-site')?.value || '';
+  const statusFilter = document.getElementById('punches-filter-status')?.value || '';
+  const countFilter = document.getElementById('punches-filter-count')?.value || '';
+  
+  let filtered = [...state.attendance];
+  
+  if (statusFilter) {
+    filtered = filtered.filter(row => row.status === statusFilter);
+  }
+  
+  if (countFilter) {
+    filtered = filtered.filter(row => {
+      const num = row.punches ? row.punches.length : 0;
+      if (countFilter === 'has-punches') return num > 0;
+      if (countFilter === 'no-punches') return num === 0;
+      if (countFilter === 'multi-punches') return num > 2;
+      return true;
+    });
+  }
+  
+  if (siteFilter) {
+    filtered = filtered.filter(row => {
+      const mainSiteMatch = row.siteName === siteFilter;
+      const punchSiteMatch = row.punches && row.punches.some(p => p.siteName === siteFilter);
+      return mainSiteMatch || punchSiteMatch;
+    });
+  }
+  
+  if (searchQuery) {
+    filtered = filtered.filter(row => {
+      const numPunches = row.punches ? row.punches.length.toString() : '0';
+      return (
+        row.employeeName.toLowerCase().includes(searchQuery) ||
+        (row.userId && row.userId.toLowerCase().includes(searchQuery)) ||
+        row.siteName.toLowerCase().includes(searchQuery) ||
+        row.status.toLowerCase().includes(searchQuery) ||
+        row.date.includes(searchQuery) ||
+        numPunches.includes(searchQuery)
+      );
+    });
+  }
+  
+  renderPunchesTable(filtered);
+}
+
+function renderPunchesTable(r) {
+  const tbody = document.getElementById('punches-table-body');
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  
+  if (r.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-tertiary);">No punches logs match the filter criteria.</td></tr>`;
+    return;
+  }
+  
+  // Sort: Date ascending, Name ascending
+  r.sort((a, b) => a.date.localeCompare(b.date) || a.employeeName.localeCompare(b.employeeName));
+  
+  r.forEach(row => {
+    const tr = document.createElement('tr');
+    
+    let statusBadge = `<span class="badge badge-secondary">Inactive</span>`;
+    if (row.status === 'checked-in') {
+      statusBadge = `<span class="badge badge-blue">Checked-In</span>`;
+      tr.className = "table-row-checked-in";
+    } else if (row.status === 'completed') {
+      statusBadge = `<span class="badge badge-green">Present</span>`;
+    } else if (row.status === 'absent') {
+      statusBadge = `<span class="badge badge-red">Absent</span>`;
+      tr.className = "table-row-absent";
+    } else if (row.status === 'leave') {
+      statusBadge = `<span class="badge badge-amber">Leave</span>`;
+    } else if (row.status === 'late') {
+      statusBadge = `<span class="badge badge-orange">Late (Pending)</span>`;
+      if (!row.checkOut) tr.className = "table-row-checked-in";
+    } else if (row.status === 'Late Check-in') {
+      statusBadge = `<span class="badge badge-orange">Late Check-in</span>`;
+      if (!row.checkOut) tr.className = "table-row-checked-in";
+    } else if (row.status === 'Early Check-out') {
+      statusBadge = `<span class="badge badge-orange">Early Check-out</span>`;
+    } else if (row.status === 'half-day leave') {
+      statusBadge = `<span class="badge badge-purple">Half Day</span>`;
+    } else if (row.status === 'out-for-lunch') {
+      statusBadge = `<span class="badge badge-blue">Out for Lunch</span>`;
+      tr.className = "table-row-checked-in";
+    }
+    
+    const firstIn = row.checkIn ? new Date(row.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
+    const lastOut = row.checkOut ? new Date(row.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
+    const numPunches = row.punches ? row.punches.length : 0;
+    
+    let timelineHTML = "—";
+    if (row.punches && row.punches.length > 0) {
+      timelineHTML = `
+        <div class="punches-timeline-container" style="display: flex; flex-wrap: wrap; gap: 8px;">
+          ${row.punches.map((p, idx) => {
+            let tStr = "—";
+            try {
+              tStr = new Date(p.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } catch(e) {}
+            const badgeClass = p.type === 'in' ? 'badge-blue' : 'badge-purple';
+            const srcStr = p.source ? ` [${p.source}]` : '';
+            return `
+              <div class="punch-item" style="display: inline-flex; align-items: center; gap: 4px; margin-bottom: 2px;">
+                <span class="badge ${badgeClass}" style="font-size: 0.7rem; padding: 3px 6px; border-radius: 4px;" title="${p.siteName}">
+                  <strong>#${idx + 1} ${p.type.toUpperCase()}:</strong> ${tStr}${srcStr}
+                </span>
+                <span style="font-size: 0.65rem; color: var(--text-tertiary);">(${p.siteName})</span>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+    
+    let sitesVisited = "—";
+    if (row.punches && row.punches.length > 0) {
+      const sites = [...new Set(row.punches.map(p => p.siteName).filter(Boolean))];
+      sitesVisited = sites.map(s => `<span class="badge badge-secondary" style="font-size: 0.7rem; padding: 2px 5px; border-radius: 4px;">${s}</span>`).join(' ');
+    } else if (row.siteName) {
+      sitesVisited = `<span class="badge badge-secondary" style="font-size: 0.7rem; padding: 2px 5px; border-radius: 4px;">${row.siteName}</span>`;
+    }
+    
+    tr.innerHTML = `
+      <td><strong>${row.date}</strong></td>
+      <td>
+        <span class="worker-primary-name">${row.employeeName}</span>
+        ${row.messageText ? `<span class="cell-sub-desc" title="${row.messageText}">Text: ${row.messageText.substring(0, 30)}${row.messageText.length > 30 ? '...' : ''}</span>` : ''}
+      </td>
+      <td>${statusBadge}</td>
+      <td><strong>${firstIn}</strong></td>
+      <td><strong>${lastOut}</strong></td>
+      <td>
+        <span class="badge badge-orange" style="font-size: 0.75rem; padding: 4px 8px; font-weight: bold; border-radius: 6px;">
+          ${numPunches} Punch${numPunches !== 1 ? 'es' : ''}
+        </span>
+      </td>
+      <td>${timelineHTML}</td>
+      <td>${sitesVisited}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -1678,6 +1883,7 @@ function openEmployeeModal() {
   document.getElementById('emp-pf-enabled').checked = true;
   document.getElementById('emp-esic-enabled').checked = true;
   document.getElementById('emp-pt-enabled').checked = true;
+  document.getElementById('emp-fixed-salary').checked = false;
   
   const durationEl = document.getElementById('emp-shift-duration-info');
   if (durationEl) {
@@ -1842,6 +2048,7 @@ function editEmployee(id) {
   document.getElementById('emp-pf-enabled').checked = emp.pfEnabled !== false;
   document.getElementById('emp-esic-enabled').checked = emp.esicEnabled !== false;
   document.getElementById('emp-pt-enabled').checked = emp.ptEnabled !== false;
+  document.getElementById('emp-fixed-salary').checked = emp.fixedSalary === true;
 
   // Trigger wage and shift duration calculation for the modal display
   if (typeof window.calculateWages === 'function') {
@@ -1898,6 +2105,7 @@ async function handleEmployeeSubmit(e) {
     pfEnabled: document.getElementById('emp-pf-enabled').checked,
     esicEnabled: document.getElementById('emp-esic-enabled').checked,
     ptEnabled: document.getElementById('emp-pt-enabled').checked,
+    fixedSalary: document.getElementById('emp-fixed-salary').checked,
     status: document.getElementById('emp-status').value
   };
 
@@ -2674,14 +2882,31 @@ async function handleSettingsSubmit(e) {
 }
 
 // --- Date Range Filter adjustments ---
+function syncDateFilterInputs() {
+  const logDate = document.getElementById('log-filter-date');
+  const logStart = document.getElementById('log-filter-start');
+  const logEnd = document.getElementById('log-filter-end');
+
+  const punchDate = document.getElementById('punches-filter-date');
+  const punchStart = document.getElementById('punches-filter-start');
+  const punchEnd = document.getElementById('punches-filter-end');
+
+  if (logDate) logDate.value = state.selectedFilterDate || "";
+  if (punchDate) punchDate.value = state.selectedFilterDate || "";
+
+  if (logStart) logStart.value = state.selectedRangeStart || "";
+  if (punchStart) punchStart.value = state.selectedRangeStart || "";
+
+  if (logEnd) logEnd.value = state.selectedRangeEnd || "";
+  if (punchEnd) punchEnd.value = state.selectedRangeEnd || "";
+}
+
 function handleTargetDateChange() {
   const dateVal = document.getElementById('log-filter-date').value;
   if (dateVal) {
     state.selectedFilterDate = dateVal;
     state.selectedRangeStart = "";
     state.selectedRangeEnd = "";
-    document.getElementById('log-filter-start').value = "";
-    document.getElementById('log-filter-end').value = "";
   }
   loadAttendanceLogs();
 }
@@ -2693,8 +2918,29 @@ function checkRangeChange() {
   if (start && end) {
     state.selectedRangeStart = start;
     state.selectedRangeEnd = end;
-    // Clear single date filter value to avoid ambiguity
-    document.getElementById('log-filter-date').value = "";
+    state.selectedFilterDate = "";
+    loadAttendanceLogs();
+  }
+}
+
+function handlePunchesDateChange() {
+  const dateVal = document.getElementById('punches-filter-date').value;
+  if (dateVal) {
+    state.selectedFilterDate = dateVal;
+    state.selectedRangeStart = "";
+    state.selectedRangeEnd = "";
+  }
+  loadAttendanceLogs();
+}
+
+function checkPunchesRangeChange() {
+  const start = document.getElementById('punches-filter-start').value;
+  const end = document.getElementById('punches-filter-end').value;
+  
+  if (start && end) {
+    state.selectedRangeStart = start;
+    state.selectedRangeEnd = end;
+    state.selectedFilterDate = "";
     loadAttendanceLogs();
   }
 }
@@ -2703,11 +2949,6 @@ function resetDateFilters() {
   state.selectedFilterDate = toLocalISOString(new Date()).split('T')[0];
   state.selectedRangeStart = "";
   state.selectedRangeEnd = "";
-  
-  document.getElementById('log-filter-date').value = state.selectedFilterDate;
-  document.getElementById('log-filter-start').value = "";
-  document.getElementById('log-filter-end').value = "";
-  
   loadAttendanceLogs();
 }
 

@@ -77,6 +77,7 @@ function spellCorrectWord(word, employees = [], sites = []) {
   const directMap = {
     // leave keywords
     'leav': 'leave', 'leve': 'leave', 'laeve': 'leave', 'leves': 'leave', 'leavs': 'leave', 'leavin': 'leave', 'leving': 'leave',
+    'live': 'leave',
     // half-day keywords
     'haf': 'half', 'haaf': 'half', 'haff': 'half',
     'dey': 'day', 'da': 'day',
@@ -436,7 +437,7 @@ class AttendanceParser {
     const sessionHalfDayPatterns = [
       // Afternoon / evening / post-lunch = second half leave
       /\b(?:leave|absent|off|not\s+coming|cant\s+come|cannot\s+come|wont\s+come)\b.{0,40}\b(?:afternoon|evening|post[-\s]*lunch|second[-\s]*half|2nd[-\s]*half|lunch\s*break\s*onwards|after\s*lunch)\b/i,
-      /\b(?:afternoon|evening|post[-\s]*lunch|second[-\s]*half|2nd[-\s]*half|after\s*lunch)\b.{0,40}\b(?:leave|absent|off|not\s+coming|session|only)\b/i,
+      /\b(?:afternoon|evening|post[-\s]*lunch|second[-\s]*half|2nd[-\s]*half|after\s*lunch)\b.{0,40}\b(?:leave|absent|off|not\s+coming|only)\b/i,
       /\bon\s+leave\s+(?:for\s+)?(?:the\s+)?afternoon/i,
       /\bon\s+leave\s+(?:for\s+)?(?:the\s+)?evening/i,
       /\bafternoon\s+session\b.{0,20}(?:leave|absent|off)/i,
@@ -444,7 +445,7 @@ class AttendanceParser {
       /\bleave\s+after\s+(?:lunch|noon|12|1\s*pm|one\s*pm)/i,
       // Morning / first half leave
       /\b(?:leave|absent|off|not\s+coming|cant\s+come|cannot\s+come|wont\s+come)\b.{0,40}\b(?:morning|first[-\s]*half|1st[-\s]*half|before\s*lunch|forenoon|am\s*session)\b/i,
-      /\b(?:morning|first[-\s]*half|1st[-\s]*half|before\s*lunch|forenoon|am\s*session)\b.{0,40}\b(?:leave|absent|off|not\s+coming|session|only)\b/i,
+      /\b(?:morning|first[-\s]*half|1st[-\s]*half|before\s*lunch|forenoon|am\s*session)\b.{0,40}\b(?:leave|absent|off|not\s+coming|only)\b/i,
       /\bon\s+leave\s+(?:for\s+)?(?:the\s+)?morning/i,
       /\bmorning\s+session\b.{0,20}(?:leave|absent|off)/i,
       /\b(?:leave|absent|off)\b.{0,20}\bmorning\s+session\b/i,
@@ -505,6 +506,8 @@ class AttendanceParser {
 
   // Parse a single text line/message
   parseSingleLine(cleanLine, dateStr = null, defaultSiteObj = null, rawSender = "", messageTimestamp = null) {
+    const isHalfDayLeave = this.detectIsHalfDayLeave(cleanLine);
+    const isLeave = isHalfDayLeave || this.detectIsLeave(cleanLine);
     const employees = (database.getEmployees() || []).filter(e => e && e.status === 'active');
     const sites = (database.getSites() || []).filter(s => s && s.name);
 
@@ -531,14 +534,40 @@ class AttendanceParser {
     let extractedName = "";
 
     // Filter out employees that are actually known place names
-    const validEmployees = employees.filter(e => 
+    let validEmployees = employees.filter(e => 
       e && e.name && !AttendanceParser.INDIAN_PLACE_NAMES.has(e.name.toLowerCase())
     );
 
+    // Apply supervisor vs office worker rules for Akhil and Anandhu/Ananthu
+    const containsAkhil = /\bakhil\b/i.test(cleanLine);
+    const containsAnandhu = /\b(anandhu|ananthu)\b/i.test(cleanLine);
+
+    if (containsAkhil) {
+      const cleanSender = rawSender ? rawSender.replace(/\D/g, '') : "";
+      if (cleanSender === '918921773873' && isLeave) {
+        // Office worker Akhil P Kumar reporting leave
+        validEmployees = validEmployees.filter(e => e.id !== 'emp_IN063');
+      } else {
+        // Supervisor report for Akhil A K
+        validEmployees = validEmployees.filter(e => e.id !== 'emp_2006');
+      }
+    }
+
+    if (containsAnandhu) {
+      const cleanSender = rawSender ? rawSender.replace(/\D/g, '') : "";
+      if (cleanSender === '917558835311' && isLeave) {
+        // Office worker Anandhu Sunil reporting leave
+        validEmployees = validEmployees.filter(e => e.id !== 'emp_IN064');
+      } else {
+        // Supervisor report for Anandhu Raj
+        validEmployees = validEmployees.filter(e => e.id !== 'emp_2029');
+      }
+    }
+
     // Clean nameLine to isolate the worker name
     let nameLineClean = cleanLine.toLowerCase();
-    // Strip time ranges (e.g. 9-6, 9 to 6)
-    nameLineClean = nameLineClean.replace(/\b\d{1,2}(?:\s*(?:am|pm))?\s*(?:to|-)\s*\d{1,2}(?:\s*(?:am|pm))?\b/gi, '');
+    // Strip time ranges (e.g. 9-6, 9 to 6, 9:30 to 6:00)
+    nameLineClean = nameLineClean.replace(/\b\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?\s*(?:to|-)\s*\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?\b/gi, '');
     // Strip standard standalone times with am/pm (e.g. 9am, 5pm)
     nameLineClean = nameLineClean.replace(/\b\d{1,2}\s*(?:am|pm)\b/gi, '');
     // Strip remaining standalone numbers (e.g. 9, 6)
@@ -629,7 +658,15 @@ class AttendanceParser {
         const phoneMatchedEmployee = validEmployees.find(e => e.phone && e.phone.replace(/\D/g, '') === cleanSender);
         if (phoneMatchedEmployee) {
           // If no employee was matched in the text, or if the text match is weak (confidence < 0.95)
-          if (!matchedEmployee || employeeConfidence < 0.95) {
+          // ONLY override if the matched name is close to the phone-matched name, to prevent supervisors from overriding reported workers
+          let shouldOverride = !matchedEmployee;
+          if (matchedEmployee && employeeConfidence < 0.95) {
+            const similarity = stringSimilarity(matchedEmployee.name, phoneMatchedEmployee.name);
+            if (similarity >= 0.60) {
+              shouldOverride = true;
+            }
+          }
+          if (shouldOverride) {
             matchedEmployee = phoneMatchedEmployee;
             employeeConfidence = 1.0;
             extractedName = phoneMatchedEmployee.name;
@@ -663,30 +700,44 @@ class AttendanceParser {
       }
     }
 
-    // Extract site from delimiters fallback if matchedSite is still null
+    // Extract site from delimiters fallback if matchedSite is still null (skip for leaves)
     let hasFallbackLocation = false;
-    if (!matchedSite && parts.length > 1) {
-      const locationPart = parts.slice(1).find(part => {
-        if (!part) return false;
-        const p = part.toLowerCase().trim();
-        if (p === '—' || p === '' || p === '-') return false;
-        
-        // If the part is ONLY digits/time-range/parentheses/punctuation, reject it
-        const hasTimeOnly = p.match(/^\s*[()\d\s\-:apmto—]+\s*$/i);
-        if (hasTimeOnly) return false;
+    if (!isLeave && !matchedSite && parts.length > 0) {
+      // If we matched an employee, we can check parts[0] as a site candidate, unless parts[0] contains the matched employee's name.
+      // If we did not match an employee, we must skip parts[0] because it is the unrecognized employee name.
+      const startIndex = matchedEmployee
+        ? (parts[0] && parts[0].toLowerCase().includes(matchedEmployee.name.toLowerCase().split(' ')[0]) ? 1 : 0)
+        : 1;
 
-        return !p.match(/\b(in|out|check|site|name)\b/);
-      });
-      if (locationPart) {
-        // Clean any time ranges, digits, or parentheses from the extracted site
-        let cleanedLocation = locationPart
-          .replace(/\b\d{1,2}(?:\s*(?:am|pm))?\s*(?:to|-)\s*\d{1,2}(?:\s*(?:am|pm))?\b/i, '')
-          .replace(/[()]/g, '')
-          .trim();
+      if (parts.length > startIndex) {
+        const locationPart = parts.slice(startIndex).find(part => {
+          if (!part) return false;
+          const p = part.toLowerCase().trim();
+          if (p === '—' || p === '' || p === '-') return false;
+          
+          // If the part is ONLY digits/time-range/parentheses/punctuation, reject it
+          const hasTimeOnly = p.match(/^\s*[()\d\s\-:apmto—.,]+\s*$/i);
+          if (hasTimeOnly) return false;
 
-        if (cleanedLocation.length > 0) {
-          extractedSite = cleanedLocation.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
-          hasFallbackLocation = true;
+          return !p.match(/\b(in|out|check|site|name)\b/);
+        });
+        if (locationPart) {
+          // Clean any time ranges, digits, or parentheses from the extracted site
+          let cleanedLocation = locationPart
+            .replace(/\b\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?\s*(?:to|-)\s*\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?\b/i, '')
+            .replace(/[()]/g, '')
+            .trim();
+
+          if (cleanedLocation.length > 0) {
+            const lowerLoc = cleanedLocation.toLowerCase();
+            const hasSentenceIndicator = /\b(am|will|shall|be|reach|late|early|today|tomorrow|yesterday|going|coming|reached|started|due|because|have|has|had|to|for|with|from|good|morning|afternoon|evening|night|hello|hi|sir|mints|mnts|minute|minutes|hour|hours|hr|hrs|on)\b/i.test(lowerLoc);
+            const wordCount = cleanedLocation.split(/\s+/).length;
+
+            if (!hasSentenceIndicator && cleanedLocation.length <= 35 && wordCount <= 5) {
+              extractedSite = cleanedLocation.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+              hasFallbackLocation = true;
+            }
+          }
         }
       }
     }
@@ -712,10 +763,8 @@ class AttendanceParser {
     // NOTE: detectIsHalfDayLeave is evaluated independently — some half-day patterns
     // (e.g. "leave afternoon session") imply leave AND half-day simultaneously, so we
     // detect half-day FIRST, then fall back to full-leave if not half-day.
-    const isHalfDayLeave = this.detectIsHalfDayLeave(cleanLine);
     const halfDayPeriod = isHalfDayLeave ? this.detectHalfDayPeriod(cleanLine) : null;
     // If message is already identified as half-day, we still confirm it has a leave signal
-    const isLeave = isHalfDayLeave || this.detectIsLeave(cleanLine);
 
     let checkInTimestamp = null;
     let checkOutTimestamp = null;
@@ -1008,8 +1057,21 @@ class AttendanceParser {
     
     let matchedEmployee = null;
     let employeeConfidence = 0.0;
-    
-    
+
+    // 1. Try phone-based lookup first (most reliable — sender is known)
+    if (rawSender) {
+      const cleanSender = rawSender.replace(/\D/g, '');
+      if (cleanSender) {
+        const phoneMatchedEmployee = employees.find(e => e.phone && e.phone.replace(/\D/g, '') === cleanSender);
+        if (phoneMatchedEmployee) {
+          matchedEmployee = phoneMatchedEmployee;
+          employeeConfidence = 1.0;
+          if (!name) name = phoneMatchedEmployee.name;
+        }
+      }
+    }
+
+    // 2. Fallback: name-based text matching
     if (!matchedEmployee && name) {
       const match = smartNameMatch(name, employees);
       if (match) {
@@ -1094,12 +1156,131 @@ class AttendanceParser {
 
   // Central Entry Point - Splits by newlines and handles line-by-line supervisor lists
   parse(rawText, senderPhone = "", messageTimestamp = null) {
+     // Normalize dot-separated times without minutes (e.g., "9.am" -> "9am")
+    let cleanedText = rawText
+      .replace(/\b(\d{1,2})\s*\.\s*(am|pm)\b/gi, '$1$2')
+      .replace(/\b(\d{1,2})\s*[:.]\s*(\d{2})\s*\.\s*(am|pm)\b/gi, '$1:$2$3');
+    // Normalize dot-separated times with minutes but no trailing dot before am/pm (e.g., "3.30 pm" -> "3:30 pm", "3.30-6" -> "3:30-6")
+    cleanedText = cleanedText.replace(/\b(\d{1,2})\.(\d{2})\b/g, '$1:$2');
+
     const todayStr = messageTimestamp
       ? new Date(messageTimestamp).toISOString().split('T')[0]
       : new Date().toISOString().split('T')[0];
-    
+
+    // ============================================================
+    // REGIONAL LANGUAGE TRANSLATION
+    // Translate common attendance messages from Malayalam, Hindi,
+    // Tamil, Kannada, Telugu, Odia etc. to English before parsing.
+    // Each entry maps a native phrase (or substring) to its English equivalent.
+    // ============================================================
+    const regionalPhrases = [
+      // --- Malayalam ---
+      // Leave declarations
+      { pattern: /നാളെ\s*ഞാൻ\s*അവധിയാണ്/i,   replacement: 'I am on leave tomorrow' },
+      { pattern: /ഇന്ന്\s*ഞാൻ\s*അവധിയാണ്/i,   replacement: 'I am on leave today' },
+      { pattern: /ഞാൻ\s*ഇന്ന്\s*അവധിയാണ്/i,   replacement: 'I am on leave today' },
+      { pattern: /ഇന്ന്\s*അവധിയാണ്/i,          replacement: 'I am on leave today' },
+      { pattern: /നാളെ\s*അവധിയാണ്/i,           replacement: 'I am on leave tomorrow' },
+      { pattern: /അവധി\s*ദിനം/i,               replacement: 'I am on leave today' },
+      // Half-day leave
+      { pattern: /ഹാഫ്\s*ഡേ\s*ലീവ്/i,          replacement: 'half day leave' },
+      { pattern: /അര\s*ദിവസം\s*അവധി/i,         replacement: 'half day leave' },
+      // Late arrival
+      { pattern: /ഒരു\s*മണിക്കൂർ\s*വൈകും/i,    replacement: '1 hour late' },
+      { pattern: /(\d+)\s*മണിക്കൂർ\s*വൈകും/i,  replacement: (_, n) => `${n} hour late` },
+      { pattern: /വൈകും/i,                       replacement: 'late' },
+      { pattern: /ഒരു\s*മണിക്കൂർ\s*ലേറ്റ്/i,   replacement: '1 hour late' },
+      { pattern: /(\d+)\s*മണിക്കൂർ\s*ലേറ്റ്/i, replacement: (_, n) => `${n} hour late` },
+      { pattern: /ലേറ്റ്\s*ആകും/i,              replacement: 'late' },
+      // Check-in / check-out
+      { pattern: /ഞാൻ\s*ഓഫീസിൽ\s*എത്തി/i,    replacement: 'checked in at office' },
+      { pattern: /ഓഫീസ്\s*ആയി/i,               replacement: 'checked in at office' },
+      // Sick leave
+      { pattern: /ജ്വരം|പനി|ഇൻഫ്ലുവൻസ/i,      replacement: 'sick leave fever' },
+      { pattern: /ചികിത്സ|ആശുപത്രി/i,           replacement: 'hospital leave' },
+
+      // --- Hindi ---
+      { pattern: /कल\s*मैं\s*छुट्टी\s*पर\s*हूँ/i, replacement: 'I am on leave tomorrow' },
+      { pattern: /आज\s*मैं\s*छुट्टी\s*पर\s*हूँ/i, replacement: 'I am on leave today' },
+      { pattern: /मैं\s*आज\s*छुट्टी\s*पर\s*हूँ/i, replacement: 'I am on leave today' },
+      { pattern: /आज\s*छुट्टी\s*है/i,             replacement: 'I am on leave today' },
+      { pattern: /कल\s*छुट्टी\s*है/i,             replacement: 'I am on leave tomorrow' },
+      { pattern: /मुझे\s*छुट्टी\s*चाहिए/i,        replacement: 'I need leave today' },
+      { pattern: /देर\s*से\s*आऊंगा/i,             replacement: 'will be late' },
+      { pattern: /(\d+)\s*घंटे?\s*देरी/i,         replacement: (_, n) => `${n} hour late` },
+      { pattern: /बुखार|बीमार/i,                  replacement: 'sick leave' },
+
+      // --- Tamil ---
+      { pattern: /நாளை\s*நான்\s*விடுமுறையில்/i,   replacement: 'I am on leave tomorrow' },
+      { pattern: /இன்று\s*நான்\s*விடுமுறையில்/i,  replacement: 'I am on leave today' },
+      { pattern: /நான்\s*இன்று\s*விடுமுறை/i,      replacement: 'I am on leave today' },
+      { pattern: /விடுமுறை/i,                       replacement: 'leave' },
+      { pattern: /காய்ச்சல்|நோய்வாய்ப்பட்டிருக்கிறேன்/i, replacement: 'sick leave' },
+
+      // --- Kannada ---
+      { pattern: /ನಾಳೆ\s*ರಜೆ\s*ಮೇಲೆ\s*ಇದ್ದೇನೆ/i, replacement: 'I am on leave tomorrow' },
+      { pattern: /ಇಂದು\s*ರಜೆ\s*ಮೇಲೆ\s*ಇದ್ದೇನೆ/i, replacement: 'I am on leave today' },
+      { pattern: /ರಜೆ/i,                            replacement: 'leave' },
+
+      // --- Telugu ---
+      { pattern: /రేపు\s*నేను\s*సెలవులో\s*ఉన్నాను/i, replacement: 'I am on leave tomorrow' },
+      { pattern: /నేడు\s*నేను\s*సెలవులో\s*ఉన్నాను/i, replacement: 'I am on leave today' },
+      { pattern: /సెలవు/i,                             replacement: 'leave' },
+
+      // --- Odia ---
+      { pattern: /ଆସନ୍ତା\s*ଛୁଟି/i,  replacement: 'leave tomorrow' },
+      { pattern: /ଆଜି\s*ଛୁଟି/i,     replacement: 'leave today' },
+    ];
+
+    let translatedText = cleanedText;
+    for (const { pattern, replacement } of regionalPhrases) {
+      if (pattern.test(translatedText)) {
+        if (typeof replacement === 'function') {
+          translatedText = translatedText.replace(pattern, replacement);
+        } else {
+          translatedText = translatedText.replace(pattern, replacement);
+        }
+      }
+    }
+
+    // ── Non-Latin Script Safety Guard ──────────────────────────────────────────
+    // If the message still contains significant non-Latin characters AFTER the
+    // translation pass, it means it's a regional-language message that our
+    // dictionary doesn't fully understand. Instead of blindly mis-parsing it as
+    // a check-in, send it to the Exception Board for manual admin review.
+    //
+    // We detect: Malayalam, Hindi/Devanagari, Tamil, Kannada, Telugu, Bengali,
+    //            Gujarati, Odia, Gurmukhi, Arabic, Sinhala scripts etc.
+    const nonLatinScriptRegex = /[\u0900-\u097F\u0D00-\u0D7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0980-\u09FF\u0A80-\u0AFF\u0B00-\u0B7F\u0A00-\u0A7F\u0600-\u06FF\u0D80-\u0DFF]/g;
+    const nonLatinChars = (translatedText.match(nonLatinScriptRegex) || []).length;
+    const totalChars = translatedText.replace(/\s/g, '').length;
+
+    if (nonLatinChars > 0 && totalChars > 0 && (nonLatinChars / totalChars) > 0.25) {
+      // More than 25% of the message is still unrecognised regional script.
+      // Detect which language for a helpful error message.
+      let detectedLang = 'Regional language';
+      if (/[\u0D00-\u0D7F]/.test(translatedText)) detectedLang = 'Malayalam';
+      else if (/[\u0900-\u097F]/.test(translatedText)) detectedLang = 'Hindi/Devanagari';
+      else if (/[\u0B80-\u0BFF]/.test(translatedText)) detectedLang = 'Tamil';
+      else if (/[\u0C80-\u0CFF]/.test(translatedText)) detectedLang = 'Kannada';
+      else if (/[\u0C00-\u0C7F]/.test(translatedText)) detectedLang = 'Telugu';
+      else if (/[\u0980-\u09FF]/.test(translatedText)) detectedLang = 'Bengali';
+
+      console.log(`[Parser] Detected unrecognised ${detectedLang} message. Routing to Exception Board: "${rawText.substring(0, 60)}"`);
+      return {
+        isSuccess: false,
+        reason: `${detectedLang} message — could not auto-parse. Please resolve manually.`,
+        extractedAction: 'in',
+        extractedName: '',
+        extractedSite: '—',
+        confidence: 0,
+        rawSender: senderPhone
+      };
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
     // Preprocess stuck time ranges like "9to6", "9 to6", "9to 6"
-    let preprocessedText = rawText.replace(/(\d+(?:\s*(?:am|pm))?)(to)/gi, '$1 to');
+    let preprocessedText = translatedText.replace(/(\d+(?:\s*(?:am|pm))?)(to)/gi, '$1 to');
     preprocessedText = preprocessedText.replace(/(to)(\d+(?:\s*(?:am|pm))?)/gi, 'to $2');
 
     const employees = (database.getEmployees() || []).filter(e => e && e.status === 'active');
@@ -1212,8 +1393,8 @@ class AttendanceParser {
             travelFromTail: tailTravel ? parseFloat(tailTravel[1]) : 0
           };
         }
-        // Timing: "9-6pm", "9 to 6", "9am to 7pm"
-        const timeRange = line.match(/\b\d{1,2}(?:\s*(?:am|pm))?(?:\s*(?:to|-)\s*\d{1,2}(?:\s*(?:am|pm))?)/i);
+        // Timing: "9-6pm", "9 to 6", "9:30 to 6:00 pm", "3:30-6 pm"
+        const timeRange = line.match(/\b\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?(?:\s*(?:to|-)\s*\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)/i);
         if (timeRange) return { type: 'timing', raw: line };
         // Relative date
         if (/\b(?:yesterday|today|tomorrow|innale|innu|nale)\b/i.test(lower)) return { type: 'date' };
@@ -1259,11 +1440,11 @@ class AttendanceParser {
           } else if (cls.type === 'paren_block') {
             // "(9-6 pm Raju Joseph)2hr travel" — extract timing from inner, rest is site
             const inner = cls.inner;
-            const trm = inner.match(/\b(\d{1,2}(?:\s*(?:am|pm))?)\s*(?:to|-)\s*(\d{1,2}(?:\s*(?:am|pm))?)\b/i);
+            const trm = inner.match(/\b(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s*(?:to|-)\s*(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\b/i);
              if (trm) groupTiming = trm[0];
             // Remove timing from inner to get site hint
             const siteHint = inner
-              .replace(/\b\d{1,2}(?:\s*(?:am|pm))?\s*(?:to|-)\s*\d{1,2}(?:\s*(?:am|pm))?\s*(?:pm|am)?\b/i, '')
+              .replace(/\b\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?\s*(?:to|-)\s*\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?\s*(?:pm|am)?\b/i, '')
               .trim();
             if (siteHint) groupSiteWords.push(siteHint);
             // Travel can be in the tail: "(9-6 site)2 hour travel"
@@ -1500,7 +1681,7 @@ class AttendanceParser {
         }
 
         // B. Check for time range: "9 to 6", "9-6"
-        const isTimeRange = lower.match(/\b\d{1,2}(?:\s*(?:am|pm))?\s*(?:to|-)\s*\d{1,2}(?:\s*(?:am|pm))?\b/i);
+        const isTimeRange = lower.match(/\b\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?\s*(?:to|-)\s*\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?\b/i);
         if (isTimeRange) {
           reportTimeRange = clean;
           return;

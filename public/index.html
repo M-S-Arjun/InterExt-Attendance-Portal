@@ -52,6 +52,10 @@
           <i data-lucide="calendar-range"></i>
           <span>Attendance Log</span>
         </button>
+        <button class="nav-item" onclick="switchTab('punches')">
+          <i data-lucide="fingerprint"></i>
+          <span>Punches Log</span>
+        </button>
         <button class="nav-item" onclick="switchTab('travel')">
           <i data-lucide="navigation"></i>
           <span>Travel Time Log</span>
@@ -358,6 +362,7 @@
                   <th>Date</th>
                   <th>Employee Name</th>
                   <th>Status</th>
+                  <th>Punches</th>
                   <th>Work Site</th>
                   <th>Check-In</th>
                   <th>Check-Out</th>
@@ -369,6 +374,86 @@
                 </tr>
               </thead>
               <tbody id="attendance-table-body">
+                <!-- Generated Dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2.2: PUNCHES TIMELINE VIEW -->
+      <div id="tab-punches" class="tab-view">
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="fingerprint"></i> Employee Punching Timeline</h3>
+            </div>
+            <div class="header-right flex-filters">
+              <div class="filter-group">
+                <label>Target Date</label>
+                <input type="date" id="punches-filter-date" class="form-control" onchange="handlePunchesDateChange()">
+              </div>
+              <div class="filter-group">
+                <label>Range Start</label>
+                <input type="date" id="punches-filter-start" class="form-control" onchange="checkPunchesRangeChange()">
+              </div>
+              <div class="filter-group">
+                <label>Range End</label>
+                <input type="date" id="punches-filter-end" class="form-control" onchange="checkPunchesRangeChange()">
+              </div>
+              <div class="filter-buttons">
+                <button class="btn btn-secondary btn-icon" id="btn-refresh-punches" onclick="refreshWhatsAppLogs()"><i data-lucide="refresh-cw"></i> Refresh</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Punch Log Filters & Search Bar -->
+          <div class="table-control-bar">
+            <div class="table-control-left">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="punches-search-input" class="form-control" placeholder="Search by name, site, or timings..." oninput="applyFiltersPunches()">
+              </div>
+            </div>
+            <div class="table-control-right">
+              <select id="punches-filter-status" class="table-control-select" onchange="applyFiltersPunches()">
+                <option value="">-- All Statuses --</option>
+                <option value="completed">Present</option>
+                <option value="checked-in">Checked-In</option>
+                <option value="late">Late (Pending)</option>
+                <option value="Late Check-in">Late Check-in</option>
+                <option value="Early Check-out">Early Check-out</option>
+                <option value="half-day leave">Half Day</option>
+                <option value="absent">Absent</option>
+                <option value="leave">Leave</option>
+              </select>
+              <select id="punches-filter-count" class="table-control-select" onchange="applyFiltersPunches()">
+                <option value="">-- All Punch Counts --</option>
+                <option value="has-punches">Has Punches (> 0)</option>
+                <option value="no-punches">No Punches (= 0)</option>
+                <option value="multi-punches">Multiple Punches (> 2)</option>
+              </select>
+              <select id="punches-filter-site" class="table-control-select" onchange="applyFiltersPunches()">
+                <option value="">-- All Sites --</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="overflow-x">
+            <table class="data-table" id="punches-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Employee Name</th>
+                  <th>Status</th>
+                  <th>First Check-In</th>
+                  <th>Last Check-Out</th>
+                  <th>Total Punches</th>
+                  <th>Chronological Timings</th>
+                  <th>Sites Visited</th>
+                </tr>
+              </thead>
+              <tbody id="punches-table-body">
                 <!-- Generated Dynamically -->
               </tbody>
             </table>
@@ -1755,6 +1840,10 @@
               <label class="checkbox-container" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
                 <input type="checkbox" id="emp-pt-enabled" checked style="accent-color: var(--color-primary); width: 16px; height: 16px;">
                 <span>Professional Tax (PT) Deduction Enabled</span>
+              </label>
+              <label class="checkbox-container" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
+                <input type="checkbox" id="emp-fixed-salary" style="accent-color: var(--color-primary); width: 16px; height: 16px;">
+                <span>Lock Salary (Fixed Monthly, No LOP Deductions)</span>
               </label>
             </div>
           </div>

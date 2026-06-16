@@ -537,7 +537,7 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
 }
 
 #btn-refresh-logs {
-  min-width: 140px;
+  min-width: 160px;
   justify-content: center;
 }
 
@@ -1379,18 +1379,21 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   min-width: 1600px;
 }
 
-.tab-view#tab-logs .glass-card {
+.tab-view#tab-logs .glass-card,
+.tab-view#tab-punches .glass-card {
   margin-bottom: 0;
 }
 
-.tab-view#tab-logs .overflow-x {
+.tab-view#tab-logs .overflow-x,
+.tab-view#tab-punches .overflow-x {
   height: calc(100vh - 310px);
   border: 1px solid var(--glass-border);
   background-color: rgba(0, 0, 0, 0.08);
   border-radius: var(--border-radius-sm);
 }
 
-.tab-view#tab-logs .data-table {
+.tab-view#tab-logs .data-table,
+.tab-view#tab-punches .data-table {
   min-width: 1200px;
 }
 
@@ -1838,6 +1841,8 @@ textarea.form-control {
   animation: spin 1.2s linear infinite;
   display: inline-block;
   transform-origin: center center;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
   will-change: transform;
 }
 
@@ -2513,10 +2518,10 @@ select.payroll-col-filter {
 }
 
 
-/* Layout table tab views as flex containers to let table card fill remaining height */
 .tab-view#tab-payroll,
 .tab-view#tab-employees,
 .tab-view#tab-logs,
+.tab-view#tab-punches,
 .tab-view#tab-selfies,
 .tab-view#tab-travel {
   display: none;
@@ -2531,6 +2536,7 @@ select.payroll-col-filter {
 .tab-view#tab-payroll.active,
 .tab-view#tab-employees.active,
 .tab-view#tab-logs.active,
+.tab-view#tab-punches.active,
 .tab-view#tab-selfies.active,
 .tab-view#tab-travel.active {
   display: flex;
@@ -2540,6 +2546,7 @@ select.payroll-col-filter {
 .tab-view#tab-payroll .glass-card,
 .tab-view#tab-employees .glass-card,
 .tab-view#tab-logs .glass-card,
+.tab-view#tab-punches .glass-card,
 .tab-view#tab-selfies .glass-card,
 .tab-view#tab-travel .glass-card {
   display: flex;
@@ -2556,6 +2563,7 @@ select.payroll-col-filter {
 .tab-view#tab-payroll .overflow-x,
 .tab-view#tab-employees .overflow-x,
 .tab-view#tab-logs .overflow-x,
+.tab-view#tab-punches .overflow-x,
 .tab-view#tab-selfies .overflow-x,
 .tab-view#tab-travel .overflow-x {
   flex-grow: 1;
