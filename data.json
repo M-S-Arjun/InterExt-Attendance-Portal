@@ -28818,7 +28818,7 @@
     {
       "employeeId": "emp_2025",
       "employeeName": "Prasanth E M",
-      "siteName": "INTEREXT OFFICE",
+      "siteName": "Cavli Wireless Site",
       "date": "2026-06-17",
       "checkIn": "2026-06-17T03:30:00.000Z",
       "checkOut": "2026-06-17T13:00:00.000Z",
@@ -28829,14 +28829,14 @@
         {
           "time": "2026-06-17T03:30:00.000Z",
           "type": "in",
-          "siteName": "INTEREXT OFFICE",
+          "siteName": "Cavli Wireless Site",
           "messageText": "17/06/26 cavli wireless site \n9am to 6.30pm",
           "source": "WhatsApp"
         },
         {
           "time": "2026-06-17T13:00:00.000Z",
           "type": "out",
-          "siteName": "INTEREXT OFFICE",
+          "siteName": "Cavli Wireless Site",
           "messageText": "17/06/26 cavli wireless site \n9am to 6.30pm",
           "source": "WhatsApp"
         }

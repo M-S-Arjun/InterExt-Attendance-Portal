@@ -719,7 +719,7 @@ class AttendanceParser {
           const hasTimeOnly = p.match(/^\s*[()\d\s\-:apmto—.,]+\s*$/i);
           if (hasTimeOnly) return false;
 
-          return !p.match(/\b(in|out|check|site|name)\b/);
+          return !p.match(/\b(in|out|check|name)\b/) && p.trim() !== 'site';
         });
         if (locationPart) {
           // Clean any time ranges, digits, or parentheses from the extracted site
@@ -727,6 +727,11 @@ class AttendanceParser {
             .replace(/\b\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?\s*(?:to|-)\s*\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?\b/i, '')
             .replace(/[()]/g, '')
             .trim();
+
+          if (cleanedLocation.length > 0) {
+            // Strip leading/trailing slashes, dots, dashes, and other non-alphanumeric punctuation
+            cleanedLocation = cleanedLocation.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '').trim();
+          }
 
           if (cleanedLocation.length > 0) {
             const lowerLoc = cleanedLocation.toLowerCase();
@@ -924,6 +929,10 @@ class AttendanceParser {
       } else if (earlyMatch) {
         lineForTimeMatching = cleanLine.replace(earlyMatch[0], '');
       }
+      // Remove explicit dates to prevent date numbers from being parsed as hours (e.g. "17" in "17/06/26")
+      lineForTimeMatching = lineForTimeMatching.replace(/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/g, '');
+      lineForTimeMatching = lineForTimeMatching.replace(/\b\d{1,2}[/-]\d{1,2}\b/g, '');
+      
       const timeRegex = /\b(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)\b/gi;
       const timeMatches = lineForTimeMatching.match(timeRegex) || [];
 
@@ -1802,7 +1811,21 @@ class AttendanceParser {
       }
     }
 
-    if (dataLines.length > 1) {
+    // Count how many lines contain a recognized employee name
+    let matchingEmployeeLinesCount = 0;
+    dataLines.forEach(line => {
+      const lineLower = line.toLowerCase();
+      const hasEmp = employees.some(e => {
+        if (!e || !e.name) return false;
+        const nameParts = e.name.toLowerCase().split(/\s+/);
+        const firstName = nameParts[0];
+        const rx = new RegExp('\\b' + firstName + '\\b', 'i');
+        return firstName.length > 2 && rx.test(lineLower);
+      });
+      if (hasEmp) matchingEmployeeLinesCount++;
+    });
+
+    if (dataLines.length > 1 && matchingEmployeeLinesCount > 1) {
       // Option 2: Consolidated Supervisor Report List!
       console.log(`[Parser] Detected supervisor list with ${dataLines.length} worker lines.`);
       const results = [];
@@ -1827,7 +1850,7 @@ class AttendanceParser {
       };
     } else {
       // Option 1 or standard single check-in text
-      const cleanLine = dataLines[0] ? dataLines[0].toLowerCase() : activeLines[0].toLowerCase();
+      const cleanLine = activeLines.join(' ');
       const targetDates = extractTargetDates(cleanLine, messageTimestamp);
       if (targetDates.length > 1) {
         console.log(`[Parser] Semantic parser identified multi-day entry for dates: ${targetDates.join(', ')}`);
