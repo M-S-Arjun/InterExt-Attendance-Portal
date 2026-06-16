@@ -80,6 +80,10 @@
           <i data-lucide="video"></i>
           <span>Camera Attendance</span>
         </button>
+        <button class="nav-item" onclick="switchTab('unknown')">
+          <i data-lucide="shield-alert"></i>
+          <span>Unknown Visitors</span>
+        </button>
         <button class="nav-item" onclick="switchTab('sites')">
           <i data-lucide="map-pin"></i>
           <span>Work Sites</span>
@@ -813,33 +817,6 @@
             </div>
           </div>
 
-          <!-- Unknown Visitor Logs Section -->
-          <div class="glass-card unknown-detections-card" style="padding: 24px; margin-bottom: 24px; border-top: 1px solid var(--glass-border);">
-            <div class="card-header flex-header" style="padding: 0 0 16px 0; margin-bottom: 16px; border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; align-items: center;">
-              <div class="header-left">
-                <h3 style="font-size: 0.95rem; margin: 0; display: flex; align-items: center; gap: 8px; font-weight: 700;">
-                  <i data-lucide="shield-alert" style="color: var(--color-primary); width: 18px; height: 18px;"></i>
-                  Unknown Visitor Logs
-                </h3>
-                <p style="font-size: 0.75rem; color: var(--text-tertiary); margin: 4px 0 0 0;">
-                  Real-time logs of unknown individuals detected entering or exiting the office premises.
-                </p>
-              </div>
-              <div class="header-right">
-                <button class="btn btn-secondary btn-sm btn-icon" onclick="refreshUnknownDetections()" style="padding: 6px 12px; font-size: 0.8rem; height: 32px;">
-                  <i data-lucide="refresh-cw"></i> Refresh
-                </button>
-              </div>
-            </div>
-
-            <!-- Detections list grid -->
-            <div id="unknown-detections-container" class="unknown-list-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px;">
-              <div class="loading-state" style="grid-column: 1 / -1; text-align: center; padding: 20px; color: var(--text-tertiary);">
-                <p style="margin: 0; font-size: 0.85rem;">No unknown visitor logs recorded today.</p>
-              </div>
-            </div>
-          </div>
-
           <!-- Camera Events History Section -->
           <div class="card-header flex-header" style="border-top: 1px solid var(--glass-border); padding: 18px 24px; margin-top: 24px; margin-bottom: 0;">
             <div class="header-left">
@@ -887,6 +864,35 @@
                 <!-- Generated Dynamically -->
               </tbody>
             </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB: UNKNOWN VISITORS VIEW -->
+      <div id="tab-unknown" class="tab-view">
+        <div class="glass-card unknown-detections-card" style="padding: 24px;">
+          <div class="card-header flex-header" style="padding: 0 0 16px 0; margin-bottom: 16px; border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; align-items: center;">
+            <div class="header-left">
+              <h3 style="font-size: 0.95rem; margin: 0; display: flex; align-items: center; gap: 8px; font-weight: 700;">
+                <i data-lucide="shield-alert" style="color: var(--color-primary); width: 20px; height: 20px;"></i>
+                Unknown Visitor Detection Registry
+              </h3>
+              <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px;">
+                Real-time logs of unknown individuals detected entering or exiting the office premises via CCTV cameras.
+              </p>
+            </div>
+            <div class="header-right">
+              <button class="btn btn-secondary btn-icon" onclick="refreshUnknownDetections()">
+                <i data-lucide="refresh-cw"></i> Refresh Detections
+              </button>
+            </div>
+          </div>
+
+          <!-- Detections list grid -->
+          <div id="unknown-detections-container" class="unknown-list-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; padding-top: 8px;">
+            <div class="loading-state" style="grid-column: 1 / -1; text-align: center; padding: 40px; color: var(--text-tertiary);">
+              <p style="margin: 0; font-size: 0.85rem;">No unknown visitor logs recorded today.</p>
+            </div>
           </div>
         </div>
       </div>

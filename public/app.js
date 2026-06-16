@@ -479,6 +479,10 @@ function switchTab(tabName) {
       refreshCameraEvents();
       initWebcamList();
       loadCctvCameras();
+      break;
+    case 'unknown':
+      title.textContent = "Unknown Visitor Logs";
+      subtitle.textContent = "Real-time logs of unknown individuals detected on CCTV cameras";
       refreshUnknownDetections();
       break;
     case 'sites':
@@ -636,14 +640,14 @@ function registerSocketEvents() {
   });
 
   socket.on('unknown_detection_updated', () => {
-    if (state.activeTab === 'camera') {
+    if (state.activeTab === 'unknown') {
       refreshUnknownDetections();
     }
     TransactionManager.showStatusToast("Unknown visitor detected on CCTV camera!", true);
   });
 
   socket.on('unknown_detection_deleted', () => {
-    if (state.activeTab === 'camera') {
+    if (state.activeTab === 'unknown') {
       refreshUnknownDetections();
     }
   });
