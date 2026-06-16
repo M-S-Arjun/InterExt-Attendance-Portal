@@ -710,6 +710,76 @@ class Database {
     return event;
   }
 
+  getUnknownDetections() {
+    const db = this.read();
+    if (!db.unknownDetections) {
+      db.unknownDetections = [];
+      this.writeAtomic(db);
+    }
+    return db.unknownDetections;
+  }
+
+  saveUnknownDetection(event) {
+    const db = this.read();
+    if (!db.unknownDetections) db.unknownDetections = [];
+
+    event.id = event.id || `unk_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
+    event.cameraName = event.cameraName || 'CCTV Camera';
+    event.siteName = event.siteName || 'Office';
+    event.timestamp = event.timestamp || new Date().toISOString();
+    event.date = event.date || event.timestamp.split('T')[0];
+    event.confidence = event.confidence || 0.0;
+    event.createdAt = event.createdAt || new Date().toISOString();
+
+    if (event.imageBase64) {
+      try {
+        const uploadsDir = path.join(__dirname, 'public', 'uploads', 'camera');
+        if (!fs.existsSync(uploadsDir)) {
+          fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+        const filename = `${event.id}.jpg`;
+        const filepath = path.join(uploadsDir, filename);
+        const buffer = Buffer.from(event.imageBase64, 'base64');
+        fs.writeFileSync(filepath, buffer);
+        event.imageUrl = `/uploads/camera/${filename}`;
+        delete event.imageBase64;
+      } catch (imgErr) {
+        console.warn('[UnknownDetection] Failed to save attached image:', imgErr.message);
+      }
+    }
+
+    const existingIndex = db.unknownDetections.findIndex(e => e.id === event.id);
+    if (existingIndex >= 0) {
+      db.unknownDetections[existingIndex] = { ...db.unknownDetections[existingIndex], ...event };
+    } else {
+      db.unknownDetections.push(event);
+    }
+
+    this.writeAtomic(db);
+    return event;
+  }
+
+  deleteUnknownDetection(id) {
+    const db = this.read();
+    if (!db.unknownDetections) return false;
+    const index = db.unknownDetections.findIndex(e => e.id === id);
+    if (index >= 0) {
+      const event = db.unknownDetections[index];
+      if (event.imageUrl) {
+        try {
+          const filepath = path.join(__dirname, 'public', event.imageUrl);
+          if (fs.existsSync(filepath)) {
+            fs.unlinkSync(filepath);
+          }
+        } catch(e) {}
+      }
+      db.unknownDetections.splice(index, 1);
+      this.writeAtomic(db);
+      return true;
+    }
+    return false;
+  }
+
   // CCTV camera management
   getCctvCameras() {
     const db = this.read();

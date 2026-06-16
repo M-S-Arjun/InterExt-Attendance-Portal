@@ -1040,6 +1040,33 @@ app.post('/api/face/load-embeddings', async (req, res) => {
   }
 });
 
+// GET Unknown Detections
+app.get('/api/unknown-detections', (req, res) => {
+  try {
+    const detections = database.getUnknownDetections();
+    res.json(detections);
+  } catch (err) {
+    console.error('[API] Get unknown detections failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE Unknown Detection
+app.delete('/api/unknown-detections/:id', (req, res) => {
+  try {
+    const success = database.deleteUnknownDetection(req.params.id);
+    if (success) {
+      io.emit('unknown_detection_deleted', req.params.id);
+      res.json({ success: true, message: 'Detection deleted.' });
+    } else {
+      res.status(404).json({ error: 'Detection not found.' });
+    }
+  } catch (err) {
+    console.error('[API] Delete unknown detection failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET CCTV Cameras list
 app.get('/api/cctv', (req, res) => {
   try {
@@ -1150,6 +1177,20 @@ app.post('/api/face/cctv-event', async (req, res) => {
     const { employee_id, confidence, camera_id, camera_name, site_name, event_type, image_base64 } = req.body;
     
     const db = database.read();
+    
+    if (employee_id === 'unknown') {
+      const unknownEvent = {
+        cameraName: camera_name || 'CCTV Camera',
+        siteName: site_name || 'Office',
+        timestamp: new Date().toISOString(),
+        confidence: confidence || 0.0,
+        imageBase64: image_base64
+      };
+      const saved = database.saveUnknownDetection(unknownEvent);
+      io.emit('unknown_detection_updated', saved);
+      return res.json({ success: true, status: 'unknown_logged', detection: saved });
+    }
+    
     let employee = resolveEmployeeFromFaceId(employee_id, db.employees || []);
     
     if (!employee) {

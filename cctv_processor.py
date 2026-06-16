@@ -483,9 +483,10 @@ class CCTVStreamProcessor(threading.Thread):
         track["approaching"] = False
         track["door_open_seen"] = False
 
+        is_unknown = False
         if not emp_id:
-            logger.info(f"[{self.name}] [Sequence Rejected] Target crossed but could not be mapped to employee database.")
-            return
+            emp_id = "unknown"
+            is_unknown = True
 
         # Anti-spoofing validation (Liveness + Motion checks)
         if not track["liveness_passed"]:

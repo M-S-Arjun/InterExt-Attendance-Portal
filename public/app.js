@@ -479,6 +479,7 @@ function switchTab(tabName) {
       refreshCameraEvents();
       initWebcamList();
       loadCctvCameras();
+      refreshUnknownDetections();
       break;
     case 'sites':
       title.textContent = "Work Sites Registry";
@@ -631,6 +632,19 @@ function registerSocketEvents() {
   socket.on('selfie_updated', (selfie) => {
     if (state.activeTab === 'selfies') {
       loadSelfieLogs();
+    }
+  });
+
+  socket.on('unknown_detection_updated', () => {
+    if (state.activeTab === 'camera') {
+      refreshUnknownDetections();
+    }
+    TransactionManager.showStatusToast("Unknown visitor detected on CCTV camera!", true);
+  });
+
+  socket.on('unknown_detection_deleted', () => {
+    if (state.activeTab === 'camera') {
+      refreshUnknownDetections();
     }
   });
 }
@@ -1492,6 +1506,98 @@ async function refreshCameraEvents() {
     resetCameraEventForm();
   } catch (err) {
     console.error("Failed to refresh camera events:", err);
+  }
+}
+
+// Unknown Detections Loaders
+async function refreshUnknownDetections() {
+  try {
+    const resp = await fetch('/api/unknown-detections');
+    if (!resp.ok) throw new Error(`Unknown detections load failed (${resp.status})`);
+    const detections = await resp.json();
+    renderUnknownDetections(detections);
+  } catch (err) {
+    console.error("Failed to refresh unknown detections:", err);
+  }
+}
+
+function renderUnknownDetections(detections) {
+  const container = document.getElementById('unknown-detections-container');
+  if (!container) return;
+  container.innerHTML = "";
+
+  if (!detections || detections.length === 0) {
+    container.innerHTML = `<div class="loading-state" style="grid-column: 1 / -1; text-align: center; padding: 20px; color: var(--text-tertiary);"><p style="margin: 0; font-size: 0.85rem;">No unknown visitor logs recorded today.</p></div>`;
+    return;
+  }
+
+  // Sort by timestamp descending
+  detections.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+  detections.forEach(det => {
+    const card = document.createElement('div');
+    card.className = "glass-card";
+    card.style.padding = "16px";
+    card.style.display = "flex";
+    card.style.flexDirection = "column";
+    card.style.gap = "12px";
+    card.style.position = "relative";
+    card.style.border = "1px solid var(--glass-border)";
+    card.style.borderRadius = "var(--border-radius-md)";
+    card.style.background = "rgba(255, 107, 0, 0.03)";
+
+    const dateStr = new Date(det.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+    const timeStr = new Date(det.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const imgHTML = det.imageUrl 
+      ? `<div style="width: 100%; height: 140px; border-radius: 8px; overflow: hidden; border: 1px solid var(--glass-border); cursor: pointer;" onclick="openImageModal('${det.imageUrl}')" title="Click to view full image">
+           <img src="${det.imageUrl}" style="width: 100%; height: 100%; object-fit: cover;">
+         </div>`
+      : `<div style="width: 100%; height: 140px; border-radius: 8px; background: rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; color: var(--text-tertiary);">
+           <i data-lucide="image" style="width: 32px; height: 32px;"></i>
+         </div>`;
+
+    card.innerHTML = `
+      ${imgHTML}
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="font-size: 0.85rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 6px;">
+          <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-primary);"></span>
+          Unknown Visitor
+        </div>
+        <div style="font-size: 0.72rem; color: var(--text-secondary); display: flex; justify-content: space-between;">
+          <span>Date: ${dateStr}</span>
+          <span>Time: ${timeStr}</span>
+        </div>
+        <div style="font-size: 0.72rem; color: var(--text-tertiary);">
+          Location: ${det.siteName || 'Office'} (${det.cameraName || 'CCTV'})
+        </div>
+      </div>
+      <div style="margin-top: auto; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 0.7rem; color: var(--text-tertiary);">Conf: ${(det.confidence * 100).toFixed(0)}%</span>
+        <button class="btn btn-secondary btn-sm" onclick="handleDeleteUnknown('${det.id}')" style="padding: 4px 8px; font-size: 0.75rem; height: 26px; color: var(--color-red); border-color: rgba(239, 68, 68, 0.2);" title="Clear Log">
+          <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i> Clear
+        </button>
+      </div>
+    `;
+
+    container.appendChild(card);
+  });
+
+  if (window.lucide) {
+    window.lucide.createIcons();
+  }
+}
+
+async function handleDeleteUnknown(id) {
+  if (!confirm("Are you sure you want to clear this visitor log?")) return;
+  try {
+    const resp = await fetch(`/api/unknown-detections/${id}`, { method: 'DELETE' });
+    if (!resp.ok) throw new Error(`Failed to delete detection (${resp.status})`);
+    TransactionManager.showStatusToast("Visitor log cleared successfully.");
+    await refreshUnknownDetections();
+  } catch (err) {
+    console.error("Error deleting detection:", err);
+    TransactionManager.showStatusToast("Failed to clear visitor log.", true);
   }
 }
 
