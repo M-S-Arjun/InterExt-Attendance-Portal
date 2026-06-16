@@ -28570,7 +28570,7 @@
       "date": "2026-06-18",
       "checkIn": "2026-06-18T04:30:00.000Z",
       "checkOut": null,
-      "messageText": "I will be a little late to reach the office today. (Hospital Case)",
+      "messageText": "I will be a little late to reach the office today. (Hospital Case) | I will be a little late to reach the office today. (Hospital Case)\n10.30",
       "status": "late",
       "isLate": true,
       "isHospitalCase": true,
@@ -28655,7 +28655,7 @@
       "employeeName": "Anusree Subramanian",
       "siteName": "INTEREXT OFFICE",
       "date": "2026-06-18",
-      "checkIn": "2026-06-18T07:30:00.000Z",
+      "checkIn": "2026-06-18T04:30:00.000Z",
       "checkOut": null,
       "messageText": "1/2 an hour late to office",
       "status": "late",
@@ -28666,7 +28666,7 @@
       "travelHours": 0,
       "punches": [
         {
-          "time": "2026-06-18T07:30:00.000Z",
+          "time": "2026-06-18T04:30:00.000Z",
           "type": "in",
           "siteName": "INTEREXT OFFICE",
           "messageText": "1/2 an hour late to office",
@@ -28814,6 +28814,44 @@
       "calculatedWage": 0,
       "isHospitalExempt": false,
       "duration": 0
+    },
+    {
+      "employeeId": "emp_2025",
+      "employeeName": "Prasanth E M",
+      "siteName": "INTEREXT OFFICE",
+      "date": "2026-06-17",
+      "checkIn": "2026-06-17T03:30:00.000Z",
+      "checkOut": "2026-06-17T13:00:00.000Z",
+      "messageText": "17/06/26 cavli wireless site \n9am to 6.30pm",
+      "status": "completed",
+      "travelHours": 0,
+      "punches": [
+        {
+          "time": "2026-06-17T03:30:00.000Z",
+          "type": "in",
+          "siteName": "INTEREXT OFFICE",
+          "messageText": "17/06/26 cavli wireless site \n9am to 6.30pm",
+          "source": "WhatsApp"
+        },
+        {
+          "time": "2026-06-17T13:00:00.000Z",
+          "type": "out",
+          "siteName": "INTEREXT OFFICE",
+          "messageText": "17/06/26 cavli wireless site \n9am to 6.30pm",
+          "source": "WhatsApp"
+        }
+      ],
+      "id": "att_1781761646028_38524",
+      "regularHours": 8,
+      "otHours": 0,
+      "extraHours": 0,
+      "isHalfDay": false,
+      "isFullDay": true,
+      "calculatedWage": 1033.33,
+      "isLate": false,
+      "isHospitalExempt": false,
+      "duration": 570,
+      "isEarlyCheckout": false
     }
   ],
   "settings": {
@@ -30011,6 +30049,46 @@
       "extractedSite": ". Teressa Piravom",
       "extractedAction": "out",
       "extractedDate": "2026-06-17"
+    },
+    {
+      "id": "msg_1781761645894_482170",
+      "timestamp": "2026-06-18T05:47:26.000Z",
+      "sender": "917907932036",
+      "messageText": "17/06/26 cavli wireless site",
+      "reason": "Worker name unrecognized",
+      "extractedName": "// cavli wireless site",
+      "extractedSite": "INTEREXT OFFICE",
+      "extractedAction": "completed"
+    },
+    {
+      "id": "msg_1781761645960_203803",
+      "timestamp": "2026-06-18T05:47:26.000Z",
+      "sender": "917907932036",
+      "messageText": "9am to 6.30pm",
+      "reason": "Worker name unrecognized",
+      "extractedName": ".",
+      "extractedSite": "INTEREXT OFFICE",
+      "extractedAction": "completed"
+    },
+    {
+      "id": "msg_1781761833193_862148",
+      "timestamp": "2026-06-18T02:37:13.000Z",
+      "sender": "919562012229",
+      "messageText": "I will be a little late to reach the office today. (Hospital Case)",
+      "reason": "Worker name unrecognized",
+      "extractedName": "i will be a little late to reach the today. hospital case",
+      "extractedSite": "INTEREXT OFFICE",
+      "extractedAction": "in"
+    },
+    {
+      "id": "msg_1781761833272_735919",
+      "timestamp": "2026-06-18T02:37:13.000Z",
+      "sender": "919562012229",
+      "messageText": "10:30",
+      "reason": "Worker name unrecognized",
+      "extractedName": "10:30",
+      "extractedSite": "INTEREXT OFFICE",
+      "extractedAction": "in"
     }
   ],
   "payroll": [
@@ -33164,7 +33242,9 @@
     "false_120363419060820327@g.us_AC213CE6CA6E3A607EB79CB0BF8F9DCF_34355544080417@lid",
     "false_120363419060820327@g.us_AC0274B2B7CE97B2FF86481EF34F0CAF_30232711008453@lid",
     "false_120363419060820327@g.us_A538670213292B0E3CBC8605CCA3ECD2_124039259545637@lid",
-    "false_120363419060820327@g.us_A549DDD0A29F5CDA6624A2B70C9B4983_124039259545637@lid"
+    "false_120363419060820327@g.us_A549DDD0A29F5CDA6624A2B70C9B4983_124039259545637@lid",
+    "false_120363419060820327@g.us_ACA4FE32F9F3EF49D1EEE9739C3AFBFB_157865868288032@lid",
+    "false_120363419060820327@g.us_A58540F2941CAF78832BF79D6578F8D1_121186881151098@lid"
   ],
   "cameraEvents": [
     {

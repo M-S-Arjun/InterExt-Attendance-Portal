@@ -780,20 +780,37 @@ class AttendanceParser {
       actionType = isHalfDayLeave ? 'half-day-leave' : 'leave';
     } else {
       // Check for Late pattern
-      const lateMatch1 = cleanLine.match(/\b(\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\s*late\b/i);
-      const lateMatch2 = cleanLine.match(/\blate\s*(?:by\s*)?(\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\b/i);
+      const lateMatch1 = cleanLine.match(/\b(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\s*late\b/i);
+      const lateMatch2 = cleanLine.match(/\blate\s*(?:by\s*)?(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\b/i);
       const lateMinMatch = cleanLine.match(/(?:(\d+(?:\.\d+)?)\s*(?:minute|minutes|min|mins)\s*late|late\s*(?:by\s*)?(\d+(?:\.\d+)?)\s*(?:minute|minutes|min|mins))/i);
       
       // Check for Early Exit pattern
-      const earlyMatch = cleanLine.match(/\b(\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\s*(?:early\s*exit|early\s*leave|early)\b/i);
+      const earlyMatch = cleanLine.match(/\b(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?|one|two|three|four|half)\s*(?:an\s*)?(?:hour|hours|hr|hrs)?\s*(?:early\s*exit|early\s*leave|early)\b/i);
 
       const wordToNumber = { 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'half': 0.5 };
+      const parseHoursVal = (val) => {
+        const cleanVal = val.toLowerCase().trim();
+        if (wordToNumber[cleanVal] !== undefined) return wordToNumber[cleanVal];
+        if (cleanVal.includes('/')) {
+          if (/\d+\s+\d+\/\d+/.test(cleanVal)) {
+            const parts = cleanVal.split(/\s+/);
+            const whole = parseFloat(parts[0]);
+            const [num, den] = parts[1].split('/').map(Number);
+            return whole + (den ? num / den : 0);
+          } else {
+            const [num, den] = cleanVal.split('/').map(Number);
+            return den ? num / den : 0;
+          }
+        }
+        return parseFloat(cleanVal);
+      };
+
       let matchedLate = lateMatch1 || lateMatch2;
       isHospitalCase = /\bhospital\b/i.test(cleanLine);
 
       if (matchedLate) {
-        const valStr = matchedLate[1].toLowerCase();
-        const lateHours = wordToNumber[valStr] !== undefined ? wordToNumber[valStr] : parseFloat(valStr);
+        const valStr = matchedLate[1];
+        const lateHours = parseHoursVal(valStr);
         if (!isNaN(lateHours)) {
           let shiftStart = (matchedEmployee && matchedEmployee.shiftStart) ? matchedEmployee.shiftStart : "09:00";
           if (!shiftStart || !shiftStart.includes(':')) {
@@ -868,8 +885,8 @@ class AttendanceParser {
           hospitalHours = 1;
         }
       } else if (earlyMatch) {
-        const valStr = earlyMatch[1].toLowerCase();
-        const earlyHours = wordToNumber[valStr] !== undefined ? wordToNumber[valStr] : parseFloat(valStr);
+        const valStr = earlyMatch[1];
+        const earlyHours = parseHoursVal(valStr);
         if (!isNaN(earlyHours)) {
           let shiftEnd = (matchedEmployee && matchedEmployee.shiftEnd) ? matchedEmployee.shiftEnd : "17:00";
           if (!shiftEnd || !shiftEnd.includes(':')) {
