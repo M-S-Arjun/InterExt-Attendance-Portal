@@ -2349,6 +2349,9 @@ async function handleEmployeeSubmit(e) {
       if (state.activeTab === 'payroll') {
         loadPayrollSheet();
       }
+      if (state.activeTab === 'profiles') {
+        initProfilesTab();
+      }
     }
   } catch (err) {
     console.error("Employee submit failed:", err);
@@ -2436,7 +2439,7 @@ function handleImageFileSelect(input, docType) {
     const reader = new FileReader();
     reader.onload = function(e) {
       const base64 = e.target.result;
-      const previewBoxId = `emp-${docType}-preview-box`;
+      const previewBoxId = docType === 'profile' ? 'emp-photo-preview-box' : `emp-${docType}-preview-box`;
       const previewBox = document.getElementById(previewBoxId);
       
       if (previewBox) {
