@@ -349,6 +349,7 @@ class Database {
   savePendingMessage(msg) {
     const db = this.read();
     msg.id = msg.id || `msg_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
+    // Use provided timestamp (actual WhatsApp message send time) — fall back to now only if not supplied
     msg.timestamp = msg.timestamp || new Date().toISOString();
     
     if (!db.pending_messages) db.pending_messages = [];
@@ -757,6 +758,85 @@ class Database {
     return false;
   }
 
+  ensurePunches(record) {
+    if (!record.punches) {
+      record.punches = [];
+    }
+    
+    // Auto-resolve source for any existing punches that lack one
+    record.punches.forEach(p => {
+      if (!p.source) {
+        if (p.messageText && (p.messageText.includes('CCTV') || p.messageText.includes('Camera') || p.messageText.includes('Face recognized') || p.messageText.includes('CCTV Face recognized'))) {
+          p.source = 'CCTV';
+        } else if (p.messageText && (p.messageText.includes('Selfie') || p.messageText.includes('Geofence') || p.messageText.includes('selfie') || p.messageText.includes('Webcam Scan'))) {
+          p.source = 'Selfie';
+        } else if (p.messageText && (p.messageText.includes('Manually') || p.messageText.includes('Manual') || p.messageText.includes('Admin'))) {
+          p.source = 'Manual';
+        } else {
+          p.source = 'WhatsApp';
+        }
+      }
+    });
+
+    // Add checkIn if not present
+    if (record.checkIn) {
+      const exists = record.punches.some(p => p.time === record.checkIn && p.type === 'in');
+      if (!exists) {
+        let source = 'WhatsApp';
+        if (record.isManualOverride) {
+          source = 'Manual';
+        } else if (record.verificationMethod === 'Face Recognition' || (record.messageText && (record.messageText.includes('CCTV') || record.messageText.includes('Camera') || record.messageText.includes('Face recognized')))) {
+          if (record.siteName && record.siteName.includes('Webcam Scan')) {
+            source = 'Selfie';
+          } else {
+            source = 'CCTV';
+          }
+        } else if (record.messageText && (record.messageText.includes('Selfie') || record.messageText.includes('Geofence') || record.messageText.includes('Webcam Scan'))) {
+          source = 'Selfie';
+        }
+        record.punches.push({
+          time: record.checkIn,
+          type: 'in',
+          siteName: record.siteName || '—',
+          messageText: record.messageText || '',
+          source: source
+        });
+      }
+    }
+    
+    // Add checkOut if not present
+    if (record.checkOut) {
+      const exists = record.punches.some(p => p.time === record.checkOut && p.type === 'out');
+      if (!exists) {
+        let source = 'WhatsApp';
+        if (record.isManualOverride) {
+          source = 'Manual';
+        } else if (record.verificationMethod === 'Face Recognition' || (record.messageText && (record.messageText.includes('CCTV') || record.messageText.includes('Camera') || record.messageText.includes('Face recognized')))) {
+          if (record.siteName && record.siteName.includes('Webcam Scan')) {
+            source = 'Selfie';
+          } else {
+            source = 'CCTV';
+          }
+        } else if (record.messageText && (record.messageText.includes('Selfie') || record.messageText.includes('Geofence') || record.messageText.includes('Webcam Scan'))) {
+          source = 'Selfie';
+        }
+        record.punches.push({
+          time: record.checkOut,
+          type: 'out',
+          siteName: record.siteName || '—',
+          messageText: record.messageText || '',
+          source: source
+        });
+      }
+    }
+    
+    // Filter out auto-checkout punches
+    record.punches = record.punches.filter(p => !p.messageText || !p.messageText.includes('System Auto-Checkout'));
+    
+    // Sort punches chronologically
+    record.punches.sort((a, b) => new Date(a.time) - new Date(b.time));
+  }
+
   // Save/Update attendance log
   // Handles manual adjustments and triggers shift calculations
   saveAttendance(record) {
@@ -771,6 +851,92 @@ class Database {
     record.id = record.id || `att_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
     record.employeeName = employee.name;
     record.date = record.date || new Date().toISOString().split('T')[0];
+
+    // Manual override forces punches to exactly matching new times
+    if (record.isManualOverride) {
+      record.punches = [];
+      if (record.checkIn) {
+        record.punches.push({ time: record.checkIn, type: 'in', siteName: record.siteName || '—', messageText: 'Manually Entered Check-In' });
+      }
+      if (record.checkOut) {
+        record.punches.push({ time: record.checkOut, type: 'out', siteName: record.siteName || '—', messageText: 'Manually Entered Check-Out' });
+      }
+    }
+    this.ensurePunches(record);
+
+    // Smart Multi-Shift Merging:
+    // If a record for the same employee and date already exists under a different ID, merge them.
+    const existingIndex = db.attendance.findIndex(a => a.employeeId === record.employeeId && a.date === record.date);
+    if (existingIndex >= 0) {
+      const existing = db.attendance[existingIndex];
+      if (existing.id !== record.id) {
+        // Skip merge if existing has manual override
+        if (existing.isManualOverride && !record.isManualOverride) {
+          console.log(`[Database] Skipping update/merge for employee ${record.employeeName} on ${record.date} because a manual override is active.`);
+          return existing;
+        }
+
+        // Build punches for both existing and incoming
+        this.ensurePunches(existing);
+        this.ensurePunches(record);
+
+        // Filter out auto-checkouts
+        const cleanExistingPunches = existing.punches.filter(p => !p.messageText || !p.messageText.includes('System Auto-Checkout'));
+        const cleanIncomingPunches = record.punches.filter(p => !p.messageText || !p.messageText.includes('System Auto-Checkout'));
+
+        // Combine and de-duplicate punches by time and type
+        const combinedPunches = [...cleanExistingPunches, ...cleanIncomingPunches];
+        const uniquePunches = [];
+        const seen = new Set();
+        combinedPunches.forEach(p => {
+          const key = `${p.time}_${p.type}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            uniquePunches.push(p);
+          }
+        });
+        
+        record.punches = uniquePunches.sort((a, b) => new Date(a.time) - new Date(b.time));
+
+        // Set checkIn to the earliest punch
+        // Set checkOut to the latest punch
+        const ins = record.punches.filter(p => p.type === 'in');
+        const outs = record.punches.filter(p => p.type === 'out');
+        
+        if (ins.length > 0) {
+          record.checkIn = ins[0].time;
+        }
+        if (outs.length > 0) {
+          record.checkOut = outs[outs.length - 1].time;
+        } else {
+          record.checkOut = null;
+        }
+
+        // 3. Merge siteName
+        const existingSites = existing.siteName ? existing.siteName.split('/').map(s => s.trim()).filter(s => s && s !== '—') : [];
+        const incomingSites = record.siteName ? record.siteName.split('/').map(s => s.trim()).filter(s => s && s !== '—') : [];
+        const combinedSites = [...new Set([...existingSites, ...incomingSites])];
+        record.siteName = combinedSites.join(' / ') || '—';
+
+        // 4. Merge messageText
+        const existingMsgs = existing.messageText ? existing.messageText.split('|').map(m => m.trim()).filter(Boolean) : [];
+        const incomingMsgs = record.messageText ? record.messageText.split('|').map(m => m.trim()).filter(Boolean) : [];
+        const combinedMsgs = [...new Set([...existingMsgs, ...incomingMsgs])];
+        record.messageText = combinedMsgs.join(' | ');
+
+        // 5. Merge travelHours
+        record.travelHours = (Number(existing.travelHours) || 0.0) + (Number(record.travelHours) || 0.0);
+
+        // 6. Merge hospital cases
+        if (existing.isHospitalCase || record.isHospitalCase) {
+          record.isHospitalCase = true;
+          record.hospitalHours = (Number(existing.hospitalHours) || 0.0) + (Number(record.hospitalHours) || 0.0);
+        }
+
+        // Use the existing ID so we overwrite/update the existing entry in db
+        record.id = existing.id;
+      }
+    }
     record.regularHours = Number(record.regularHours) || 0.0;
     record.otHours = Number(record.otHours) || 0.0;
     record.extraHours = Number(record.extraHours) || 0.0;
@@ -778,6 +944,30 @@ class Database {
     record.isFullDay = record.isFullDay === true || record.isFullDay === 'true';
     record.calculatedWage = Number(record.calculatedWage) || 0.0;
     record.travelHours = Number(record.travelHours) || 0.0;
+    
+    // Strict Late Check-in Check against registry shift start time
+    if (record.checkIn && employee.shiftStart && employee.shiftStart.includes(':')) {
+      try {
+        const checkInDate = new Date(record.checkIn);
+        const checkInH = checkInDate.getHours();
+        const checkInM = checkInDate.getMinutes();
+        const [startH, startM] = employee.shiftStart.split(':').map(Number);
+                const checkInMinutes = checkInH * 60 + checkInM;
+        const shiftStartMinutes = startH * 60 + startM;
+        
+        if (checkInMinutes > shiftStartMinutes) { // sharp time (no grace period)
+          record.isLate = true;
+        } else {
+          record.isLate = false;
+          if (record.status === 'late' || record.status === 'Late Check-in') {
+            record.status = ''; // Force fallback to default active/completed status
+          }
+        }
+      } catch (err) {
+        console.warn(`[saveAttendance] Failed to evaluate check-in time comparison:`, err.message);
+      }
+    }
+
     if (record.status === 'Early Check-out') {
       record.isEarlyCheckout = true;
     }
@@ -902,6 +1092,8 @@ class Database {
     if (!parsedData.isSuccess) {
       // Flag message for manual admin review
       return this.savePendingMessage({
+        id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000000)}`,
+        timestamp: messageTimestamp || new Date().toISOString(),
         sender: parsedData.rawSender || "Unknown",
         messageText: rawText,
         reason: parsedData.reason || "Unable to extract details",
@@ -917,6 +1109,8 @@ class Database {
     
     if (!employee) {
       return this.savePendingMessage({
+        id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000000)}`,
+        timestamp: messageTimestamp || new Date().toISOString(),
         sender: parsedData.rawSender || "Unknown",
         messageText: rawText,
         reason: "Worker name unrecognized in directory",
@@ -1011,8 +1205,27 @@ class Database {
         checkOut: parsedData.checkOutTime,
         messageText: rawText,
         status: "completed",
-        travelHours: parsedData.travelHours || 0.0
+        travelHours: parsedData.travelHours || 0.0,
+        punches: []
       };
+      if (record.checkIn) {
+        record.punches.push({
+          time: record.checkIn,
+          type: 'in',
+          siteName: site.name,
+          messageText: rawText,
+          source: parsedData.source || 'WhatsApp'
+        });
+      }
+      if (record.checkOut) {
+        record.punches.push({
+          time: record.checkOut,
+          type: 'out',
+          siteName: site.name,
+          messageText: rawText,
+          source: parsedData.source || 'WhatsApp'
+        });
+      }
       return this.saveAttendance(record);
     } else if (parsedData.extractedAction === 'half-day-leave') {
       const targetDate = parsedData.leaveDate || targetDateStr;
@@ -1120,6 +1333,8 @@ class Database {
         return this.saveAttendance(existing);
       }
       return this.savePendingMessage({
+        id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000000)}`,
+        timestamp: messageTimestamp || new Date().toISOString(),
         sender: parsedData.rawSender || "Unknown",
         messageText: rawText,
         reason: "Out for lunch message without an active check-in",
@@ -1146,6 +1361,15 @@ class Database {
         scannedCheckIn: false,
         travelHours: parsedData.travelHours || 0.0
       };
+      record.punches = [
+        {
+          time: record.checkIn,
+          type: 'in',
+          siteName: site.name,
+          messageText: rawText,
+          source: parsedData.source || 'WhatsApp'
+        }
+      ];
       return this.saveAttendance(record);
     } else if (parsedData.extractedAction === 'out') {
       const timestamp = parsedData.checkOutTime || getFallbackTimestamp();
@@ -1153,6 +1377,17 @@ class Database {
         const existing = db.attendance[existingLogIndex];
         // Apply check-out
         existing.checkOut = timestamp;
+        if (!existing.punches) existing.punches = [];
+        const punchExists = existing.punches.some(p => p.time === timestamp && p.type === 'out');
+        if (!punchExists) {
+          existing.punches.push({
+            time: timestamp,
+            type: 'out',
+            siteName: site.name,
+            messageText: rawText,
+            source: parsedData.source || 'WhatsApp'
+          });
+        }
         
         let isNewMessageText = true;
         if (existing.messageText) {
@@ -1179,6 +1414,8 @@ class Database {
       } else {
         // Checked out without checking in! Mark as flagged/pending review
         return this.savePendingMessage({
+          id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000000)}`,
+          timestamp: messageTimestamp || new Date().toISOString(),
           sender: parsedData.rawSender || "Unknown",
           messageText: rawText,
           reason: "Checked out without matching check-in",
@@ -1205,6 +1442,69 @@ class Database {
           console.error("Failed to log worker line from list:", e);
         }
       });
+      // Auto-attendance for supervisor/sender
+      const senderPhone = parsedData.items.find(i => i.rawSender)?.rawSender;
+      if (senderPhone) {
+        const db = this.read();
+        const cleanSender = senderPhone.replace(/\D/g, '');
+        const supervisor = db.employees.find(e => e.phone && e.phone.replace(/\D/g, '') === cleanSender && e.status === 'active');
+        if (supervisor) {
+          // Check if supervisor is already in the parsed list with a valid shift (e.g. checkIn and checkOut both set)
+          const supervisorItems = parsedData.items.filter(item => item.matchedEmployeeId === supervisor.id);
+          const hasFullShift = supervisorItems.some(i => i.checkInTime && i.checkOutTime);
+          
+          if (!hasFullShift) {
+            // Find target date (from items or message timestamp)
+            const targetDateStr = parsedData.items.find(i => i.checkInTime)?.checkInTime?.split('T')[0] || new Date(messageTimestamp || Date.now()).toISOString().split('T')[0];
+            
+            // Gather all check-in/out times from OTHER workers' parsed items for this date
+            const otherItems = parsedData.items.filter(item => item.matchedEmployeeId !== supervisor.id);
+            
+            const validCheckIns = otherItems
+              .filter(i => i.checkInTime && i.checkInTime.startsWith(targetDateStr))
+              .map(i => new Date(i.checkInTime).getTime());
+            
+            const validCheckOuts = otherItems
+              .filter(i => i.checkOutTime && i.checkOutTime.startsWith(targetDateStr))
+              .map(i => new Date(i.checkOutTime).getTime());
+              
+            if (validCheckIns.length > 0) {
+              const minCheckIn = new Date(Math.min(...validCheckIns)).toISOString();
+              const maxCheckOut = validCheckOuts.length > 0 ? new Date(Math.max(...validCheckOuts)).toISOString() : null;
+              
+              // Gather combined site names from other items
+              const siteNames = otherItems
+                .filter(i => i.extractedSite && i.extractedSite !== '—')
+                .map(i => i.extractedSite);
+              const combinedSiteName = [...new Set(siteNames)].join(' / ') || '—';
+              
+              console.log(`[Database] Auto-marking supervisor ${supervisor.name} attendance: check-in=${minCheckIn}, check-out=${maxCheckOut}, site=${combinedSiteName}`);
+              
+              const supervisorParsedItem = {
+                isSuccess: true,
+                reason: "",
+                matchedEmployeeId: supervisor.id,
+                matchedSiteId: null,
+                extractedName: supervisor.name,
+                extractedSite: combinedSiteName,
+                extractedAction: maxCheckOut ? 'completed' : 'in',
+                checkInTime: minCheckIn,
+                checkOutTime: maxCheckOut,
+                confidence: 1.0,
+                rawSender: senderPhone,
+                originalLineText: `[Auto-Generated Supervisor Shift: ${combinedSiteName}]`
+              };
+              
+              try {
+                const logged = this.recordSingleFromWhatsApp(supervisorParsedItem, rawText, messageTimestamp);
+                if (logged) logs.push(logged);
+              } catch (e) {
+                console.error("Failed to log supervisor auto-attendance:", e);
+              }
+            }
+          }
+        }
+      }
       return logs;
     } else {
       // Standard Single check-in/out range text
@@ -1348,6 +1648,15 @@ class Database {
             "Travel Hours Paid": row.travelHours || 0.0,
             "Calculated Wages (₹)": row.calculatedWage || 0.0,
             "WhatsApp Text Source": row.messageText || "—",
+            "Detailed Punches Log": row.punches && row.punches.length > 0
+              ? row.punches.map(p => {
+                  let timeStr = "—";
+                  try {
+                    timeStr = new Date(p.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+                  } catch(e) {}
+                  return `${p.type.toUpperCase()}: ${timeStr} (${p.siteName})`;
+                }).join(' | ')
+              : "—",
             "Administrative Notes": row.notes || (row.status === 'absent' ? "Auto-Marked Absent (Missing text)" : "")
           });
         });
@@ -1524,6 +1833,9 @@ class Database {
         dailyRate = Number(emp.dailyRate) || 0.0;
         const defaultLopDays = Math.max(0, stdWorkingDays - presentCount);
         lopDays = adj.lopDays !== undefined ? Number(adj.lopDays) : (defaultLopDays + lateLopDays);
+        if (emp.fixedSalary === true || emp.fixedSalary === 'true' || emp.salaryLocked === true) {
+          lopDays = adj.lopDays !== undefined ? Number(adj.lopDays) : 0;
+        }
         workingDays = Number((stdWorkingDays - lopDays).toFixed(2));
         amount = Number((dailyRate * workingDays).toFixed(2));
       } else {
@@ -1539,6 +1851,9 @@ class Database {
         
         const absentCount = empLogs.filter(log => log.status === 'absent').length;
         lopDays = adj.lopDays !== undefined ? Number(adj.lopDays) : (absentCount + lateLopDays);
+        if (emp.fixedSalary === true || emp.fixedSalary === 'true' || emp.salaryLocked === true) {
+          lopDays = adj.lopDays !== undefined ? Number(adj.lopDays) : 0;
+        }
         lopAmount = Number((lopDays * dailyRate * lopDeductionRate).toFixed(2));
         workingDays = Number((stdWorkingDays - lopDays).toFixed(2));
         amount = Number((actualSalary * (workingDays / stdWorkingDays)).toFixed(2));

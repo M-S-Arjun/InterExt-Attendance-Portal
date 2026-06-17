@@ -466,6 +466,13 @@ app.post('/api/attendance/camera', (req, res) => {
       date: attendanceDate,
       siteName: cameraEvent.siteName,
       messageText: `Camera ${cameraEvent.eventType} event`,
+      punches: [{
+        time: cameraEvent.timestamp,
+        type: eventType === 'exit' ? 'out' : 'in',
+        siteName: cameraEvent.siteName,
+        messageText: `Camera ${cameraEvent.eventType} event`,
+        source: 'CCTV'
+      }]
     };
 
     const existingAttendance = (db.attendance || []).find(a => a.employeeId === employeeId && a.date === attendanceDate);
@@ -709,7 +716,7 @@ app.post('/api/face/recognize', async (req, res) => {
         const [sh, sm] = employee.shiftStart.split(':').map(Number);
         const nowMinutes = now.getHours() * 60 + now.getMinutes();
         const shiftStartMinutes = sh * 60 + sm;
-        return nowMinutes > (shiftStartMinutes + 5); // 5-minute grace period
+        return nowMinutes > shiftStartMinutes; // sharp time
       })();
 
       const isLateCheckIn = isLateCheckInPendingScan || ((!existingAttendance || existingAttendance.status === 'absent') && isScanLateTime);
@@ -849,6 +856,13 @@ app.post('/api/face/recognize', async (req, res) => {
       });
       
       attendanceEntry.messageText = `Face recognized - auto ${eventType}`;
+      attendanceEntry.punches = [{
+        time: timestamp,
+        type: eventType === 'exit' ? 'out' : 'in',
+        siteName: siteName,
+        messageText: `Face recognized - auto ${eventType}`,
+        source: 'Selfie'
+      }];
       const savedAttendance = database.saveAttendance(attendanceEntry);
       
       io.emit('attendance_updated', savedAttendance);
@@ -1173,7 +1187,7 @@ app.post('/api/face/cctv-event', async (req, res) => {
       const [sh, sm] = employee.shiftStart.split(':').map(Number);
       const nowMinutes = now.getHours() * 60 + now.getMinutes();
       const shiftStartMinutes = sh * 60 + sm;
-      return nowMinutes > (shiftStartMinutes + 5); // 5-minute grace period
+      return nowMinutes > shiftStartMinutes; // sharp time
     })();
 
     const isLateCheckIn = isLateCheckInPendingScan || (!existingAttendance && isScanLateTime);
@@ -1350,6 +1364,7 @@ app.post('/api/pending/resolve', (req, res) => {
     }
 
     if (action === 'in') {
+      const resolvedSource = (pendingMsg && pendingMsg.type === 'selfie_verification') ? 'Selfie' : 'WhatsApp';
       record = {
         employeeId: emp.id,
         employeeName: emp.name,
@@ -1358,13 +1373,32 @@ app.post('/api/pending/resolve', (req, res) => {
         checkIn: timestamp,
         checkOut: null,
         messageText: pendingMsg ? `[RESOLVED] ${pendingMsg.messageText}` : "Manual check-in",
-        status: "checked-in"
+        status: "checked-in",
+        punches: [{
+          time: timestamp,
+          type: 'in',
+          siteName: targetSiteName,
+          messageText: pendingMsg ? `[RESOLVED] ${pendingMsg.messageText}` : "Manual check-in",
+          source: resolvedSource
+        }]
       };
     } else {
+      const resolvedSource = (pendingMsg && pendingMsg.type === 'selfie_verification') ? 'Selfie' : 'WhatsApp';
       if (existingIndex >= 0) {
         record = db.attendance[existingIndex];
         record.checkOut = timestamp;
         record.messageText += pendingMsg ? ` | [RESOLVED] ${pendingMsg.messageText}` : " | Manual check-out";
+        if (!record.punches) record.punches = [];
+        const exists = record.punches.some(p => p.time === timestamp && p.type === 'out');
+        if (!exists) {
+          record.punches.push({
+            time: timestamp,
+            type: 'out',
+            siteName: targetSiteName,
+            messageText: pendingMsg ? `[RESOLVED] ${pendingMsg.messageText}` : "Manual check-out",
+            source: resolvedSource
+          });
+        }
       } else {
         const defaultCheckIn = new Date(`${targetDate}T08:00:00`).toISOString();
         record = {
@@ -1375,7 +1409,23 @@ app.post('/api/pending/resolve', (req, res) => {
           checkIn: defaultCheckIn,
           checkOut: timestamp,
           messageText: pendingMsg ? `[RESOLVED OUT ONLY] ${pendingMsg.messageText}` : "Manual out-only",
-          status: "completed"
+          status: "completed",
+          punches: [
+            {
+              time: defaultCheckIn,
+              type: 'in',
+              siteName: targetSiteName,
+              messageText: "Default Check-In on Resolve",
+              source: resolvedSource
+            },
+            {
+              time: timestamp,
+              type: 'out',
+              siteName: targetSiteName,
+              messageText: pendingMsg ? `[RESOLVED OUT ONLY] ${pendingMsg.messageText}` : "Manual out-only",
+              source: resolvedSource
+            }
+          ]
         };
       }
     }
@@ -1707,7 +1757,9 @@ app.post('/api/selfies/verify', (req, res) => {
         extractedName: emp.name,
         extractedSite: selfie.siteName || emp.siteId || "Main Site",
         extractedAction: "in",
-        matchedEmployee: emp
+        matchedEmployee: emp,
+        checkInTime: selfie.timestamp,
+        source: 'Selfie'
       };
       
       const loggedRecord = database.recordFromWhatsApp(mockResult, `Selfie manually verified by Admin: ${adminNotes || ''}`);
