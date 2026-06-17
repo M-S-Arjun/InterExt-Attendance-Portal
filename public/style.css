@@ -1442,6 +1442,18 @@ html.sidebar-collapsed .sidebar:hover .connection-pill span {
   color: var(--text-primary);
 }
 
+.worker-primary-name.clickable {
+  color: var(--text-primary);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.worker-primary-name.clickable:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
 .cell-sub-desc {
   display: block;
   font-size: 0.72rem;

@@ -1303,7 +1303,7 @@ function renderAttendanceLogsTable(r) {
     tr.innerHTML = `
       <td><strong>${row.date}</strong></td>
       <td>
-        <span class="worker-primary-name" style="cursor: pointer; color: var(--color-primary); text-decoration: underline;" onclick="viewProfileFromRegistry('${row.employeeId}')" title="View Profile">${row.employeeName}</span>
+        <span class="worker-primary-name clickable" onclick="viewProfileFromRegistry('${row.employeeId}')" title="View Profile">${row.employeeName}</span>
         ${row.messageText ? `<span class="cell-sub-desc" title="${row.messageText}">Text: ${row.messageText.substring(0, 30)}${row.messageText.length > 30 ? '...' : ''}</span>` : ''}
       </td>
       <td>${statusBadge}</td>
@@ -1483,7 +1483,7 @@ function renderPunchesTable(r) {
     tr.innerHTML = `
       <td><strong>${row.date}</strong></td>
       <td>
-        <span class="worker-primary-name" style="cursor: pointer; color: var(--color-primary); text-decoration: underline;" onclick="viewProfileFromRegistry('${row.employeeId}')" title="View Profile">${row.employeeName}</span>
+        <span class="worker-primary-name clickable" onclick="viewProfileFromRegistry('${row.employeeId}')" title="View Profile">${row.employeeName}</span>
         ${row.messageText ? `<span class="cell-sub-desc" title="${row.messageText}">Text: ${row.messageText.substring(0, 30)}${row.messageText.length > 30 ? '...' : ''}</span>` : ''}
       </td>
       <td>${statusBadge}</td>
@@ -1919,7 +1919,7 @@ function renderEmployeesTableBody(employees) {
 
     tr.innerHTML = `
       <td><strong>${emp.userId || "—"}</strong></td>
-      <td><span class="worker-primary-name" style="cursor: pointer; color: var(--color-primary); text-decoration: underline;" onclick="viewProfileFromRegistry('${emp.id}')" title="View Employee Profile">${emp.name}</span></td>
+      <td><span class="worker-primary-name clickable" onclick="viewProfileFromRegistry('${emp.id}')" title="View Employee Profile">${emp.name}</span></td>
       <td>${emp.designation || "—"}</td>
       <td>${emp.modeOfWork || "—"}</td>
       <td>${phoneDisplay}</td>
@@ -4271,7 +4271,7 @@ function renderPayrollTable(data) {
       <td><strong>${row.modeOfWork || "—"}</strong></td>
       <td><strong>${row.userId || "—"}</strong></td>
       <td>
-        <span class="worker-primary-name" style="cursor: pointer; color: var(--color-primary); text-decoration: underline;" onclick="viewProfileFromRegistry('${row.employeeId}')" title="View Profile">${row.employeeName}</span>
+        <span class="worker-primary-name clickable" onclick="viewProfileFromRegistry('${row.employeeId}')" title="View Profile">${row.employeeName}</span>
       </td>
 
       <td class="cell-basic" data-val="${isDaily ? 0 : row.basic}">${isDaily ? '—' : '₹' + row.basic.toFixed(2)}</td>
