@@ -112,6 +112,15 @@ class WhatsAppManager extends EventEmitter {
     this.groupNameCache = {};
     this.groupIdCache = {};
     this.lidToPhoneMap = {};
+    const cachePath = path.join(__dirname, 'lid_mappings_cache.json');
+    if (fs.existsSync(cachePath)) {
+      try {
+        this.lidToPhoneMap = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+        console.log(`[LID Resolver] Loaded ${Object.keys(this.lidToPhoneMap).length} cached mappings from lid_mappings_cache.json`);
+      } catch (err) {
+        console.warn("[LID Resolver] Failed to load lid_mappings_cache.json:", err.message);
+      }
+    }
     this.lastMessageTime = Date.now();
     this.lastHealthCheckTime = Date.now();
     this.connectingTimeout = null;
@@ -368,6 +377,15 @@ class WhatsAppManager extends EventEmitter {
     });
   }
 
+  saveLidMappingCache() {
+    try {
+      const cachePath = path.join(__dirname, 'lid_mappings_cache.json');
+      fs.writeFileSync(cachePath, JSON.stringify(this.lidToPhoneMap, null, 2), 'utf8');
+    } catch (err) {
+      console.error("[LID Resolver] Failed to save lid_mappings_cache.json:", err.message);
+    }
+  }
+
   // Resolve a raw sender JID to a clean phone number, handles cache lookup and live LID API checks
   async resolveSenderPhone(rawSenderJid, message = null, skipSlowLookup = false) {
     if (!rawSenderJid) return "Unknown";
@@ -377,15 +395,19 @@ class WhatsAppManager extends EventEmitter {
     if (this.lidToPhoneMap[senderPhone]) {
       return this.lidToPhoneMap[senderPhone].split('@')[0].replace(/\D/g, '');
     }
-    
-    if (rawSenderJid.endsWith('@lid') && !skipSlowLookup) {
+
+    // If this is a LID, try multiple resolution strategies
+    if (rawSenderJid.endsWith('@lid')) {
+      // Strategy 1: Live API lookup (try even if skipSlowLookup is true, provided it's a new LID not in cache)
+      // This is safe because it only happens once per new sender, then is cached forever.
       try {
         if (this.client && typeof this.client.getContactLidAndPhone === 'function') {
           const mappings = await this.client.getContactLidAndPhone([rawSenderJid]);
           if (mappings && mappings.length > 0 && mappings[0].pn) {
             const cleanPn = mappings[0].pn.split('@')[0].replace(/\D/g, '');
             console.log(`[LID Resolver] Resolved JID ${rawSenderJid} -> ${cleanPn} via getContactLidAndPhone`);
-            this.lidToPhoneMap[rawSenderJid.split('@')[0]] = cleanPn;
+            this.lidToPhoneMap[senderPhone] = cleanPn;
+            this.saveLidMappingCache();
             return cleanPn;
           }
         }
@@ -399,12 +421,45 @@ class WhatsAppManager extends EventEmitter {
           if (contact && contact.number) {
             const cleanPn = contact.number.split('@')[0].replace(/\D/g, '');
             console.log(`[LID Resolver] Resolved JID ${rawSenderJid} -> ${cleanPn} via contact.number`);
-            this.lidToPhoneMap[rawSenderJid.split('@')[0]] = cleanPn;
+            this.lidToPhoneMap[senderPhone] = cleanPn;
+            this.saveLidMappingCache();
             return cleanPn;
           }
         } catch (contactErr) {
           console.warn("[LID Resolver] getContact failed:", contactErr.message);
         }
+      }
+
+      // Strategy 2 (critical fallback): Check whatsapp_group_members.json on disk
+      try {
+        const membersPath = path.join(__dirname, 'whatsapp_group_members.json');
+        if (fs.existsSync(membersPath)) {
+          const members = JSON.parse(fs.readFileSync(membersPath, 'utf8'));
+          const match = members.find(m => m.id === senderPhone && m.resolvedPhone);
+          if (match) {
+            const cleanPn = match.resolvedPhone.replace(/\D/g, '');
+            console.log(`[LID Resolver] Resolved JID ${rawSenderJid} -> ${cleanPn} via group_members.json fallback`);
+            this.lidToPhoneMap[senderPhone] = cleanPn;
+            this.saveLidMappingCache();
+            return cleanPn;
+          }
+        }
+      } catch (fileErr) {
+        console.warn("[LID Resolver] group_members.json fallback failed:", fileErr.message);
+      }
+
+      // Strategy 3: Try to match against employee phones in the database directly
+      try {
+        const db = database.read();
+        const matchedEmp = (db.employees || []).find(e => e.phone && e.phone.replace(/\D/g, '') === senderPhone);
+        if (matchedEmp) {
+          console.log(`[LID Resolver] Resolved JID ${rawSenderJid} -> ${senderPhone} via employee DB phone match (${matchedEmp.name})`);
+          this.lidToPhoneMap[senderPhone] = senderPhone;
+          this.saveLidMappingCache();
+          return senderPhone;
+        }
+      } catch (dbErr) {
+        console.warn("[LID Resolver] DB employee match fallback failed:", dbErr.message);
       }
     }
     
@@ -567,18 +622,49 @@ class WhatsAppManager extends EventEmitter {
           }
         } else {
           // Standard Text Message Parsing
-          const parseResult = parser.parse(message.body, senderPhone, msgTimestampISO);
+          let messageText = message.body;
+          let targetTimestampISO = msgTimestampISO;
+          
+          if (message.hasQuotedMsg) {
+            try {
+              const quotedMsg = await message.getQuotedMessage();
+              if (quotedMsg && quotedMsg.body) {
+                const quotedRawSenderJid = quotedMsg.author || quotedMsg.from;
+                const quotedSenderPhone = await this.resolveSenderPhone(quotedRawSenderJid, quotedMsg, true);
+                if (quotedSenderPhone === senderPhone) {
+                  console.log(`[Message Processor] Found quoted message from same sender +${senderPhone}. Quoted body: "${quotedMsg.body}", Current body: "${message.body}"`);
+                  
+                  const timeRegex = /\b\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?\b/i;
+                  const hasQuotedTime = timeRegex.test(quotedMsg.body);
+                  const hasCurrentTime = timeRegex.test(message.body);
+                  
+                  if (hasQuotedTime && hasCurrentTime) {
+                    messageText = `${quotedMsg.body} to ${message.body}`;
+                  } else {
+                    messageText = `${quotedMsg.body}\n${message.body}`;
+                  }
+                  
+                  targetTimestampISO = new Date(quotedMsg.timestamp * 1000).toISOString();
+                  console.log(`[Message Processor] Combined quoted message into single body: "${messageText}" on target date: ${targetTimestampISO}`);
+                }
+              }
+            } catch (quotedErr) {
+              console.warn("[Message Processor] Failed to retrieve quoted message:", quotedErr.message);
+            }
+          }
+
+          const parseResult = parser.parse(messageText, senderPhone, targetTimestampISO);
           
           // Store/update log in database
-          const loggedRecord = database.recordFromWhatsApp(parseResult, message.body, msgTimestampISO);
+          const loggedRecord = database.recordFromWhatsApp(parseResult, messageText, targetTimestampISO);
           
           // Emit WebSocket notification to refresh UI
           this.emit('message_received', {
             sender: senderPhone,
             groupId,
             groupName,
-            messageText: message.body,
-            timestamp: msgTimestampISO,
+            messageText: messageText,
+            timestamp: targetTimestampISO,
             parseResult,
             loggedRecord
           });
@@ -921,6 +1007,8 @@ class WhatsAppManager extends EventEmitter {
           this.lidToPhoneMap[id] = id.replace(/\D/g, '');
         }
       });
+
+      this.saveLidMappingCache();
 
       // Dump the group members list to whatsapp_group_members.json
       try {
