@@ -946,65 +946,97 @@ class Database {
           return existing;
         }
 
-        // Build punches for both existing and incoming
-        this.ensurePunches(existing);
-        this.ensurePunches(record);
-
-        // Filter out auto-checkouts
-        const cleanExistingPunches = existing.punches.filter(p => !p.messageText || !p.messageText.includes('System Auto-Checkout'));
-        const cleanIncomingPunches = record.punches.filter(p => !p.messageText || !p.messageText.includes('System Auto-Checkout'));
-
-        // Combine and de-duplicate punches by time and type
-        const combinedPunches = [...cleanExistingPunches, ...cleanIncomingPunches];
-        const uniquePunches = [];
-        const seen = new Set();
-        combinedPunches.forEach(p => {
-          const key = `${p.time}_${p.type}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            uniquePunches.push(p);
-          }
-        });
-        
-        record.punches = uniquePunches.sort((a, b) => new Date(a.time) - new Date(b.time));
-
-        // Set checkIn to the earliest punch
-        // Set checkOut to the latest punch
-        const ins = record.punches.filter(p => p.type === 'in');
-        const outs = record.punches.filter(p => p.type === 'out');
-        
-        if (ins.length > 0) {
-          record.checkIn = ins[0].time;
-        }
-        if (outs.length > 0) {
-          record.checkOut = outs[outs.length - 1].time;
-        } else {
+        if (record.status === 'leave') {
+          // Full-day leave overrides existing check-in/work record
+          const existingMsgs = existing.messageText ? existing.messageText.split('|').map(m => m.trim()).filter(Boolean) : [];
+          const incomingMsgs = record.messageText ? record.messageText.split('|').map(m => m.trim()).filter(Boolean) : [];
+          const combinedMsgs = [...new Set([...existingMsgs, ...incomingMsgs])];
+          
+          record.messageText = combinedMsgs.join(' | ');
+          record.checkIn = null;
           record.checkOut = null;
+          record.punches = [];
+          record.status = 'leave';
+          record.duration = 0;
+          record.regularHours = 0;
+          record.otHours = 0;
+          record.extraHours = 0;
+          record.isHalfDay = false;
+          record.isFullDay = false;
+          record.calculatedWage = 0;
+          record.isLate = false;
+          record.id = existing.id;
+        } else if (existing.status === 'leave') {
+          // Incoming check-in overrides existing leave record
+          const existingMsgs = existing.messageText ? existing.messageText.split('|').map(m => m.trim()).filter(Boolean) : [];
+          const incomingMsgs = record.messageText ? record.messageText.split('|').map(m => m.trim()).filter(Boolean) : [];
+          const combinedMsgs = [...new Set([...existingMsgs, ...incomingMsgs])];
+          
+          record.messageText = combinedMsgs.join(' | ');
+          record.id = existing.id;
+          // Rest of saveAttendance will process incoming check-in
+        } else {
+          // Standard Multi-Shift Merging:
+          // Build punches for both existing and incoming
+          this.ensurePunches(existing);
+          this.ensurePunches(record);
+
+          // Filter out auto-checkouts
+          const cleanExistingPunches = existing.punches.filter(p => !p.messageText || !p.messageText.includes('System Auto-Checkout'));
+          const cleanIncomingPunches = record.punches.filter(p => !p.messageText || !p.messageText.includes('System Auto-Checkout'));
+
+          // Combine and de-duplicate punches by time and type
+          const combinedPunches = [...cleanExistingPunches, ...cleanIncomingPunches];
+          const uniquePunches = [];
+          const seen = new Set();
+          combinedPunches.forEach(p => {
+            const key = `${p.time}_${p.type}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              uniquePunches.push(p);
+            }
+          });
+          
+          record.punches = uniquePunches.sort((a, b) => new Date(a.time) - new Date(b.time));
+
+          // Set checkIn to the earliest punch
+          // Set checkOut to the latest punch
+          const ins = record.punches.filter(p => p.type === 'in');
+          const outs = record.punches.filter(p => p.type === 'out');
+          
+          if (ins.length > 0) {
+            record.checkIn = ins[0].time;
+          }
+          if (outs.length > 0) {
+            record.checkOut = outs[outs.length - 1].time;
+          } else {
+            record.checkOut = null;
+          }
+
+          // 3. Merge siteName
+          const existingSites = existing.siteName ? existing.siteName.split('/').map(s => s.trim()).filter(s => s && s !== '—') : [];
+          const incomingSites = record.siteName ? record.siteName.split('/').map(s => s.trim()).filter(s => s && s !== '—') : [];
+          const combinedSites = [...new Set([...existingSites, ...incomingSites])];
+          record.siteName = combinedSites.join(' / ') || '—';
+
+          // 4. Merge messageText
+          const existingMsgs = existing.messageText ? existing.messageText.split('|').map(m => m.trim()).filter(Boolean) : [];
+          const incomingMsgs = record.messageText ? record.messageText.split('|').map(m => m.trim()).filter(Boolean) : [];
+          const combinedMsgs = [...new Set([...existingMsgs, ...incomingMsgs])];
+          record.messageText = combinedMsgs.join(' | ');
+
+          // 5. Merge travelHours
+          record.travelHours = (Number(existing.travelHours) || 0.0) + (Number(record.travelHours) || 0.0);
+
+          // 6. Merge hospital cases
+          if (existing.isHospitalCase || record.isHospitalCase) {
+            record.isHospitalCase = true;
+            record.hospitalHours = (Number(existing.hospitalHours) || 0.0) + (Number(record.hospitalHours) || 0.0);
+          }
+
+          // Use the existing ID so we overwrite/update the existing entry in db
+          record.id = existing.id;
         }
-
-        // 3. Merge siteName
-        const existingSites = existing.siteName ? existing.siteName.split('/').map(s => s.trim()).filter(s => s && s !== '—') : [];
-        const incomingSites = record.siteName ? record.siteName.split('/').map(s => s.trim()).filter(s => s && s !== '—') : [];
-        const combinedSites = [...new Set([...existingSites, ...incomingSites])];
-        record.siteName = combinedSites.join(' / ') || '—';
-
-        // 4. Merge messageText
-        const existingMsgs = existing.messageText ? existing.messageText.split('|').map(m => m.trim()).filter(Boolean) : [];
-        const incomingMsgs = record.messageText ? record.messageText.split('|').map(m => m.trim()).filter(Boolean) : [];
-        const combinedMsgs = [...new Set([...existingMsgs, ...incomingMsgs])];
-        record.messageText = combinedMsgs.join(' | ');
-
-        // 5. Merge travelHours
-        record.travelHours = (Number(existing.travelHours) || 0.0) + (Number(record.travelHours) || 0.0);
-
-        // 6. Merge hospital cases
-        if (existing.isHospitalCase || record.isHospitalCase) {
-          record.isHospitalCase = true;
-          record.hospitalHours = (Number(existing.hospitalHours) || 0.0) + (Number(record.hospitalHours) || 0.0);
-        }
-
-        // Use the existing ID so we overwrite/update the existing entry in db
-        record.id = existing.id;
       }
     }
     record.regularHours = Number(record.regularHours) || 0.0;

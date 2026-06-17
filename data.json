@@ -74,7 +74,8 @@
       "stdWorkingDays": 30,
       "pfEnabled": true,
       "esicEnabled": true,
-      "ptEnabled": true
+      "ptEnabled": true,
+      "fixedSalary": false
     },
     {
       "id": "emp_2046",
@@ -28787,24 +28788,16 @@
       "employeeName": "James T M",
       "siteName": "INTEREXT OFFICE",
       "date": "2026-06-18",
-      "checkIn": "2026-06-18T04:30:00.000Z",
+      "checkIn": null,
       "checkOut": null,
       "messageText": "Iam little late | Iam on leave today",
-      "status": "late",
-      "isLate": true,
+      "status": "leave",
+      "isLate": false,
       "isHospitalCase": false,
       "hospitalHours": 0,
       "scannedCheckIn": false,
       "travelHours": 0,
-      "punches": [
-        {
-          "time": "2026-06-18T04:30:00.000Z",
-          "type": "in",
-          "siteName": "INTEREXT OFFICE",
-          "messageText": "Iam little late",
-          "source": "WhatsApp"
-        }
-      ],
+      "punches": [],
       "id": "att_1781755109871_85401",
       "regularHours": 0,
       "otHours": 0,
