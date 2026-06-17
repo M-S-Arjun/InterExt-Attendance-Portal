@@ -2909,8 +2909,8 @@ async function loadEmployeeProfileStats(emp, yearMonth) {
       if (log.punches && log.punches.length > 0) {
         punchTimeline = log.punches.map(p => {
           const punchTime = new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          const colorClass = p.direction === 'in' ? 'text-green' : 'text-rose';
-          return `<span class="${colorClass}" style="font-weight:600; font-family:monospace; margin-right:4px;">${p.direction.toUpperCase()} ${punchTime}</span>`;
+          const colorClass = (p.type || 'in') === 'in' ? 'text-green' : 'text-rose';
+          return `<span class="${colorClass}" style="font-weight:600; font-family:monospace; margin-right:4px;">${(p.type || 'in').toUpperCase()} ${punchTime}</span>`;
         }).join(' → ');
       }
 
