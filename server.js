@@ -314,7 +314,65 @@ app.get('/api/employees', (req, res) => {
 
 app.post('/api/employees', (req, res) => {
   try {
-    const emp = database.saveEmployee(req.body);
+    const employeeData = { ...req.body };
+    const id = employeeData.id || `emp_${Date.now()}`;
+    employeeData.id = id;
+
+    // Handle Profile Photo Upload
+    if (employeeData.profilePhotoBase64) {
+      const uploadsDir = path.join(__dirname, 'public', 'uploads', 'profiles');
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+      const base64Data = employeeData.profilePhotoBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+      const filename = `${id}_${Date.now()}.png`;
+      fs.writeFileSync(path.join(uploadsDir, filename), Buffer.from(base64Data, 'base64'));
+      employeeData.profilePhoto = `/uploads/profiles/${filename}`;
+      delete employeeData.profilePhotoBase64;
+
+      // Clean up old profile photo if editing
+      const existingEmployees = database.getEmployees();
+      const existing = existingEmployees.find(e => e.id === id);
+      if (existing && existing.profilePhoto) {
+        const oldPath = path.join(__dirname, 'public', existing.profilePhoto);
+        if (fs.existsSync(oldPath)) {
+          try { fs.unlinkSync(oldPath); } catch (e) {}
+        }
+      }
+    }
+
+    // Handle Identity Documents Upload
+    const docFields = [
+      { base64Key: 'aadhaarPhotoBase64', pathKey: 'aadhaarPhoto', prefix: 'aadhaar' },
+      { base64Key: 'panPhotoBase64', pathKey: 'panPhoto', prefix: 'pan' },
+      { base64Key: 'drivingLicensePhotoBase64', pathKey: 'drivingLicensePhoto', prefix: 'dl' }
+    ];
+
+    docFields.forEach(field => {
+      if (employeeData[field.base64Key]) {
+        const docDir = path.join(__dirname, 'public', 'uploads', 'documents');
+        if (!fs.existsSync(docDir)) {
+          fs.mkdirSync(docDir, { recursive: true });
+        }
+        const base64Data = employeeData[field.base64Key].replace(/^data:image\/[a-z]+;base64,/, '');
+        const filename = `${field.prefix}_${id}_${Date.now()}.png`;
+        fs.writeFileSync(path.join(docDir, filename), Buffer.from(base64Data, 'base64'));
+        employeeData[field.pathKey] = `/uploads/documents/${filename}`;
+        delete employeeData[field.base64Key];
+
+        // Clean up old document file if editing
+        const existingEmployees = database.getEmployees();
+        const existing = existingEmployees.find(e => e.id === id);
+        if (existing && existing[field.pathKey]) {
+          const oldPath = path.join(__dirname, 'public', existing[field.pathKey]);
+          if (fs.existsSync(oldPath)) {
+            try { fs.unlinkSync(oldPath); } catch (e) {}
+          }
+        }
+      }
+    });
+
+    const emp = database.saveEmployee(employeeData);
     res.json(emp);
   } catch (err) {
     res.status(500).json({ error: err.message });

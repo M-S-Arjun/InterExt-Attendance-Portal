@@ -458,6 +458,11 @@ function switchTab(tabName) {
       subtitle.textContent = "Monitor daily employee travel logs, halving payouts, and monthly summary metrics";
       loadTravelLogs();
       break;
+    case 'profiles':
+      title.textContent = "Employee Profiles";
+      subtitle.textContent = "View comprehensive profiles, shift history, and attendance records for all employees";
+      initProfilesTab();
+      break;
     case 'employees':
       title.textContent = "Workers Registry";
       subtitle.textContent = "Manage employee records, status toggles, and base wage rates";
@@ -1298,7 +1303,7 @@ function renderAttendanceLogsTable(r) {
     tr.innerHTML = `
       <td><strong>${row.date}</strong></td>
       <td>
-        <span class="worker-primary-name">${row.employeeName}</span>
+        <span class="worker-primary-name" style="cursor: pointer; color: var(--color-primary); text-decoration: underline;" onclick="viewProfileFromRegistry('${row.employeeId}')" title="View Profile">${row.employeeName}</span>
         ${row.messageText ? `<span class="cell-sub-desc" title="${row.messageText}">Text: ${row.messageText.substring(0, 30)}${row.messageText.length > 30 ? '...' : ''}</span>` : ''}
       </td>
       <td>${statusBadge}</td>
@@ -1478,7 +1483,7 @@ function renderPunchesTable(r) {
     tr.innerHTML = `
       <td><strong>${row.date}</strong></td>
       <td>
-        <span class="worker-primary-name">${row.employeeName}</span>
+        <span class="worker-primary-name" style="cursor: pointer; color: var(--color-primary); text-decoration: underline;" onclick="viewProfileFromRegistry('${row.employeeId}')" title="View Profile">${row.employeeName}</span>
         ${row.messageText ? `<span class="cell-sub-desc" title="${row.messageText}">Text: ${row.messageText.substring(0, 30)}${row.messageText.length > 30 ? '...' : ''}</span>` : ''}
       </td>
       <td>${statusBadge}</td>
@@ -1914,7 +1919,7 @@ function renderEmployeesTableBody(employees) {
 
     tr.innerHTML = `
       <td><strong>${emp.userId || "—"}</strong></td>
-      <td><span class="worker-primary-name">${emp.name}</span></td>
+      <td><span class="worker-primary-name" style="cursor: pointer; color: var(--color-primary); text-decoration: underline;" onclick="viewProfileFromRegistry('${emp.id}')" title="View Employee Profile">${emp.name}</span></td>
       <td>${emp.designation || "—"}</td>
       <td>${emp.modeOfWork || "—"}</td>
       <td>${phoneDisplay}</td>
@@ -2000,11 +2005,49 @@ function openEmployeeModal() {
   document.getElementById('emp-esic-enabled').checked = true;
   document.getElementById('emp-pt-enabled').checked = true;
   document.getElementById('emp-fixed-salary').checked = false;
+
+  // Reset temp base64 caches
+  window.tempProfilePhotoBase64 = null;
+  window.tempAadhaarPhotoBase64 = null;
+  window.tempPanPhotoBase64 = null;
+  window.tempDLPhotoBase64 = null;
+
+  // Clear previews
+  document.getElementById('emp-photo-preview-box').innerHTML = '<i data-lucide="user"></i>';
+  document.getElementById('emp-aadhaar-preview-box').innerHTML = '<i data-lucide="file-text"></i>';
+  document.getElementById('emp-pan-preview-box').innerHTML = '<i data-lucide="file-text"></i>';
+  document.getElementById('emp-dl-preview-box').innerHTML = '<i data-lucide="file-text"></i>';
+  
+  // Reset personal details inputs
+  document.getElementById('emp-address').value = "";
+  document.getElementById('emp-dob').value = "";
+  document.getElementById('emp-joining-date').value = "";
+  document.getElementById('emp-emergency-contact').value = "";
+  document.getElementById('emp-blood-group').value = "";
+  document.getElementById('emp-aadhaar').value = "";
+  document.getElementById('emp-pan').value = "";
+  document.getElementById('emp-dl').value = "";
+
+  // Reset file inputs
+  document.getElementById('emp-profile-photo-input').value = "";
+  document.getElementById('emp-aadhaar-input').value = "";
+  document.getElementById('emp-pan-input').value = "";
+  document.getElementById('emp-dl-input').value = "";
+
+  // Set modal active tab to employment tab
+  document.querySelectorAll('.modal-tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.querySelectorAll('.modal-tab-panel').forEach(panel => panel.classList.remove('active'));
+  const activeTabBtn = Array.from(document.querySelectorAll('.modal-tab-btn')).find(btn => btn.getAttribute('onclick').includes('modal-tab-employment'));
+  if (activeTabBtn) activeTabBtn.classList.add('active');
+  const activePanel = document.getElementById('modal-tab-employment');
+  if (activePanel) activePanel.classList.add('active');
   
   const durationEl = document.getElementById('emp-shift-duration-info');
   if (durationEl) {
     durationEl.textContent = "Shift Duration: —";
   }
+
+  if (window.lucide) window.lucide.createIcons();
   
   document.getElementById('employee-modal').classList.add('active');
 }
@@ -2166,10 +2209,56 @@ function editEmployee(id) {
   document.getElementById('emp-pt-enabled').checked = emp.ptEnabled !== false;
   document.getElementById('emp-fixed-salary').checked = emp.fixedSalary === true;
 
+  // Reset temp base64 caches
+  window.tempProfilePhotoBase64 = null;
+  window.tempAadhaarPhotoBase64 = null;
+  window.tempPanPhotoBase64 = null;
+  window.tempDLPhotoBase64 = null;
+
+  // Clear file inputs
+  document.getElementById('emp-profile-photo-input').value = "";
+  document.getElementById('emp-aadhaar-input').value = "";
+  document.getElementById('emp-pan-input').value = "";
+  document.getElementById('emp-dl-input').value = "";
+
+  // Populate personal details fields
+  document.getElementById('emp-address').value = emp.address || "";
+  document.getElementById('emp-dob').value = emp.dob || "";
+  document.getElementById('emp-joining-date').value = emp.joiningDate || "";
+  document.getElementById('emp-emergency-contact').value = emp.emergencyContact || "";
+  document.getElementById('emp-blood-group').value = emp.bloodGroup || "";
+  document.getElementById('emp-aadhaar').value = emp.aadhaar || "";
+  document.getElementById('emp-pan').value = emp.pan || "";
+  document.getElementById('emp-dl').value = emp.drivingLicense || "";
+
+  // Render previews for editing employee
+  document.getElementById('emp-photo-preview-box').innerHTML = emp.profilePhoto 
+    ? `<img src="${emp.profilePhoto}" style="width:100%;height:100%;object-fit:cover;">` 
+    : '<i data-lucide="user"></i>';
+  document.getElementById('emp-aadhaar-preview-box').innerHTML = emp.aadhaarPhoto 
+    ? `<img src="${emp.aadhaarPhoto}" style="width:100%;height:100%;object-fit:cover;">` 
+    : '<i data-lucide="file-text"></i>';
+  document.getElementById('emp-pan-preview-box').innerHTML = emp.panPhoto 
+    ? `<img src="${emp.panPhoto}" style="width:100%;height:100%;object-fit:cover;">` 
+    : '<i data-lucide="file-text"></i>';
+  document.getElementById('emp-dl-preview-box').innerHTML = emp.drivingLicensePhoto 
+    ? `<img src="${emp.drivingLicensePhoto}" style="width:100%;height:100%;object-fit:cover;">` 
+    : '<i data-lucide="file-text"></i>';
+
+  // Reset modal tabs to first tab
+  document.querySelectorAll('.modal-tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.querySelectorAll('.modal-tab-panel').forEach(panel => panel.classList.remove('active'));
+  const activeTabBtn = Array.from(document.querySelectorAll('.modal-tab-btn')).find(btn => btn.getAttribute('onclick').includes('modal-tab-employment'));
+  if (activeTabBtn) activeTabBtn.classList.add('active');
+  const activePanel = document.getElementById('modal-tab-employment');
+  if (activePanel) activePanel.classList.add('active');
+
   // Trigger wage and shift duration calculation for the modal display
   if (typeof window.calculateWages === 'function') {
     window.calculateWages();
   }
+
+  if (window.lucide) window.lucide.createIcons();
 
   document.getElementById('employee-modal').classList.add('active');
 }
@@ -2222,7 +2311,25 @@ async function handleEmployeeSubmit(e) {
     esicEnabled: document.getElementById('emp-esic-enabled').checked,
     ptEnabled: document.getElementById('emp-pt-enabled').checked,
     fixedSalary: document.getElementById('emp-fixed-salary').checked,
-    status: document.getElementById('emp-status').value
+    status: document.getElementById('emp-status').value,
+
+    // New Personal details fields
+    address: document.getElementById('emp-address').value.trim(),
+    dob: document.getElementById('emp-dob').value,
+    joiningDate: document.getElementById('emp-joining-date').value,
+    emergencyContact: document.getElementById('emp-emergency-contact').value.replace(/\D/g, ''),
+    bloodGroup: document.getElementById('emp-blood-group').value,
+
+    // New Identity documents fields
+    aadhaar: document.getElementById('emp-aadhaar').value.trim(),
+    pan: document.getElementById('emp-pan').value.trim().toUpperCase(),
+    drivingLicense: document.getElementById('emp-dl').value.trim().toUpperCase(),
+
+    // Base64 document attachments
+    profilePhotoBase64: window.tempProfilePhotoBase64 || null,
+    aadhaarPhotoBase64: window.tempAadhaarPhotoBase64 || null,
+    panPhotoBase64: window.tempPanPhotoBase64 || null,
+    drivingLicensePhotoBase64: window.tempDLPhotoBase64 || null
   };
 
   try {
@@ -2282,6 +2389,566 @@ async function deleteEmployee(id) {
     console.error("Delete employee failed:", err);
     TransactionManager.showStatusToast(`Delete employee failed: ${err.message}`, true);
   }
+}
+
+// ==========================================================================
+// EMPLOYEE PROFILES CONTROLLER
+// ==========================================================================
+
+// Reset base64 variables
+window.tempProfilePhotoBase64 = null;
+window.tempAadhaarPhotoBase64 = null;
+window.tempPanPhotoBase64 = null;
+window.tempDLPhotoBase64 = null;
+
+// Tab switcher for modal tabs
+function switchModalTab(event, panelId) {
+  if (event) event.preventDefault();
+  
+  // Deactivate all tabs & panels
+  document.querySelectorAll('.modal-tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.querySelectorAll('.modal-tab-panel').forEach(panel => panel.classList.remove('active'));
+  
+  // Activate target tab & panel
+  if (event && event.currentTarget) {
+    event.currentTarget.classList.add('active');
+  } else {
+    const btn = Array.from(document.querySelectorAll('.modal-tab-btn')).find(b => b.getAttribute('onclick').includes(panelId));
+    if (btn) btn.classList.add('active');
+  }
+  
+  const panel = document.getElementById(panelId);
+  if (panel) panel.classList.add('active');
+}
+
+// Convert chosen photo/doc to base64 and update preview
+function handleImageFileSelect(input, docType) {
+  if (input.files && input.files[0]) {
+    const file = input.files[0];
+    
+    // Size check: 2MB limit
+    if (file.size > 2 * 1024 * 1024) {
+      alert("File is too large (maximum size is 2MB).");
+      input.value = "";
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const base64 = e.target.result;
+      const previewBoxId = `emp-${docType}-preview-box`;
+      const previewBox = document.getElementById(previewBoxId);
+      
+      if (previewBox) {
+        previewBox.innerHTML = `<img src="${base64}" style="width:100%; height:100%; object-fit:cover;">`;
+        
+        if (docType === 'profile') window.tempProfilePhotoBase64 = base64;
+        else if (docType === 'aadhaar') window.tempAadhaarPhotoBase64 = base64;
+        else if (docType === 'pan') window.tempPanPhotoBase64 = base64;
+        else if (docType === 'dl') window.tempDLPhotoBase64 = base64;
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
+// Initialize Employee Profiles Tab
+function initProfilesTab() {
+  const list = state.employees || [];
+  
+  // Set default selected profile to first employee if none selected
+  if (!state.selectedProfileEmpId && list.length > 0) {
+    // Sort Name alphabetically to match sidebar
+    const sorted = [...list].sort((a, b) => a.name.localeCompare(b.name));
+    state.selectedProfileEmpId = sorted[0].id;
+  }
+  
+  // Render sidebar list
+  renderProfilesSidebarList();
+  
+  // View selected employee profile
+  if (state.selectedProfileEmpId) {
+    viewEmployeeProfile(state.selectedProfileEmpId);
+  } else {
+    // Render empty state
+    document.getElementById('profile-details-card').innerHTML = `
+      <div class="empty-profile-state">
+        <i data-lucide="user-circle"></i>
+        <h3>Select an Employee</h3>
+        <p>Choose an employee from the list on the left to view their detailed profile, shift history, and monthly statistics.</p>
+      </div>
+    `;
+    if (window.lucide) window.lucide.createIcons();
+  }
+}
+
+// Render filtered employee list in Profiles sidebar
+function renderProfilesSidebarList() {
+  const container = document.getElementById('profiles-sidebar-list');
+  if (!container) return;
+  
+  container.innerHTML = "";
+  const query = (document.getElementById('profile-search-input')?.value || '').toLowerCase().trim();
+  
+  // Sort alphabetically
+  let employees = [...state.employees].sort((a, b) => a.name.localeCompare(b.name));
+  
+  // Apply search query
+  if (query) {
+    employees = employees.filter(emp => 
+      emp.name.toLowerCase().includes(query) ||
+      (emp.userId && emp.userId.toLowerCase().includes(query)) ||
+      (emp.designation && emp.designation.toLowerCase().includes(query))
+    );
+  }
+  
+  if (employees.length === 0) {
+    container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-tertiary); font-size:0.85rem;">No employees found</div>`;
+    return;
+  }
+  
+  employees.forEach(emp => {
+    const item = document.createElement('button');
+    item.className = `profile-list-item ${emp.id === state.selectedProfileEmpId ? 'active' : ''}`;
+    item.onclick = () => viewEmployeeProfile(emp.id);
+    
+    const initials = emp.name.split(' ').map(n => n[0]).join('').substring(0,2).toUpperCase();
+    const avatarHtml = emp.profilePhoto 
+      ? `<img src="${emp.profilePhoto}" class="profile-list-avatar" alt="${emp.name}">`
+      : `<div class="profile-list-avatar">${initials}</div>`;
+      
+    item.innerHTML = `
+      ${avatarHtml}
+      <div class="profile-list-meta">
+        <span class="profile-list-name">${emp.name}</span>
+        <span class="profile-list-desc">ID: ${emp.userId || '—'} • ${emp.designation || 'Staff'}</span>
+      </div>
+    `;
+    container.appendChild(item);
+  });
+  
+  if (window.lucide) window.lucide.createIcons();
+}
+
+// Search filter triggered on input event
+function filterProfilesSidebarList() {
+  renderProfilesSidebarList();
+}
+
+// Set active profile and render details
+function viewEmployeeProfile(empId) {
+  state.selectedProfileEmpId = empId;
+  
+  // Highlight in sidebar
+  document.querySelectorAll('.profile-list-item').forEach(item => item.classList.remove('active'));
+  renderProfilesSidebarList();
+  
+  const emp = state.employees.find(e => e.id === empId);
+  if (emp) {
+    renderEmployeeProfile(emp);
+  }
+}
+
+// Render complete profile details for a selected worker
+function renderEmployeeProfile(emp) {
+  const card = document.getElementById('profile-details-card');
+  if (!card) return;
+  
+  const initials = emp.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+  const avatarHtml = emp.profilePhoto 
+    ? `<img src="${emp.profilePhoto}" class="profile-avatar-large" alt="${emp.name}">`
+    : `<div class="profile-avatar-large">${initials}</div>`;
+    
+  const badgeClass = emp.status === 'active' ? 'badge-green' : 'badge-secondary';
+  const badgeText = emp.status === 'active' ? 'Active' : 'Suspended';
+  const phoneDisplay = emp.phone ? `+${emp.phone}` : '—';
+  
+  // Documents attachments HTML formatting
+  const makeDocCardHtml = (docName, docNo, docPhoto) => {
+    if (!docNo && !docPhoto) return `<span class="profile-info-value">Not Provided</span>`;
+    
+    let photoLink = "";
+    if (docPhoto) {
+      photoLink = `
+        <div class="doc-preview-card">
+          <div class="doc-preview-img-container" onclick="window.open('${docPhoto}', '_blank')" title="Click to view file">
+            <img src="${docPhoto}" alt="${docName}">
+          </div>
+          <div class="doc-preview-meta">
+            <span class="doc-preview-title">${docName} File</span>
+          </div>
+          <a href="${docPhoto}" download class="doc-preview-download" title="Download Document">
+            <i data-lucide="download"></i>
+          </a>
+        </div>
+      `;
+    }
+    
+    return `
+      <div style="display:flex; flex-direction:column; gap:4px; width:100%;">
+        <span class="profile-info-value" style="font-family: monospace; font-size:0.95rem; font-weight:700;">${docNo || 'No Number'}</span>
+        ${photoLink}
+      </div>
+    `;
+  };
+
+  const aadhaarHtml = makeDocCardHtml('Aadhaar Scan', emp.aadhaar, emp.aadhaarPhoto);
+  const panHtml = makeDocCardHtml('PAN Scan', emp.pan, emp.panPhoto);
+  const dlHtml = makeDocCardHtml('DL Scan', emp.drivingLicense, emp.drivingLicensePhoto);
+
+  const durationStr = emp.shiftStart && emp.shiftEnd ? `${getShiftDurationStr(emp.shiftStart, emp.shiftEnd)} hrs/day` : '—';
+  
+  const siteName = emp.siteId 
+    ? ((state.sites || []).find(s => s.id === emp.siteId)?.name || 'Default Work Site') 
+    : 'Default Work Site';
+
+  // Get current year-month
+  const now = new Date();
+  const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  card.innerHTML = `
+    <!-- Profile Header Card -->
+    <div class="profile-header-card">
+      ${avatarHtml}
+      <div class="profile-header-info">
+        <h2 class="profile-header-name">
+          ${emp.name}
+          <span class="badge ${badgeClass}">${badgeText}</span>
+        </h2>
+        <div class="profile-header-sub">
+          <span>Worker ID: <strong>${emp.userId || '—'}</strong></span>
+          <span>•</span>
+          <span>${emp.designation || 'General Staff'}</span>
+          <span>•</span>
+          <span class="badge badge-blue">${emp.modeOfWork || 'General Staff'}</span>
+        </div>
+      </div>
+      <div class="profile-header-actions">
+        ${emp.phone ? `<a href="https://wa.me/${emp.phone}" target="_blank" class="btn btn-secondary btn-icon" style="height:38px;"><i data-lucide="message-square"></i> WhatsApp Chat</a>` : ''}
+        <button class="btn btn-primary btn-icon" onclick="editEmployee('${emp.id}')" style="height:38px;"><i data-lucide="edit-3"></i> Edit Details</button>
+      </div>
+    </div>
+    
+    <!-- Profile Grid Details -->
+    <div class="profile-details-grid">
+      <!-- General & Personal details -->
+      <div class="profile-detail-section">
+        <h3 class="profile-section-title"><i data-lucide="user"></i> Personal Details</h3>
+        <ul class="profile-info-list">
+          <li class="profile-info-row">
+            <span class="profile-info-label">WhatsApp Contact:</span>
+            <span class="profile-info-value">${phoneDisplay}</span>
+          </li>
+          <li class="profile-info-row">
+            <span class="profile-info-label">Date of Birth:</span>
+            <span class="profile-info-value">${emp.dob ? new Date(emp.dob).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }) : '—'}</span>
+          </li>
+          <li class="profile-info-row">
+            <span class="profile-info-label">Joining Date:</span>
+            <span class="profile-info-value">${emp.joiningDate ? new Date(emp.joiningDate).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }) : '—'}</span>
+          </li>
+          <li class="profile-info-row">
+            <span class="profile-info-label">Emergency Phone:</span>
+            <span class="profile-info-value">${emp.emergencyContact ? `+${emp.emergencyContact}` : '—'}</span>
+          </li>
+          <li class="profile-info-row">
+            <span class="profile-info-label">Blood Group:</span>
+            <span class="profile-info-value"><span class="badge badge-rose" style="font-size:0.8rem; margin:0;">${emp.bloodGroup || '—'}</span></span>
+          </li>
+          <li class="profile-info-row full-width" style="border-top: 1px solid var(--glass-border); padding-top:10px; margin-top:5px;">
+            <span class="profile-info-label">Home Address:</span>
+            <span class="profile-info-value" style="text-align:left; font-size:0.85rem; color:var(--text-secondary); font-weight:normal;">${emp.address || 'No Address Provided'}</span>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Identity & Documents -->
+      <div class="profile-detail-section">
+        <h3 class="profile-section-title"><i data-lucide="file-text"></i> Identity Documents</h3>
+        <ul class="profile-info-list">
+          <li class="profile-info-row full-width">
+            <span class="profile-info-label">Aadhaar Card:</span>
+            ${aadhaarHtml}
+          </li>
+          <li class="profile-info-row full-width" style="border-top: 1px solid var(--glass-border); padding-top:10px; margin-top:5px;">
+            <span class="profile-info-label">PAN Card:</span>
+            ${panHtml}
+          </li>
+          <li class="profile-info-row full-width" style="border-top: 1px solid var(--glass-border); padding-top:10px; margin-top:5px;">
+            <span class="profile-info-label">Driving License:</span>
+            ${dlHtml}
+          </li>
+        </ul>
+      </div>
+
+      <!-- Job & Compensation Info -->
+      <div class="profile-detail-section">
+        <h3 class="profile-section-title"><i data-lucide="briefcase"></i> Shift & Compensation</h3>
+        <ul class="profile-info-list">
+          <li class="profile-info-row">
+            <span class="profile-info-label">Shift Hours:</span>
+            <span class="profile-info-value">${emp.shiftStart && emp.shiftEnd ? `<span class="badge badge-blue" style="font-family:monospace; margin-right:0;">${emp.shiftStart} - ${emp.shiftEnd}</span>` : '—'}</span>
+          </li>
+          <li class="profile-info-row">
+            <span class="profile-info-label">Shift Duration:</span>
+            <span class="profile-info-value">${durationStr}</span>
+          </li>
+          <li class="profile-info-row">
+            <span class="profile-info-label">Standard Work Days:</span>
+            <span class="profile-info-value">${emp.stdWorkingDays !== undefined ? emp.stdWorkingDays : 30} days/m</span>
+          </li>
+          <li class="profile-info-row">
+            <span class="profile-info-label">Default Work Site:</span>
+            <span class="profile-info-value">${siteName}</span>
+          </li>
+          <li class="profile-info-row" style="border-top: 1px solid var(--glass-border); padding-top:10px; margin-top:5px;">
+            <span class="profile-info-label">Payment Mode:</span>
+            <span class="profile-info-value"><strong>${emp.paymentMode || '—'}</strong></span>
+          </li>
+          <li class="profile-info-row">
+            <span class="profile-info-label">Monthly Wages Rate:</span>
+            <span class="profile-info-value">${emp.monthlyWage ? `₹${emp.monthlyWage.toFixed(2)}` : '—'}</span>
+          </li>
+          <li class="profile-info-row">
+            <span class="profile-info-label">Daily Wage Rate:</span>
+            <span class="profile-info-value">${emp.dailyRate ? `₹${emp.dailyRate.toFixed(2)}` : '—'}</span>
+          </li>
+          <li class="profile-info-row">
+            <span class="profile-info-label">Hourly Rate:</span>
+            <span class="profile-info-value">${emp.hourlyRate ? `₹${emp.hourlyRate.toFixed(2)}` : '—'}</span>
+          </li>
+          <li class="profile-info-row" style="border-top: 1px solid var(--glass-border); padding-top:10px; margin-top:5px;">
+            <span class="profile-info-label">Salary Lock State:</span>
+            <span class="profile-info-value"><span class="badge ${emp.fixedSalary ? 'badge-purple' : 'badge-secondary'}" style="margin:0;">${emp.fixedSalary ? 'Locked (Fixed Monthly)' : 'Variable Daily-based'}</span></span>
+          </li>
+          <li class="profile-info-row">
+            <span class="profile-info-label">Deductions Eligibility:</span>
+            <span class="profile-info-value" style="display:flex; gap:4px; justify-content:flex-end; flex-wrap:wrap;">
+              ${emp.pfEnabled !== false ? '<span class="badge badge-green" style="margin:0; font-size:0.7rem;">PF</span>' : '<span class="badge badge-secondary" style="margin:0; font-size:0.7rem; opacity:0.5;">PF</span>'}
+              ${emp.esicEnabled !== false ? '<span class="badge badge-green" style="margin:0; font-size:0.7rem;">ESIC</span>' : '<span class="badge badge-secondary" style="margin:0; font-size:0.7rem; opacity:0.5;">ESIC</span>'}
+              ${emp.ptEnabled !== false ? '<span class="badge badge-green" style="margin:0; font-size:0.7rem;">PT</span>' : '<span class="badge badge-secondary" style="margin:0; font-size:0.7rem; opacity:0.5;">PT</span>'}
+            </span>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Attendance Metrics & Timeline Section -->
+    <div class="glass-card" style="margin: 0; padding: 20px; background: rgba(0, 0, 0, 0.08); border: 1px solid var(--glass-border); border-radius: var(--border-radius-md);">
+      <div class="card-header flex-header" style="padding: 0 0 15px 0; border-bottom: 1px solid var(--glass-border); margin-bottom: 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+        <div class="header-left">
+          <h3 style="font-size: 1rem; font-weight:700; display:flex; align-items:center; gap:8px;"><i data-lucide="trending-up" style="color:var(--color-primary);"></i> Attendance & Wage Analytics</h3>
+        </div>
+        <div class="header-right">
+          <div class="filter-group" style="margin-bottom:0; flex-direction:row; align-items:center; gap:8px;">
+            <label style="margin-bottom:0; font-weight:600; font-size:0.85rem; color:var(--text-secondary);">Filter Month:</label>
+            <input type="month" id="profile-month-filter" class="form-control" style="width:170px; height:36px;" onchange="handleProfileMonthChange(event)" value="${yearMonth}">
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats Grid -->
+      <div class="metrics-grid" id="profile-stats-container" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:15px; margin-bottom: 20px;">
+        <!-- Loaded dynamically -->
+      </div>
+
+      <!-- Month Timeline Table -->
+      <div class="profile-timeline-section" style="border-top:1px solid var(--glass-border); padding-top:20px; margin-top:20px;">
+        <h4 style="font-size:0.9rem; font-weight:700; color:var(--text-secondary); margin-bottom:12px; display:flex; align-items:center; gap:8px;"><i data-lucide="calendar" style="width:16px;"></i> Punch Timeline for selected month</h4>
+        <div class="overflow-x" style="max-height: 400px; overflow-y: auto;">
+          <table class="data-table" style="font-size: 0.85rem;">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Status</th>
+                <th>Work Site</th>
+                <th>Check-In</th>
+                <th>Check-Out</th>
+                <th>Duration</th>
+                <th>Chronological Punches</th>
+              </tr>
+            </thead>
+            <tbody id="profile-timeline-container">
+              <!-- Loaded dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  if (window.lucide) window.lucide.createIcons();
+  
+  // Load stats and timeline for current month
+  loadEmployeeProfileStats(emp, yearMonth);
+}
+
+// Fetch and calculate stats and timeline logs for the selected month range
+async function loadEmployeeProfileStats(emp, yearMonth) {
+  const statsContainer = document.getElementById('profile-stats-container');
+  const timelineContainer = document.getElementById('profile-timeline-container');
+  if (!statsContainer || !timelineContainer) return;
+
+  statsContainer.innerHTML = `<div style="grid-column: 1/-1; text-align:center; padding: 20px; color:var(--text-tertiary);"><i data-lucide="loader" class="animate-spin" style="margin-right:8px; display:inline-block; vertical-align:middle; width: 16px; height: 16px;"></i>Loading statistics...</div>`;
+  timelineContainer.innerHTML = `<tr><td colspan="7" style="text-align:center; padding: 20px; color:var(--text-tertiary);"><i data-lucide="loader" class="animate-spin" style="margin-right:8px; display:inline-block; vertical-align:middle; width: 16px; height: 16px;"></i>Loading timeline logs...</td></tr>`;
+  if (window.lucide) window.lucide.createIcons();
+
+  try {
+    const [year, month] = yearMonth.split('-');
+    const startDate = `${year}-${month}-01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    const endDate = `${year}-${month}-${String(lastDay).padStart(2, '0')}`;
+
+    // Parallel fetch attendance details and payroll sheets
+    const [attendanceRes, payrollRes] = await Promise.all([
+      fetch(`/api/attendance?startDate=${startDate}&endDate=${endDate}`).then(r => r.json()),
+      fetch(`/api/payroll?startDate=${startDate}&endDate=${endDate}`).then(r => r.json())
+    ]);
+
+    const empLogs = attendanceRes.filter(log => log.employeeId === emp.id);
+    const empPayrollRow = payrollRes.find(row => row.employeeId === emp.id) || {};
+
+    // Sort logs chronologically
+    empLogs.sort((a, b) => a.date.localeCompare(b.date));
+
+    // Stats calculations
+    const totalDays = empLogs.length;
+    const presentDays = empLogs.filter(log => log.status === 'completed' || log.status === 'Late Check-in' || log.status === 'Early Check-out').length;
+    const activeDuty = empLogs.filter(log => log.status === 'checked-in').length;
+    const lateDays = empLogs.filter(log => log.status === 'Late Check-in' || log.status === 'late' || (log.status === 'completed' && log.isLate)).length;
+    const leaveDays = empLogs.filter(log => log.status === 'leave').length;
+    const halfDays = empLogs.filter(log => log.status === 'half-day leave').length;
+    const absentDays = empLogs.filter(log => log.status === 'absent').length;
+    
+    // Attendance rate
+    const activeDays = totalDays - leaveDays;
+    const attendanceRate = activeDays > 0 ? (((presentDays + activeDuty + halfDays * 0.5) / activeDays) * 100).toFixed(1) : '—';
+    const attendanceRateStr = attendanceRate === '—' ? '—' : `${attendanceRate}%`;
+
+    const otHours = empPayrollRow.otHours || 0;
+    const travelHours = empPayrollRow.travelTimeHours || 0;
+    const netSalary = empPayrollRow.netSalary || 0;
+
+    statsContainer.innerHTML = `
+      <div class="metric-card bg-slate-card" style="padding: 12px; margin: 0; background:rgba(255,255,255,0.02); border:1px solid var(--glass-border);">
+        <div class="metric-title" style="font-size:0.75rem; color:var(--text-tertiary); font-weight:600;">Attendance Rate</div>
+        <div class="metric-value" style="font-size:1.3rem; margin: 4px 0; font-weight:700; color:var(--color-primary);">${attendanceRateStr}</div>
+        <div class="metric-subtext" style="font-size:0.7rem; color:var(--text-tertiary);">${activeDays} active days</div>
+      </div>
+      <div class="metric-card bg-slate-card" style="padding: 12px; margin: 0; background:rgba(255,255,255,0.02); border:1px solid var(--glass-border);">
+        <div class="metric-title" style="font-size:0.75rem; color:var(--text-tertiary); font-weight:600;">Days Present</div>
+        <div class="metric-value text-green" style="font-size:1.3rem; margin: 4px 0; font-weight:700;">${presentDays + activeDuty}</div>
+        <div class="metric-subtext" style="font-size:0.7rem; color:var(--text-tertiary);">${activeDuty} active check-ins</div>
+      </div>
+      <div class="metric-card bg-slate-card" style="padding: 12px; margin: 0; background:rgba(255,255,255,0.02); border:1px solid var(--glass-border);">
+        <div class="metric-title" style="font-size:0.75rem; color:var(--text-tertiary); font-weight:600;">Late / Half-Day</div>
+        <div class="metric-value text-amber" style="font-size:1.3rem; margin: 4px 0; font-weight:700;">${lateDays} / ${halfDays}</div>
+        <div class="metric-subtext" style="font-size:0.7rem; color:var(--text-tertiary);">Punches / Shifts</div>
+      </div>
+      <div class="metric-card bg-slate-card" style="padding: 12px; margin: 0; background:rgba(255,255,255,0.02); border:1px solid var(--glass-border);">
+        <div class="metric-title" style="font-size:0.75rem; color:var(--text-tertiary); font-weight:600;">Absent / Leave</div>
+        <div class="metric-value text-red" style="font-size:1.3rem; margin: 4px 0; font-weight:700;">${absentDays} / ${leaveDays}</div>
+        <div class="metric-subtext" style="font-size:0.7rem; color:var(--text-tertiary);">Punches / Leaves</div>
+      </div>
+      <div class="metric-card bg-slate-card" style="padding: 12px; margin: 0; background:rgba(255,255,255,0.02); border:1px solid var(--glass-border);">
+        <div class="metric-title" style="font-size:0.75rem; color:var(--text-tertiary); font-weight:600;">Overtime Hours</div>
+        <div class="metric-value text-indigo" style="font-size:1.3rem; margin: 4px 0; font-weight:700;">${otHours.toFixed(1)} hrs</div>
+        <div class="metric-subtext" style="font-size:0.7rem; color:var(--text-tertiary);">OT Payout calculated</div>
+      </div>
+      <div class="metric-card bg-slate-card" style="padding: 12px; margin: 0; background:rgba(255,255,255,0.02); border:1px solid var(--glass-border);">
+        <div class="metric-title" style="font-size:0.75rem; color:var(--text-tertiary); font-weight:600;">Travel Credits</div>
+        <div class="metric-value text-cyan" style="font-size:1.3rem; margin: 4px 0; font-weight:700;">${travelHours.toFixed(1)} hrs</div>
+        <div class="metric-subtext" style="font-size:0.7rem; color:var(--text-tertiary);">50% paid travel credit</div>
+      </div>
+      <div class="metric-card bg-slate-card" style="grid-column: span 2; padding: 12px; margin: 0; background:rgba(255,255,255,0.02); border:1px solid var(--glass-border);">
+        <div class="metric-title" style="font-size:0.75rem; color:var(--text-tertiary); font-weight:600;">Monthly Earned Net Salary</div>
+        <div class="metric-value text-green" style="font-size:1.4rem; margin: 4px 0; font-weight:700;">₹${netSalary.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+        <div class="metric-subtext" style="font-size:0.7rem; color:var(--text-tertiary);">Adjustments included</div>
+      </div>
+    `;
+
+    if (empLogs.length === 0) {
+      timelineContainer.innerHTML = `<tr><td colspan="7" style="text-align:center; padding: 20px; color:var(--text-tertiary);">No attendance logs recorded in ${yearMonth}.</td></tr>`;
+      return;
+    }
+
+    timelineContainer.innerHTML = empLogs.map(log => {
+      let statusClass = "badge-secondary";
+      let statusText = log.status || "—";
+      
+      if (log.status === 'completed') {
+        statusClass = "badge-green";
+        statusText = "Present";
+      } else if (log.status === 'checked-in') {
+        statusClass = "badge-blue";
+        statusText = "Active Duty";
+      } else if (log.status === 'Late Check-in') {
+        statusClass = "badge-amber";
+      } else if (log.status === 'Early Check-out') {
+        statusClass = "badge-indigo";
+      } else if (log.status === 'half-day leave') {
+        statusClass = "badge-purple";
+        statusText = "Half Day";
+      } else if (log.status === 'absent') {
+        statusClass = "badge-red";
+        statusText = "Absent";
+      } else if (log.status === 'leave') {
+        statusClass = "badge-orange";
+        statusText = "Leave";
+      }
+
+      const dateObj = new Date(log.date);
+      const dateStr = dateObj.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+      
+      const checkInDisplay = log.checkIn ? new Date(log.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+      const checkOutDisplay = log.checkOut ? new Date(log.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+      
+      const durationVal = log.duration ? `${(log.duration / 60).toFixed(2)} hrs` : '—';
+      
+      let punchTimeline = "—";
+      if (log.punches && log.punches.length > 0) {
+        punchTimeline = log.punches.map(p => {
+          const punchTime = new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const colorClass = p.direction === 'in' ? 'text-green' : 'text-rose';
+          return `<span class="${colorClass}" style="font-weight:600; font-family:monospace; margin-right:4px;">${p.direction.toUpperCase()} ${punchTime}</span>`;
+        }).join(' → ');
+      }
+
+      return `
+        <tr>
+          <td><strong>${dateStr}</strong></td>
+          <td><span class="badge ${statusClass}">${statusText}</span></td>
+          <td><span style="font-weight:600;">${log.siteName || '—'}</span></td>
+          <td><code style="font-family:monospace; font-size:0.8rem;">${checkInDisplay}</code></td>
+          <td><code style="font-family:monospace; font-size:0.8rem;">${checkOutDisplay}</code></td>
+          <td><strong>${durationVal}</strong></td>
+          <td style="font-size:0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width:300px;">${punchTimeline}</td>
+        </tr>
+      `;
+    }).join('');
+
+    if (window.lucide) window.lucide.createIcons();
+
+  } catch (err) {
+    console.error("Failed to load employee stats:", err);
+    statsContainer.innerHTML = `<div style="grid-column: 1/-1; text-align:center; color:var(--color-error);">Failed to load statistics: ${err.message}</div>`;
+    timelineContainer.innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--color-error);">Failed to load timeline: ${err.message}</td></tr>`;
+  }
+}
+
+// Event handler for month changing
+function handleProfileMonthChange(event) {
+  const yearMonth = event.target.value;
+  const activeEmp = state.employees.find(e => e.id === state.selectedProfileEmpId);
+  if (activeEmp) {
+    loadEmployeeProfileStats(activeEmp, yearMonth);
+  }
+}
+
+// Redirect switch helper from Registry table clicks
+function viewProfileFromRegistry(empId) {
+  state.selectedProfileEmpId = empId;
+  switchTab('profiles');
 }
 
 // --- Work Sites CRUD ---
@@ -3604,7 +4271,7 @@ function renderPayrollTable(data) {
       <td><strong>${row.modeOfWork || "—"}</strong></td>
       <td><strong>${row.userId || "—"}</strong></td>
       <td>
-        <span class="worker-primary-name">${row.employeeName}</span>
+        <span class="worker-primary-name" style="cursor: pointer; color: var(--color-primary); text-decoration: underline;" onclick="viewProfileFromRegistry('${row.employeeId}')" title="View Profile">${row.employeeName}</span>
       </td>
 
       <td class="cell-basic" data-val="${isDaily ? 0 : row.basic}">${isDaily ? '—' : '₹' + row.basic.toFixed(2)}</td>
