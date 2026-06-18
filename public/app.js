@@ -6428,7 +6428,7 @@ function exportWeldersWeeklyExcel() {
   window.location.href = `/api/export/welders-weekly/excel?friday=${friday}`;
 }
 
-// Lightbox helper for enlarging profile photo
+// Lightbox helper for enlarging profile photo with zoom, pan and close controls
 window.enlargeProfilePhoto = function(photoUrl) {
   if (!photoUrl) return;
   
@@ -6442,19 +6442,97 @@ window.enlargeProfilePhoto = function(photoUrl) {
       left: 0;
       width: 100vw;
       height: 100vh;
-      background: rgba(0, 0, 0, 0.85);
+      background: rgba(0, 0, 0, 0.9);
       z-index: 9999;
       display: none;
       align-items: center;
       justify-content: center;
-      cursor: zoom-out;
       opacity: 0;
-      transition: opacity 0.25s ease;
+      transition: opacity 0.2s ease;
+      user-select: none;
+      overflow: hidden;
     `;
-    lightbox.onclick = () => {
-      lightbox.style.opacity = '0';
-      setTimeout(() => { lightbox.style.display = 'none'; }, 250);
+    
+    // Create control buttons bar
+    const controls = document.createElement('div');
+    controls.style = `
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      display: flex;
+      gap: 12px;
+      z-index: 10000;
+      background: rgba(15, 15, 21, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 6px 12px;
+      backdrop-filter: blur(10px);
+    `;
+    
+    // Helper to style buttons inside lightbox
+    const styleBtn = (btn) => {
+      btn.style = `
+        background: transparent;
+        border: none;
+        color: #fff;
+        cursor: pointer;
+        padding: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 4px;
+        transition: background 0.15s ease, color 0.15s ease;
+        outline: none;
+      `;
+      btn.onmouseover = () => { btn.style.background = 'rgba(255,255,255,0.08)'; };
+      btn.onmouseout = () => { btn.style.background = 'transparent'; };
     };
+
+    // Zoom In button
+    const btnZoomIn = document.createElement('button');
+    btnZoomIn.innerHTML = '<i data-lucide="zoom-in" style="width:16px; height:16px;"></i>';
+    styleBtn(btnZoomIn);
+    
+    // Zoom Out button
+    const btnZoomOut = document.createElement('button');
+    btnZoomOut.innerHTML = '<i data-lucide="zoom-out" style="width:16px; height:16px;"></i>';
+    styleBtn(btnZoomOut);
+    
+    // Reset button
+    const btnReset = document.createElement('button');
+    btnReset.innerHTML = '<i data-lucide="maximize" style="width:16px; height:16px;"></i>';
+    styleBtn(btnReset);
+    
+    // Close button
+    const btnClose = document.createElement('button');
+    btnClose.innerHTML = '<i data-lucide="x" style="width:16px; height:16px;"></i>';
+    styleBtn(btnClose);
+    btnClose.onmouseover = () => {
+      btnClose.style.background = 'rgba(244, 63, 94, 0.1)';
+      btnClose.style.color = '#f43f5e';
+    };
+    btnClose.onmouseout = () => {
+      btnClose.style.background = 'transparent';
+      btnClose.style.color = '#fff';
+    };
+    
+    controls.appendChild(btnZoomIn);
+    controls.appendChild(btnZoomOut);
+    controls.appendChild(btnReset);
+    controls.appendChild(btnClose);
+    lightbox.appendChild(controls);
+    
+    // Create image container (to allow easy translate & scale)
+    const imgContainer = document.createElement('div');
+    imgContainer.id = 'photo-lightbox-img-container';
+    imgContainer.style = `
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: grab;
+    `;
     
     const img = document.createElement('img');
     img.id = 'photo-lightbox-img';
@@ -6462,25 +6540,135 @@ window.enlargeProfilePhoto = function(photoUrl) {
       max-width: 90%;
       max-height: 90%;
       object-fit: contain;
-      border-radius: 8px;
+      border-radius: 6px;
       box-shadow: 0 10px 40px rgba(0,0,0,0.8);
-      border: 2px solid rgba(255, 255, 255, 0.1);
-      transform: scale(0.95);
-      transition: transform 0.25s ease;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      transform-origin: center center;
+      transition: transform 0.15s ease-out;
+      pointer-events: auto;
     `;
-    img.onclick = (e) => e.stopPropagation();
     
-    lightbox.appendChild(img);
+    imgContainer.appendChild(img);
+    lightbox.appendChild(imgContainer);
     document.body.appendChild(lightbox);
+    
+    // State variables
+    let scale = 1;
+    let translateX = 0;
+    let translateY = 0;
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    
+    function updateTransform() {
+      img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+      if (scale > 1) {
+        imgContainer.style.cursor = 'move';
+      } else {
+        imgContainer.style.cursor = 'grab';
+      }
+    }
+    
+    function resetView() {
+      scale = 1;
+      translateX = 0;
+      translateY = 0;
+      updateTransform();
+    }
+    
+    btnZoomIn.onclick = (e) => {
+      e.stopPropagation();
+      scale = Math.min(scale + 0.25, 4);
+      updateTransform();
+    };
+    
+    btnZoomOut.onclick = (e) => {
+      e.stopPropagation();
+      scale = Math.max(scale - 0.25, 0.5);
+      updateTransform();
+    };
+    
+    btnReset.onclick = (e) => {
+      e.stopPropagation();
+      resetView();
+    };
+    
+    btnClose.onclick = (e) => {
+      e.stopPropagation();
+      closeLightbox();
+    };
+    
+    // Close lightbox on clicking background
+    lightbox.onclick = (e) => {
+      if (e.target === lightbox || e.target === imgContainer) {
+        closeLightbox();
+      }
+    };
+    
+    function closeLightbox() {
+      lightbox.style.opacity = '0';
+      setTimeout(() => { 
+        lightbox.style.display = 'none'; 
+        resetView();
+      }, 200);
+    }
+    
+    // Drag/Pan events
+    imgContainer.onmousedown = (e) => {
+      e.preventDefault();
+      isDragging = true;
+      imgContainer.style.cursor = 'grabbing';
+      startX = e.clientX - translateX;
+      startY = e.clientY - translateY;
+    };
+    
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      translateX = e.clientX - startX;
+      translateY = e.clientY - startY;
+      updateTransform();
+    });
+    
+    window.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        if (scale > 1) {
+          imgContainer.style.cursor = 'move';
+        } else {
+          imgContainer.style.cursor = 'grab';
+        }
+      }
+    });
+    
+    // Mouse wheel zoom
+    imgContainer.onwheel = (e) => {
+      e.preventDefault();
+      const zoomFactor = 0.1;
+      if (e.deltaY < 0) {
+        scale = Math.min(scale + zoomFactor, 4);
+      } else {
+        scale = Math.max(scale - zoomFactor, 0.5);
+      }
+      updateTransform();
+    };
+    
+    // Expose helpers for updates
+    lightbox.resetView = resetView;
   }
   
   const imgEl = document.getElementById('photo-lightbox-img');
   imgEl.src = photoUrl;
   
   lightbox.style.display = 'flex';
+  if (window.lucide) {
+    window.lucide.createIcons({
+      node: lightbox
+    });
+  }
+  
   setTimeout(() => {
     lightbox.style.opacity = '1';
-    imgEl.style.transform = 'scale(1)';
+    if (lightbox.resetView) lightbox.resetView();
   }, 10);
 };
 
