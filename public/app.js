@@ -1221,8 +1221,10 @@ function renderAttendanceLogsTable(r) {
     } else if (row.status === 'leave') {
       statusBadge = `<span class="badge badge-amber">Leave</span>`;
     } else if (row.status === 'late') {
-      statusBadge = `<span class="badge badge-orange">Late (Pending)</span>`;
-      if (!row.checkOut) {
+      if (row.checkOut) {
+        statusBadge = `<span class="badge badge-orange">Late Check-in</span>`;
+      } else {
+        statusBadge = `<span class="badge badge-orange">Late (Pending)</span>`;
         tr.className = "table-row-checked-in";
       }
     } else if (row.status === 'Late Check-in') {
@@ -1401,8 +1403,12 @@ function renderPunchesTable(r) {
     } else if (row.status === 'leave') {
       statusBadge = `<span class="badge badge-amber">Leave</span>`;
     } else if (row.status === 'late') {
-      statusBadge = `<span class="badge badge-orange">Late (Pending)</span>`;
-      if (!row.checkOut) tr.className = "table-row-checked-in";
+      if (row.checkOut) {
+        statusBadge = `<span class="badge badge-orange">Late Check-in</span>`;
+      } else {
+        statusBadge = `<span class="badge badge-orange">Late (Pending)</span>`;
+        if (!row.checkOut) tr.className = "table-row-checked-in";
+      }
     } else if (row.status === 'Late Check-in') {
       statusBadge = `<span class="badge badge-orange">Late Check-in</span>`;
       if (!row.checkOut) tr.className = "table-row-checked-in";

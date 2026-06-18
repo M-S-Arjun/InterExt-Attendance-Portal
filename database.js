@@ -1033,7 +1033,7 @@ class Database {
         record.status = "Early Check-out";
       } else if (record.status === 'Late Check-in' || record.status === 'late' || record.isLate) {
         record.isLate = true;
-        if (record.scannedCheckIn) {
+        if (record.scannedCheckIn || record.checkOut) {
           record.status = "Late Check-in";
         } else {
           record.status = "late";
