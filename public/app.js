@@ -6687,4 +6687,63 @@ window.getDocPreviewHtml = function(docUrl, fallbackIcon) {
   return `<img src="${docUrl}" style="width:100%; height:100%; object-fit:cover;">`;
 };
 
+// Global event listener for Escape key to close modals & lightbox
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    // 1. Close Photo Lightbox
+    const lightbox = document.getElementById('photo-lightbox-modal');
+    if (lightbox && lightbox.style.display === 'flex') {
+      lightbox.style.opacity = '0';
+      setTimeout(() => {
+        lightbox.style.display = 'none';
+        if (lightbox.resetView) lightbox.resetView();
+      }, 200);
+      return;
+    }
+    
+    // 2. Close Modal Dialogs
+    const employeeModal = document.getElementById('employee-modal');
+    if (employeeModal && employeeModal.classList.contains('active')) {
+      if (typeof closeEmployeeModal === 'function') closeEmployeeModal();
+      return;
+    }
+
+    const attendanceModal = document.getElementById('attendance-modal');
+    if (attendanceModal && attendanceModal.classList.contains('active')) {
+      if (typeof closeAttendanceModal === 'function') closeAttendanceModal();
+      return;
+    }
+
+    const holidayModal = document.getElementById('holiday-modal');
+    if (holidayModal && holidayModal.classList.contains('active')) {
+      if (typeof closeHolidayModal === 'function') closeHolidayModal();
+      return;
+    }
+
+    const selfieModal = document.getElementById('selfie-modal');
+    if (selfieModal && selfieModal.classList.contains('active')) {
+      if (typeof closeSelfieModal === 'function') closeSelfieModal();
+      return;
+    }
+
+    const disputeModal = document.getElementById('dispute-modal');
+    if (disputeModal && disputeModal.classList.contains('active')) {
+      if (typeof closeDisputeModal === 'function') closeDisputeModal();
+      return;
+    }
+
+    const cctvModal = document.getElementById('cctv-modal');
+    if (cctvModal && cctvModal.classList.contains('active')) {
+      if (typeof closeCctvModal === 'function') closeCctvModal();
+      return;
+    }
+
+    const metricModal = document.getElementById('metric-employees-modal');
+    if (metricModal && metricModal.classList.contains('active')) {
+      if (typeof closeMetricEmployeesModal === 'function') closeMetricEmployeesModal();
+      return;
+    }
+  }
+});
+
 
