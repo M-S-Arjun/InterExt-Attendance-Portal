@@ -2232,18 +2232,10 @@ function editEmployee(id) {
   document.getElementById('emp-dl').value = emp.drivingLicense || "";
 
   // Render previews for editing employee
-  document.getElementById('emp-photo-preview-box').innerHTML = emp.profilePhoto 
-    ? `<img src="${emp.profilePhoto}" style="width:100%;height:100%;object-fit:cover;">` 
-    : '<i data-lucide="user"></i>';
-  document.getElementById('emp-aadhaar-preview-box').innerHTML = emp.aadhaarPhoto 
-    ? `<img src="${emp.aadhaarPhoto}" style="width:100%;height:100%;object-fit:cover;">` 
-    : '<i data-lucide="file-text"></i>';
-  document.getElementById('emp-pan-preview-box').innerHTML = emp.panPhoto 
-    ? `<img src="${emp.panPhoto}" style="width:100%;height:100%;object-fit:cover;">` 
-    : '<i data-lucide="file-text"></i>';
-  document.getElementById('emp-dl-preview-box').innerHTML = emp.drivingLicensePhoto 
-    ? `<img src="${emp.drivingLicensePhoto}" style="width:100%;height:100%;object-fit:cover;">` 
-    : '<i data-lucide="file-text"></i>';
+  document.getElementById('emp-photo-preview-box').innerHTML = window.getDocPreviewHtml(emp.profilePhoto, 'user');
+  document.getElementById('emp-aadhaar-preview-box').innerHTML = window.getDocPreviewHtml(emp.aadhaarPhoto, 'file-text');
+  document.getElementById('emp-pan-preview-box').innerHTML = window.getDocPreviewHtml(emp.panPhoto, 'file-text');
+  document.getElementById('emp-dl-preview-box').innerHTML = window.getDocPreviewHtml(emp.drivingLicensePhoto, 'file-text');
 
   // Reset modal tabs to first tab
   document.querySelectorAll('.modal-tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -2443,7 +2435,8 @@ function handleImageFileSelect(input, docType) {
       const previewBox = document.getElementById(previewBoxId);
       
       if (previewBox) {
-        previewBox.innerHTML = `<img src="${base64}" style="width:100%; height:100%; object-fit:cover;">`;
+        previewBox.innerHTML = window.getDocPreviewHtml(base64, docType === 'profile' ? 'user' : 'file-text');
+        if (window.lucide) window.lucide.createIcons();
         
         if (docType === 'profile') window.tempProfilePhotoBase64 = base64;
         else if (docType === 'aadhaar') window.tempAadhaarPhotoBase64 = base64;
@@ -2559,7 +2552,7 @@ function renderEmployeeProfile(emp) {
   
   const initials = emp.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
   const avatarHtml = emp.profilePhoto 
-    ? `<img src="${emp.profilePhoto}" class="profile-avatar-large" alt="${emp.name}">`
+    ? `<img src="${emp.profilePhoto}" class="profile-avatar-large" alt="${emp.name}" style="cursor: zoom-in;" onclick="window.enlargeProfilePhoto('${emp.profilePhoto}')" title="Click to enlarge">`
     : `<div class="profile-avatar-large">${initials}</div>`;
     
   const badgeClass = emp.status === 'active' ? 'badge-green' : 'badge-secondary';
@@ -2572,10 +2565,20 @@ function renderEmployeeProfile(emp) {
     
     let photoLink = "";
     if (docPhoto) {
+      const isPdf = docPhoto.toLowerCase().endsWith('.pdf') || docPhoto.startsWith('data:application/pdf');
+      const innerPreview = isPdf 
+        ? `
+          <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; height:100%; background:rgba(239,68,68,0.08); color:var(--color-error);">
+            <i data-lucide="file-text" style="width:18px; height:18px;"></i>
+            <span style="font-size:0.6rem; font-weight:700;">PDF</span>
+          </div>
+        `
+        : `<img src="${docPhoto}" alt="${docName}">`;
+
       photoLink = `
         <div class="doc-preview-card">
           <div class="doc-preview-img-container" onclick="window.open('${docPhoto}', '_blank')" title="Click to view file">
-            <img src="${docPhoto}" alt="${docName}">
+            ${innerPreview}
           </div>
           <div class="doc-preview-meta">
             <span class="doc-preview-title">${docName} File</span>
@@ -6424,5 +6427,76 @@ function exportWeldersWeeklyExcel() {
   }
   window.location.href = `/api/export/welders-weekly/excel?friday=${friday}`;
 }
+
+// Lightbox helper for enlarging profile photo
+window.enlargeProfilePhoto = function(photoUrl) {
+  if (!photoUrl) return;
+  
+  let lightbox = document.getElementById('photo-lightbox-modal');
+  if (!lightbox) {
+    lightbox = document.createElement('div');
+    lightbox.id = 'photo-lightbox-modal';
+    lightbox.style = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.85);
+      z-index: 9999;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      cursor: zoom-out;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+    `;
+    lightbox.onclick = () => {
+      lightbox.style.opacity = '0';
+      setTimeout(() => { lightbox.style.display = 'none'; }, 250);
+    };
+    
+    const img = document.createElement('img');
+    img.id = 'photo-lightbox-img';
+    img.style = `
+      max-width: 90%;
+      max-height: 90%;
+      object-fit: contain;
+      border-radius: 8px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+      border: 2px solid rgba(255, 255, 255, 0.1);
+      transform: scale(0.95);
+      transition: transform 0.25s ease;
+    `;
+    img.onclick = (e) => e.stopPropagation();
+    
+    lightbox.appendChild(img);
+    document.body.appendChild(lightbox);
+  }
+  
+  const imgEl = document.getElementById('photo-lightbox-img');
+  imgEl.src = photoUrl;
+  
+  lightbox.style.display = 'flex';
+  setTimeout(() => {
+    lightbox.style.opacity = '1';
+    imgEl.style.transform = 'scale(1)';
+  }, 10);
+};
+
+// Document Preview Helper supporting Images and PDFs
+window.getDocPreviewHtml = function(docUrl, fallbackIcon) {
+  if (!docUrl) return `<i data-lucide="${fallbackIcon}"></i>`;
+  const isPdf = docUrl.toLowerCase().endsWith('.pdf') || docUrl.startsWith('data:application/pdf');
+  if (isPdf) {
+    return `
+      <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:var(--color-error); background: rgba(239, 68, 68, 0.08);">
+        <i data-lucide="file-text" style="width:24px; height:24px;"></i>
+        <span style="font-size:0.6rem; font-weight:700; margin-top:2px;">PDF</span>
+      </div>
+    `;
+  }
+  return `<img src="${docUrl}" style="width:100%; height:100%; object-fit:cover;">`;
+};
 
 

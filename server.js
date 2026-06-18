@@ -324,8 +324,18 @@ app.post('/api/employees', (req, res) => {
       if (!fs.existsSync(uploadsDir)) {
         fs.mkdirSync(uploadsDir, { recursive: true });
       }
-      const base64Data = employeeData.profilePhotoBase64.replace(/^data:image\/[a-z]+;base64,/, '');
-      const filename = `${id}_${Date.now()}.png`;
+      
+      let ext = 'png';
+      const mimeMatch = employeeData.profilePhotoBase64.match(/^data:([a-zA-Z0-9.+\/-]+);base64,/);
+      if (mimeMatch) {
+        const mimeType = mimeMatch[1];
+        if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') ext = 'jpg';
+        else if (mimeType === 'image/webp') ext = 'webp';
+        else if (mimeType === 'image/gif') ext = 'gif';
+      }
+      
+      const base64Data = employeeData.profilePhotoBase64.replace(/^data:[a-zA-Z0-9.+\/-]+;base64,/, '');
+      const filename = `${id}_${Date.now()}.${ext}`;
       fs.writeFileSync(path.join(uploadsDir, filename), Buffer.from(base64Data, 'base64'));
       employeeData.profilePhoto = `/uploads/profiles/${filename}`;
       delete employeeData.profilePhotoBase64;
@@ -354,8 +364,19 @@ app.post('/api/employees', (req, res) => {
         if (!fs.existsSync(docDir)) {
           fs.mkdirSync(docDir, { recursive: true });
         }
-        const base64Data = employeeData[field.base64Key].replace(/^data:image\/[a-z]+;base64,/, '');
-        const filename = `${field.prefix}_${id}_${Date.now()}.png`;
+        
+        let ext = 'png';
+        const mimeMatch = employeeData[field.base64Key].match(/^data:([a-zA-Z0-9.+\/-]+);base64,/);
+        if (mimeMatch) {
+          const mimeType = mimeMatch[1];
+          if (mimeType === 'application/pdf') ext = 'pdf';
+          else if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') ext = 'jpg';
+          else if (mimeType === 'image/webp') ext = 'webp';
+          else if (mimeType === 'image/gif') ext = 'gif';
+        }
+        
+        const base64Data = employeeData[field.base64Key].replace(/^data:[a-zA-Z0-9.+\/-]+;base64,/, '');
+        const filename = `${field.prefix}_${id}_${Date.now()}.${ext}`;
         fs.writeFileSync(path.join(docDir, filename), Buffer.from(base64Data, 'base64'));
         employeeData[field.pathKey] = `/uploads/documents/${filename}`;
         delete employeeData[field.base64Key];
