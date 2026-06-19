@@ -138,6 +138,12 @@ body {
   flex-shrink: 0;
   z-index: 10;
   transition: width var(--transition-normal), padding var(--transition-normal);
+  
+  /* Disable text selection inside the sidebar navigation */
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
 .sidebar-brand {
