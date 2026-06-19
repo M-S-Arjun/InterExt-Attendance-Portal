@@ -480,48 +480,76 @@ class Database {
     if (hourlyRate === 0 && F > 0 && dailyRate > 0) {
       hourlyRate = Number((dailyRate / F).toFixed(2));
     }
-    
+    let isInvalidDate = false;
+    const checkInStr = String(checkInTime || "");
+    const checkOutStr = String(checkOutTime || "");
+    const customHoursMatch = checkInStr.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*work/i) ||
+                             checkOutStr.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*work/i);
+
     // Check if shift falls on a holiday (excluding Sundays)
-    try {
-      const checkInDate = new Date(checkInTime);
-      const dateStr = checkInDate.toISOString().split('T')[0];
-      const isSunday = checkInDate.getDay() === 0;
-      const db = this.read();
-      const holidays = db.holidays || [];
-      const isHoliday = holidays.some(hol => hol.date === dateStr);
-      
-      const isOfficeStaff = employee.modeOfWork && employee.modeOfWork.toLowerCase().trim() === 'office staff';
-      if (isHoliday && !isSunday && isOfficeStaff) {
-        dailyRate = dailyRate * 2.0;
-        hourlyRate = hourlyRate * 2.0;
+    if (!customHoursMatch) {
+      try {
+        const checkInDate = new Date(checkInTime);
+        if (!isNaN(checkInDate.getTime())) {
+          const dateStr = checkInDate.toISOString().split('T')[0];
+          const isSunday = checkInDate.getDay() === 0;
+          const db = this.read();
+          const holidays = db.holidays || [];
+          const isHoliday = holidays.some(hol => hol.date === dateStr);
+          
+          const isOfficeStaff = employee.modeOfWork && employee.modeOfWork.toLowerCase().trim() === 'office staff';
+          if (isHoliday && !isSunday && isOfficeStaff) {
+            dailyRate = dailyRate * 2.0;
+            hourlyRate = hourlyRate * 2.0;
+          }
+        }
+      } catch (e) {
+        console.error("Failed to evaluate holiday rate multiplier:", e);
       }
-    } catch (e) {
-      console.error("Failed to evaluate holiday rate multiplier:", e);
     }
     
-    const checkIn = new Date(checkInTime);
-    const checkOut = new Date(checkOutTime);
-    
-    // Total decimal hours worked
-    let diffMs = checkOut - checkIn;
-    
-    // Deduct lunch break duration if both lunchOut and lunchIn are populated
-    if (record && record.lunchOut && record.lunchIn) {
-      const lOut = new Date(record.lunchOut);
-      const lIn = new Date(record.lunchIn);
-      const lunchDiffMs = lIn - lOut;
-      if (lunchDiffMs > 0) {
-        diffMs -= lunchDiffMs;
-      }
+    let totalHours = 0.0;
+    let durationMinutes = 0;
+
+    if (customHoursMatch) {
+      totalHours = parseFloat(customHoursMatch[1]);
+      durationMinutes = Math.round(totalHours * 60);
+      isInvalidDate = true;
     }
 
-    // Add hospital hours if this is an exempt hospital case
-    if (record && record.isHospitalExempt && record.hospitalHours) {
-      diffMs += Number(record.hospitalHours) * 3600000;
+
+
+    if (!isInvalidDate) {
+      try {
+        const checkIn = new Date(checkInTime);
+        const checkOut = new Date(checkOutTime);
+        
+        if (!isNaN(checkIn.getTime()) && !isNaN(checkOut.getTime())) {
+          // Total decimal hours worked
+          let diffMs = checkOut - checkIn;
+          
+          // Deduct lunch break duration if both lunchOut and lunchIn are populated
+          if (record && record.lunchOut && record.lunchIn) {
+            const lOut = new Date(record.lunchOut);
+            const lIn = new Date(record.lunchIn);
+            const lunchDiffMs = lIn - lOut;
+            if (lunchDiffMs > 0) {
+              diffMs -= lunchDiffMs;
+            }
+          }
+
+          // Add hospital hours if this is an exempt hospital case
+          if (record && record.isHospitalExempt && record.hospitalHours) {
+            diffMs += Number(record.hospitalHours) * 3600000;
+          }
+          
+          durationMinutes = Math.max(0, Math.floor(diffMs / 60000));
+          totalHours = Number((durationMinutes / 60).toFixed(2));
+        }
+      } catch (err) {
+        console.error("Error parsing dates in calculateShift:", err);
+      }
     }
-    
-    const durationMinutes = Math.max(0, Math.floor(diffMs / 60000));
-    const totalHours = Number((durationMinutes / 60).toFixed(2));
     
     let regularHours = 0.0;
     let otHours = 0.0;

@@ -4,6 +4,19 @@ function toLocalISOString(date) {
   return new Date(date.getTime() - tzOffset).toISOString();
 }
 
+function formatTimeSafely(timeStr) {
+  if (!timeStr || timeStr === "—" || timeStr === "null" || timeStr === "undefined") return "—";
+  const str = String(timeStr);
+  if (str.includes("hour") || str.includes("work")) return timeStr;
+  try {
+    const d = new Date(timeStr);
+    if (isNaN(d.getTime())) return timeStr;
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (err) {
+    return "—";
+  }
+}
+
 // Initialize Socket.io Client
 let socket;
 
@@ -1264,8 +1277,8 @@ function renderAttendanceLogsTable(r) {
       tr.className = "table-row-checked-in";
     }
 
-    const inTime = row.checkIn ? new Date(row.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
-    const outTime = row.checkOut ? new Date(row.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
+    const inTime = formatTimeSafely(row.checkIn);
+    const outTime = formatTimeSafely(row.checkOut);
     
     // Total decimal hours worked
     const hoursDecimal = row.status === 'absent' || row.status === 'leave' ? 0.0 : Number((row.duration / 60).toFixed(2));
@@ -1444,8 +1457,8 @@ function renderPunchesTable(r) {
       tr.className = "table-row-checked-in";
     }
     
-    const firstIn = row.checkIn ? new Date(row.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
-    const lastOut = row.checkOut ? new Date(row.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
+    const firstIn = formatTimeSafely(row.checkIn);
+    const lastOut = formatTimeSafely(row.checkOut);
     const numPunches = row.punches ? row.punches.length : 0;
     
     let timelineHTML = "—";
@@ -2906,8 +2919,8 @@ async function loadEmployeeProfileStats(emp, yearMonth) {
       const dateObj = new Date(log.date);
       const dateStr = dateObj.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
       
-      const checkInDisplay = log.checkIn ? new Date(log.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
-      const checkOutDisplay = log.checkOut ? new Date(log.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+      const checkInDisplay = formatTimeSafely(log.checkIn);
+      const checkOutDisplay = formatTimeSafely(log.checkOut);
       
       const durationVal = log.duration ? `${(log.duration / 60).toFixed(2)} hrs` : '—';
       
