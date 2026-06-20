@@ -155,6 +155,7 @@ body {
   gap: 12px;
   border-bottom: 1px solid var(--glass-border);
   transition: padding var(--transition-normal), gap var(--transition-normal);
+  flex-shrink: 0; /* Never compress the brand header — nav scrolls instead */
 }
 
 .brand-logo {
@@ -204,7 +205,31 @@ body {
   flex-direction: column;
   gap: 8px;
   flex-grow: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
   transition: padding var(--transition-normal);
+  /* Thin custom scrollbar for sidebar nav */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 107, 0, 0.25) transparent;
+}
+
+/* Webkit scrollbar for sidebar nav */
+.sidebar-nav::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar-nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb {
+  background: rgba(255, 107, 0, 0.25);
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 107, 0, 0.55);
 }
 
 .nav-item {
@@ -257,6 +282,7 @@ body {
   padding: 20px 16px;
   border-top: 1px solid var(--glass-border);
   transition: padding var(--transition-normal);
+  flex-shrink: 0; /* Never compress the footer — nav scrolls instead */
 }
 
 /* Connection Pill indicator in Sidebar */
@@ -1674,17 +1700,16 @@ input[type="datetime-local"]::-webkit-clear-button,
 input[type="datetime-local"]::-webkit-calendar-picker-indicator,
 input[type="month"]::-webkit-calendar-picker-indicator,
 input[type="time"]::-webkit-calendar-picker-indicator {
-  /* Default (dark theme): invert white icons to stay visible on dark backgrounds */
-  filter: invert(1) opacity(0.85);
+  /* Let browser color-scheme guide the icon color (white in dark theme, dark in light theme) */
+  opacity: 0.85;
 }
 
-/* Light theme: don't invert the native icon (keeps it dark on light backgrounds) */
 :root.light-theme input[type="date"]::-webkit-calendar-picker-indicator,
 :root.light-theme input[type="datetime-local"]::-webkit-clear-button,
 :root.light-theme input[type="datetime-local"]::-webkit-calendar-picker-indicator,
 :root.light-theme input[type="month"]::-webkit-calendar-picker-indicator,
 :root.light-theme input[type="time"]::-webkit-calendar-picker-indicator {
-  filter: invert(0) opacity(0.95);
+  opacity: 0.95;
 }
 
 .form-row {
@@ -1744,9 +1769,13 @@ textarea.form-control {
 .modal-content {
   width: 100%;
   max-width: 500px;
+  max-height: 92vh;         /* prevent overflow on small/laptop screens */
+  display: flex;
+  flex-direction: column;
   margin-bottom: 0;
   transform: translateY(20px) scale(0.95);
   transition: transform var(--transition-normal);
+  overflow: hidden;          /* clip inner content, modal-body scrolls */
 }
 
 .modal.active .modal-content {
@@ -1782,8 +1811,30 @@ textarea.form-control {
 
 .modal-body {
   padding: 24px;
+  flex: 1 1 auto;         /* grow inside the flex modal-content */
+  min-height: 0;           /* crucial: allows flex child to shrink + scroll */
   max-height: 75vh;
   overflow-y: auto;
+  /* Thin custom scrollbar for modal body */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 107, 0, 0.25) transparent;
+}
+
+.modal-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.modal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 107, 0, 0.3);
+  border-radius: 4px;
+}
+
+.modal-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 107, 0, 0.6);
 }
 
 .modal-footer {
@@ -2529,7 +2580,9 @@ select.payroll-col-filter {
 .tab-view#tab-holidays,
 .tab-view#tab-camera,
 .tab-view#tab-sites,
-.tab-view#tab-welders {
+.tab-view#tab-welders,
+.tab-view#tab-unknown,
+.tab-view#tab-profiles {
   overflow-y: auto !important;
   flex-grow: 1;
   flex-shrink: 1;
@@ -3377,6 +3430,206 @@ input:-webkit-autofill:active {
   -webkit-text-fill-color: var(--text-primary) !important;
   transition: background-color 5000s ease-in-out 0s;
 }
+
+
+/* ==========================================================================
+   SMALL SCREEN SCROLLBAR & OVERFLOW FIXES
+   Ensures all content areas are scrollable on low-resolution / small displays
+   ========================================================================== */
+
+/* Global thin scrollbar for main content */
+.main-content {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 107, 0, 0.2) transparent;
+}
+
+.main-content::-webkit-scrollbar {
+  width: 5px;
+}
+
+.main-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.main-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 107, 0, 0.25);
+  border-radius: 5px;
+}
+
+.main-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 107, 0, 0.5);
+}
+
+/* All overflow-x table containers — ensure horizontal scroll on small screens */
+.overflow-x {
+  -webkit-overflow-scrolling: touch; /* smooth momentum scroll on iOS */
+}
+
+/* Employee profile panel inner sections — scrollable on small screens */
+.profiles-details-panel {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 107, 0, 0.2) transparent;
+}
+
+.profiles-details-panel::-webkit-scrollbar { width: 4px; }
+.profiles-details-panel::-webkit-scrollbar-track { background: transparent; }
+.profiles-details-panel::-webkit-scrollbar-thumb { background: rgba(255,107,0,0.25); border-radius: 4px; }
+
+/* Profile details grid — allow individual sections to scroll their own list */
+.profile-detail-section {
+  overflow: hidden; /* clips when at max-height set inline */
+}
+
+/* Glass cards inside tab views should never force horizontal overflow */
+.tab-view .glass-card {
+  min-width: 0;
+}
+
+/* Data tables in all tabs — ensure horizontal scroll on narrow screens */
+.tab-view .overflow-x {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+
+/* ==========================================================================
+   MEDIA QUERY: Screens shorter than 700px height (laptops, small monitors)
+   ========================================================================== */
+@media (max-height: 700px) {
+  /* Tighten sidebar brand area */
+  .sidebar-brand {
+    padding: 14px 24px;
+  }
+
+  /* Tighten nav item padding to fit more items before scroll kicks in */
+  .sidebar-nav {
+    padding: 12px 16px;
+    gap: 4px;
+  }
+
+  .nav-item {
+    padding: 9px 16px;
+    font-size: 0.9rem;
+  }
+
+  /* Tighten sidebar footer */
+  .sidebar-footer {
+    padding: 12px 16px;
+  }
+
+  /* Shrink modal max height on short screens */
+  .modal-body {
+    max-height: 55vh;
+  }
+
+  .modal-content {
+    max-height: 88vh;
+  }
+
+  /* Shrink main content padding */
+  .main-content {
+    padding: 18px 24px;
+  }
+
+  /* Compact glass card headers */
+  .card-header {
+    padding: 12px 20px;
+  }
+
+  /* Compact metrics grid */
+  .metrics-grid {
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .metric-card {
+    padding: 14px 18px;
+  }
+}
+
+/* ==========================================================================
+   MEDIA QUERY: Screens shorter than 550px height (very small / mobile landscape)
+   ========================================================================== */
+@media (max-height: 550px) {
+  .sidebar-brand {
+    padding: 10px 24px;
+  }
+
+  .sidebar-nav {
+    padding: 8px 16px;
+    gap: 2px;
+  }
+
+  .nav-item {
+    padding: 7px 16px;
+    font-size: 0.85rem;
+  }
+
+  .sidebar-footer {
+    padding: 8px 16px;
+  }
+
+  .modal-body {
+    max-height: 45vh;
+  }
+
+  .modal-content {
+    max-height: 96vh;
+  }
+
+  .main-content {
+    padding: 12px 16px;
+  }
+}
+
+/* ==========================================================================
+   MEDIA QUERY: Screens narrower than 1024px (tablets, compact laptops)
+   ========================================================================== */
+@media (max-width: 1024px) {
+  /* Reduce main content padding on narrow screens */
+  .main-content {
+    padding: 20px;
+  }
+
+  /* Make metrics grid 2 columns on narrow screens */
+  .metrics-grid {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+
+  /* Employee profile details grid: single column on narrow screens */
+  .profile-details-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   COLLAPSED SIDEBAR: Nav scrollbar overrides
+   ========================================================================== */
+html.sidebar-collapsed .sidebar-nav {
+  padding: 24px 8px;
+  overflow-y: auto;
+  scrollbar-width: none; /* Hide scrollbar in collapsed state */
+}
+
+html.sidebar-collapsed .sidebar-nav::-webkit-scrollbar {
+  display: none;
+}
+
+/* Show scrollbar again when sidebar is hovered/expanded */
+html.sidebar-collapsed .sidebar:hover .sidebar-nav {
+  padding: 24px 16px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 107, 0, 0.25) transparent;
+}
+
+html.sidebar-collapsed .sidebar:hover .sidebar-nav::-webkit-scrollbar {
+  display: block;
+  width: 4px;
+}
+
+
 
 
 
