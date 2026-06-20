@@ -7,7 +7,10 @@ import os
 import json
 import logging
 import argparse
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
+import cv2
+import time
+import numpy as np
 from werkzeug.utils import secure_filename
 import traceback
 from face_recognition_service import initialize_model, FaceRecognitionModel
@@ -29,6 +32,62 @@ logger = logging.getLogger(__name__)
 # Initialize model
 model = None
 EMBEDDINGS_FILE = os.path.join(os.path.dirname(__file__), 'data', 'employee_embeddings.json')
+CAMERA_CONFIGS_FILE = os.path.join(os.path.dirname(__file__), 'data', 'camera_configs.json')
+
+def _save_camera_config(camera_id, config):
+    """Persist camera config to disk so cameras survive Python API restarts."""
+    try:
+        configs = {}
+        if os.path.exists(CAMERA_CONFIGS_FILE):
+            with open(CAMERA_CONFIGS_FILE, 'r') as f:
+                configs = json.load(f)
+        configs[camera_id] = config
+        with open(CAMERA_CONFIGS_FILE, 'w') as f:
+            json.dump(configs, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Could not save camera config: {e}")
+
+def _remove_camera_config(camera_id):
+    """Remove a camera config from persistent storage."""
+    try:
+        if not os.path.exists(CAMERA_CONFIGS_FILE):
+            return
+        with open(CAMERA_CONFIGS_FILE, 'r') as f:
+            configs = json.load(f)
+        configs.pop(camera_id, None)
+        with open(CAMERA_CONFIGS_FILE, 'w') as f:
+            json.dump(configs, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Could not remove camera config: {e}")
+
+def _restore_cameras():
+    """Auto-restore all previously running cameras after startup."""
+    import threading, cctv_processor
+    def _do_restore():
+        time.sleep(2)  # Wait for model to be fully ready
+        if not os.path.exists(CAMERA_CONFIGS_FILE):
+            return
+        try:
+            with open(CAMERA_CONFIGS_FILE, 'r') as f:
+                configs = json.load(f)
+            for camera_id, cfg in configs.items():
+                try:
+                    node_server = os.environ.get('NODE_SERVER_URL', 'http://localhost:3000')
+                    cctv_processor.start_cctv_thread(
+                        camera_id,
+                        cfg['name'],
+                        cfg['source'],
+                        cfg.get('site_name', 'Office'),
+                        cfg.get('event_type', 'auto'),
+                        cfg.get('threshold', 0.52),
+                        node_server
+                    )
+                    logger.info(f"[Auto-Restore] Restarted camera: {cfg['name']}")
+                except Exception as ex:
+                    logger.error(f"[Auto-Restore] Failed to restore {camera_id}: {ex}")
+        except Exception as e:
+            logger.error(f"[Auto-Restore] Failed to read camera configs: {e}")
+    threading.Thread(target=_do_restore, daemon=True).start()
 
 def init_model():
     """Initialize face recognition model"""
@@ -122,7 +181,7 @@ def recognize_face():
     - JSON: {'image': 'base64_image_data'} or
     - Files: {'image': file_object}
     Optional:
-    - {'threshold': 0.58}
+    - {'threshold': 0.52}
     """
     try:
         if not model:
@@ -134,8 +193,8 @@ def recognize_face():
         threshold = request.form.get('threshold', None, type=float)
         if threshold is None and request.is_json:
             body = request.get_json(silent=True) or {}
-            threshold = float(body.get('threshold', 0.58))
-        threshold = threshold if threshold is not None else 0.58
+            threshold = float(body.get('threshold', 0.52))
+        threshold = threshold if threshold is not None else 0.52
         
         # Get image data
         image_data = None
@@ -268,13 +327,19 @@ def cctv_start():
         source = data.get('source') or request.form.get('source')
         site_name = data.get('site_name') or request.form.get('site_name', 'Office')
         event_type = data.get('event_type') or request.form.get('event_type', 'auto')
-        threshold = float(data.get('threshold') or request.form.get('threshold', 0.58))
+        threshold = float(data.get('threshold') or request.form.get('threshold', 0.52))
         
         node_server = os.environ.get('NODE_SERVER_URL', 'http://localhost:3000')
         
         if not camera_id or not name or not source:
             return jsonify({'error': 'camera_id, name, and source are required'}), 400
-            
+        
+        # Persist config so we can restore after restart
+        _save_camera_config(camera_id, {
+            'name': name, 'source': source, 'site_name': site_name,
+            'event_type': event_type, 'threshold': threshold
+        })
+
         import cctv_processor
         success = cctv_processor.start_cctv_thread(
             camera_id, name, source, site_name, event_type, threshold, node_server
@@ -294,7 +359,10 @@ def cctv_stop():
         
         if not camera_id:
             return jsonify({'error': 'camera_id is required'}), 400
-            
+        
+        # Remove from persistent config when explicitly stopped
+        _remove_camera_config(camera_id)
+
         import cctv_processor
         success = cctv_processor.stop_cctv_thread(camera_id)
         
@@ -313,6 +381,68 @@ def cctv_status():
     except Exception as e:
         logger.error(f"Error getting CCTV status: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cctv/stream/<camera_id>', methods=['GET'])
+def cctv_stream(camera_id):
+    try:
+        import cctv_processor
+        
+        def generate_frames():
+            while True:
+                frame = None
+                with cctv_processor.active_cameras_lock:
+                    if camera_id in cctv_processor.active_cameras:
+                        proc = cctv_processor.active_cameras[camera_id]
+                        if proc.running and proc.latest_frame is not None:
+                            frame = proc.latest_frame.copy()
+                            h, w = frame.shape[:2]
+                            is_entry = 'entrance' in proc.name.lower() or 'entry' in proc.name.lower() or proc.event_type == 'entry'
+                            is_exit = 'exit' in proc.name.lower() or proc.event_type == 'exit'
+                            if is_entry:
+                                y_line = int(h * 0.6)
+                                x_left = int(w * 0.35)
+                                x_right = int(w * 0.70)
+                                cv2.line(frame, (0, y_line), (w, y_line), (0, 0, 255), 2)
+                                cv2.line(frame, (x_left, 0), (x_left, h), (0, 0, 255), 2)
+                                cv2.line(frame, (x_right, 0), (x_right, h), (0, 0, 255), 2)
+                                cv2.putText(frame, "VIRTUAL ATTENDANCE LINE (MID)", (10, y_line - 10), 
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                cv2.putText(frame, "VIRTUAL ATTENDANCE LINE (LEFT)", (x_left + 5, 25), 
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                                cv2.putText(frame, "VIRTUAL ATTENDANCE LINE (RIGHT)", (x_right + 10, 25), 
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                            elif is_exit:
+                                x_left = int(w * 0.32)
+                                x_right = int(w * 0.55)
+                                cv2.line(frame, (x_left, 0), (x_left, h), (0, 0, 255), 2)
+                                cv2.line(frame, (x_right, 0), (x_right, h), (0, 0, 255), 2)
+                                cv2.putText(frame, "VIRTUAL ATTENDANCE LINE (LEFT)", (x_left + 5, 25), 
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                                cv2.putText(frame, "VIRTUAL ATTENDANCE LINE (RIGHT)", (x_right + 10, 25), 
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                
+                if frame is not None:
+                    ret, jpeg = cv2.imencode('.jpg', frame)
+                    if ret:
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                else:
+                    placeholder = np.zeros((240, 320, 3), dtype=np.uint8)
+                    cv2.putText(placeholder, "No camera feed", (50, 120), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (128, 128, 128), 2)
+                    ret, jpeg = cv2.imencode('.jpg', placeholder)
+                    if ret:
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                
+                time.sleep(0.1)
+
+        return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    except Exception as e:
+        logger.error(f"Error streaming CCTV camera {camera_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
 
 
 @app.errorhandler(404)
@@ -369,6 +499,8 @@ if __name__ == '__main__':
         raise SystemExit(0)
 
     logger.info("Starting Flask API server on http://localhost:5000")
+    # Auto-restore cameras that were running before any restart
+    _restore_cameras()
     app.run(
         host='0.0.0.0',
         port=5000,
