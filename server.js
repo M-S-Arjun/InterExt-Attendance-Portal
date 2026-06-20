@@ -22,7 +22,7 @@ const XLSX = require('xlsx');
 const database = require('./database');
 const whatsapp = require('./whatsapp');
 
-const FACE_RECOGNITION_MIN_CONFIDENCE = 0.58;
+const FACE_RECOGNITION_MIN_CONFIDENCE = 0.52;
 
 // In-memory stack to store resolved/deleted exception actions for the undo function
 const undoStack = [];
@@ -145,6 +145,12 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Serve Employee Mobile Self-Service Portal at /mobile
+app.use('/mobile', express.static(path.join(__dirname, 'mobile_dist')));
+app.get('/mobile', (req, res) => {
+  res.sendFile(path.join(__dirname, 'mobile_dist', 'index.html'));
+});
 
 // --- Express REST API Routes ---
 
@@ -612,6 +618,8 @@ function resolveEmployeeFromFaceId(faceId, employees) {
     "james_t_m": "emp_2038",        // James Tm
     "prasanth_em": "emp_2025",      // Prasanth E.M
     "ratheesh_ks": "emp_2048",      // Ratheesh K S
+    "pratheesh_ks": "emp_1002",     // Pratheesh K S
+    "pratheesh_k_s": "emp_1002",    // Pratheesh K S
     "rebeesh_ks": "emp_1004",       // Rebeesh K S
     "shinod_n_t": "emp_2001"        // Shinodh N T
   };
@@ -628,10 +636,21 @@ function resolveEmployeeFromFaceId(faceId, employees) {
     const cleanDbName = e.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
     const cleanInputName = faceId.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').trim();
     
-    return cleanDbName === cleanInputName || 
-           cleanDbName.replace(/_/g, '') === cleanInputName.replace(/_/g, '') || 
-           cleanDbName.includes(cleanInputName) || 
-           cleanInputName.includes(cleanDbName);
+    // Check exact matches first
+    if (cleanDbName === cleanInputName || cleanDbName.replace(/_/g, '') === cleanInputName.replace(/_/g, '')) {
+      return true;
+    }
+    
+    // Check if input name is a complete word segment of the DB name (e.g. "anandhu" matches "anandhu_sunil")
+    const dbWords = cleanDbName.split('_');
+    const inputWords = cleanInputName.split('_');
+    
+    // If input name is just one word, check if it's one of the DB words
+    if (inputWords.length === 1 && dbWords.includes(inputWords[0])) {
+      return true;
+    }
+    
+    return false;
   });
 
   return employee;
@@ -660,7 +679,7 @@ app.post('/api/face/recognize', async (req, res) => {
         method: 'POST',
         body: JSON.stringify({
           image: imageBase64,
-          threshold: threshold || 0.58
+          threshold: threshold || 0.52
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -1146,10 +1165,111 @@ app.delete('/api/unknown-detections/:id', (req, res) => {
   }
 });
 
+// POST Assign Unknown Detection to Employee and Trigger retrain
+app.post('/api/unknown-detections/assign', async (req, res) => {
+  try {
+    const { detectionId, employeeId } = req.body;
+    if (!detectionId || !employeeId) {
+      return res.status(400).json({ error: 'detectionId and employeeId are required.' });
+    }
+
+    const db = database.read();
+    const employee = db.employees.find(e => e.id === employeeId);
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found.' });
+    }
+
+    const detections = database.getUnknownDetections();
+    const detection = detections.find(d => d.id === detectionId);
+    if (!detection) {
+      return res.status(404).json({ error: 'Detection record not found.' });
+    }
+
+    if (!detection.rawFaceUrl) {
+      return res.status(400).json({ error: 'Detection has no raw face image for training.' });
+    }
+
+    const rawFacePath = path.join(__dirname, 'public', detection.rawFaceUrl);
+    if (!fs.existsSync(rawFacePath)) {
+      return res.status(404).json({ error: 'Raw face image file missing on disk.' });
+    }
+
+    // Clean name for directory format (matches face recognition python service formatting)
+    const cleanName = employee.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+    const employeeTrainingDir = path.join(__dirname, 'uploads', 'face_training', cleanName);
+
+    if (!fs.existsSync(employeeTrainingDir)) {
+      fs.mkdirSync(employeeTrainingDir, { recursive: true });
+    }
+
+    // Copy raw face image into employee's training folder
+    const targetFilename = `cctv_${Date.now()}.jpg`;
+    const targetPath = path.join(employeeTrainingDir, targetFilename);
+    fs.copyFileSync(rawFacePath, targetPath);
+    console.log(`[API] Assigned CCTV face crop to employee "${employee.name}" at: ${targetPath}`);
+
+    // Trigger face retraining
+    console.log('[API] Triggering model retraining...');
+    const imagesDir = path.join(__dirname, 'uploads', 'face_training');
+    const formData = new URLSearchParams();
+    formData.append('images_dir', imagesDir);
+    formData.append('force', 'true'); // Force retrain to rebuild all embeddings
+
+    // Call Python face training service
+    let retrainSuccess = false;
+    try {
+      const response = await fetch(`${FACE_RECOGNITION_SERVICE}/api/face/train`, {
+        method: 'POST',
+        body: formData,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      });
+      const retrainResult = await response.json();
+      retrainSuccess = retrainResult.success;
+      console.log('[API] Retraining results:', retrainResult);
+    } catch (trainErr) {
+      console.error('[API] Retraining trigger failed:', trainErr.message);
+    }
+
+    // Delete the unknown detection record now that it is resolved
+    database.deleteUnknownDetection(detectionId);
+    io.emit('unknown_detection_deleted', detectionId);
+
+    res.json({
+      success: true,
+      message: `Successfully assigned face to ${employee.name} and triggered model retraining.`,
+      retrainSuccess
+    });
+
+  } catch (err) {
+    console.error('[API] Assign unknown detection error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET CCTV Cameras list
-app.get('/api/cctv', (req, res) => {
+app.get('/api/cctv', async (req, res) => {
   try {
     const cameras = database.getCctvCameras();
+    
+    // Fetch running status from Python microservice
+    try {
+      const statusResp = await fetch(`${FACE_RECOGNITION_SERVICE}/api/cctv/status`);
+      if (statusResp.ok) {
+        const data = await statusResp.json();
+        const activeCams = data.cameras || {};
+        cameras.forEach(cam => {
+          if (activeCams[cam.id]) {
+            cam.running = activeCams[cam.id].running;
+          } else {
+            cam.running = false;
+          }
+        });
+      }
+    } catch (err) {
+      console.warn(`[API] Failed to get CCTV running status from python: ${err.message}`);
+      cameras.forEach(cam => { cam.running = false; });
+    }
+    
     res.json(cameras);
   } catch (err) {
     console.error('[API] Get CCTV cameras failed:', err);
@@ -1183,7 +1303,7 @@ app.post('/api/cctv', async (req, res) => {
             source: savedCamera.source,
             site_name: siteName,
             event_type: savedCamera.eventType,
-            threshold: 0.62
+            threshold: 0.52
           })
         });
       } catch (err) {
@@ -1237,6 +1357,29 @@ app.delete('/api/cctv/:id', async (req, res) => {
   }
 });
 
+// GET CCTV Live MJPEG Stream proxy
+app.get('/api/cctv/stream/:id', (req, res) => {
+  const camera_id = req.params.id;
+  const targetUrl = `${FACE_RECOGNITION_SERVICE}/api/cctv/stream/${camera_id}`;
+  
+  const proxyReq = http.get(targetUrl, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    proxyRes.pipe(res);
+  });
+  
+  proxyReq.on('error', (err) => {
+    console.error(`[Proxy Error] Failed to stream from face recognition api: ${err.message}`);
+    if (!res.headersSent) {
+      res.status(500).send('Streaming error');
+    }
+  });
+
+  req.on('close', () => {
+    proxyReq.destroy();
+  });
+});
+
+
 // POST CCTV Stream test source
 app.post('/api/cctv/test', async (req, res) => {
   try {
@@ -1253,22 +1396,57 @@ app.post('/api/cctv/test', async (req, res) => {
 // POST CCTV Event Webhook (called by python thread)
 app.post('/api/face/cctv-event', async (req, res) => {
   try {
-    const { employee_id, confidence, camera_id, camera_name, site_name, event_type, image_base64 } = req.body;
+    const {
+      employee_id,
+      confidence,
+      camera_id,
+      camera_name,
+      site_name,
+      event_type,
+      image_base64,
+      raw_face_base64,
+      video_url
+    } = req.body;
     
     const db = database.read();
     
     if (employee_id === 'unknown') {
+      // Persist raw face crop so admin assignment can retrain embeddings.
+      let rawFaceUrl = "";
+      try {
+        if (raw_face_base64 && typeof raw_face_base64 === 'string' && raw_face_base64.trim().length > 0) {
+          const uploadsDir = path.join(__dirname, 'public', 'uploads', 'face_training', 'raw_faces');
+          if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+          }
+
+          // raw_face_base64 is already a pure base64 of JPG in your python code
+          const clean = raw_face_base64.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
+          const filename = `unknown_${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
+          const targetPath = path.join(uploadsDir, filename);
+          fs.writeFileSync(targetPath, Buffer.from(clean, 'base64'));
+
+          rawFaceUrl = `/uploads/face_training/raw_faces/${filename}`;
+        }
+      } catch (faceSaveErr) {
+        console.warn('[CCTV Unknown] Failed to persist raw face crop:', faceSaveErr.message);
+      }
+
       const unknownEvent = {
         cameraName: camera_name || 'CCTV Camera',
         siteName: site_name || 'Office',
         timestamp: new Date().toISOString(),
         confidence: confidence || 0.0,
-        imageBase64: image_base64
+        imageBase64: image_base64,
+        rawFaceUrl,
+        videoUrl: video_url || ''
       };
+
       const saved = database.saveUnknownDetection(unknownEvent);
       io.emit('unknown_detection_updated', saved);
       return res.json({ success: true, status: 'unknown_logged', detection: saved });
     }
+
     
     let employee = resolveEmployeeFromFaceId(employee_id, db.employees || []);
     
@@ -1287,18 +1465,15 @@ app.post('/api/face/cctv-event', async (req, res) => {
     );
     
     const localHour = now.getHours();
-    const isLunchHour = (localHour === 13);
     
     let resolvedEventType = event_type;
-    const attendanceEntry = {
-      employeeId: employee.id,
-      employeeName: employee.name,
-      date: eventDate,
-      siteName: site_name || 'CCTV Camera',
-      messageText: '',
-      facialRecognitionMatch: true,
-      matchConfidence: confidence
-    };
+    if (resolvedEventType === 'auto') {
+      if (camera_name && (camera_name.toLowerCase().includes('entrance') || camera_name.toLowerCase().includes('entry'))) {
+        resolvedEventType = 'entry';
+      } else {
+        resolvedEventType = 'exit';
+      }
+    }
 
     const isLateCheckInPendingScan = existingAttendance && existingAttendance.status === 'late' && !existingAttendance.scannedCheckIn;
 
@@ -1312,74 +1487,135 @@ app.post('/api/face/cctv-event', async (req, res) => {
 
     const isLateCheckIn = isLateCheckInPendingScan || (!existingAttendance && isScanLateTime);
 
+    // Initialize or load punches array
+    let punches = [];
     if (existingAttendance) {
-      attendanceEntry.id = existingAttendance.id;
-      attendanceEntry.checkIn = existingAttendance.checkIn;
-      attendanceEntry.checkOut = existingAttendance.checkOut || null;
-      attendanceEntry.lunchOut = existingAttendance.lunchOut || null;
-      attendanceEntry.lunchIn = existingAttendance.lunchIn || null;
-      attendanceEntry.travelHours = existingAttendance.travelHours || 0.0;
-      attendanceEntry.notes = existingAttendance.notes || "";
-      attendanceEntry.status = existingAttendance.status;
-      attendanceEntry.isLate = existingAttendance.isLate || isLateCheckIn;
-      attendanceEntry.isHospitalCase = existingAttendance.isHospitalCase;
-      attendanceEntry.hospitalHours = existingAttendance.hospitalHours;
-      attendanceEntry.scannedCheckIn = existingAttendance.scannedCheckIn;
-    }
-
-    if (resolvedEventType === 'auto') {
-      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent' && !isLateCheckInPendingScan) {
-        if (existingAttendance.lunchOut && existingAttendance.lunchIn) {
-          resolvedEventType = 'exit';
-          attendanceEntry.checkOut = timestamp;
-        } else if (existingAttendance.lunchOut && !existingAttendance.lunchIn) {
-          resolvedEventType = 'lunch-in';
-          attendanceEntry.lunchIn = timestamp;
-        } else if (!existingAttendance.lunchOut && isLunchHour) {
-          resolvedEventType = 'lunch-out';
-          attendanceEntry.lunchOut = timestamp;
-        } else {
-          resolvedEventType = 'exit';
-          attendanceEntry.checkOut = timestamp;
-        }
+      if (existingAttendance.punches && existingAttendance.punches.length > 0) {
+        punches = [...existingAttendance.punches];
       } else {
-        resolvedEventType = 'entry';
-        attendanceEntry.checkIn = timestamp;
-        if (isLateCheckIn) {
-          attendanceEntry.isLate = true;
-          attendanceEntry.scannedCheckIn = true;
-          attendanceEntry.status = "Late Check-in";
+        if (existingAttendance.checkIn) {
+          punches.push({
+            time: existingAttendance.checkIn,
+            type: 'in',
+            siteName: existingAttendance.siteName || '—',
+            messageText: existingAttendance.messageText || 'Check-In',
+            source: existingAttendance.scannedCheckIn ? 'Selfie' : 'WhatsApp'
+          });
+        }
+        if (existingAttendance.checkOut) {
+          punches.push({
+            time: existingAttendance.checkOut,
+            type: 'out',
+            siteName: existingAttendance.siteName || '—',
+            messageText: existingAttendance.messageText || 'Check-Out',
+            source: existingAttendance.scannedCheckIn ? 'Selfie' : 'WhatsApp'
+          });
         }
       }
-    } else {
-      // Explicit camera direction configurations
-      if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent' && !isLateCheckInPendingScan) {
-        if (resolvedEventType === 'entry') {
-          if (existingAttendance.lunchOut && !existingAttendance.lunchIn) {
-            resolvedEventType = 'lunch-in';
-            attendanceEntry.lunchIn = timestamp;
-          } else {
-            attendanceEntry.checkIn = timestamp;
-          }
-        } else if (resolvedEventType === 'exit') {
-          if (!existingAttendance.lunchOut && isLunchHour) {
-            resolvedEventType = 'lunch-out';
-            attendanceEntry.lunchOut = timestamp;
-          } else {
-            attendanceEntry.checkOut = timestamp;
-          }
-        }
+    }
+
+    // Determine the punch type of the new CCTV event
+    const newPunchType = resolvedEventType === 'entry' ? 'in' : 'out';
+    
+    // Add the new punch
+    punches.push({
+      time: timestamp,
+      type: newPunchType,
+      siteName: site_name || camera_name || 'CCTV Camera',
+      messageText: `CCTV Face recognized (${confidence ? (confidence * 100).toFixed(1) : '100'}%)`,
+      source: 'CCTV',
+      videoUrl: video_url || ''
+    });
+
+    // De-duplicate punches (tolerant) to preserve multiple exit/entry punches.
+    // If CCTV fires the same event repeatedly within a few seconds, keep only one.
+    const uniquePunches = [];
+    const seen = new Set();
+    const DEDUPE_WINDOW_MS = 8 * 1000; // 8 seconds tolerance
+
+
+    punches.forEach(p => {
+      const t = new Date(p.time).getTime();
+      const bucket = Math.floor(t / DEDUPE_WINDOW_MS) * DEDUPE_WINDOW_MS;
+      const key = `${bucket}_${p.type}`;
+
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniquePunches.push(p);
+      }
+    });
+
+    // Sort punches chronologically
+    uniquePunches.sort((a, b) => new Date(a.time) - new Date(b.time));
+    
+    // Calculate checkIn, checkOut, lunchIn, lunchOut based on punches
+    let finalCheckIn = null;
+    let finalCheckOut = null;
+    
+    const ins = uniquePunches.filter(p => p.type === 'in');
+    if (ins.length > 0) {
+      finalCheckIn = ins[0].time;
+    }
+    
+    if (uniquePunches.length > 0) {
+      const lastPunch = uniquePunches[uniquePunches.length - 1];
+      if (lastPunch.type === 'in') {
+        // If the last punch is an 'in', it means they are currently checked in (active)
+        finalCheckOut = null;
       } else {
-        if (resolvedEventType === 'entry') {
-          attendanceEntry.checkIn = timestamp;
-        } else {
-          attendanceEntry.checkOut = timestamp;
+        // If the last punch is an 'out', it means they are currently checked out
+        finalCheckOut = lastPunch.time;
+      }
+    }
+    
+    // Calculate lunch break
+    let finalLunchOut = null;
+    let finalLunchIn = null;
+    for (let i = 0; i < uniquePunches.length; i++) {
+      const p = uniquePunches[i];
+      const pDate = new Date(p.time);
+      const pHour = pDate.getHours();
+      
+      if (p.type === 'out' && pHour === 13 && !finalLunchOut) {
+        finalLunchOut = p.time;
+        for (let j = i + 1; j < uniquePunches.length; j++) {
+          if (uniquePunches[j].type === 'in') {
+            finalLunchIn = uniquePunches[j].time;
+            break;
+          }
         }
-        if (isLateCheckIn) {
-          attendanceEntry.isLate = true;
-          attendanceEntry.scannedCheckIn = true;
-          attendanceEntry.status = "Late Check-in";
-        }
+      }
+    }
+
+    const attendanceEntry = {
+      employeeId: employee.id,
+      employeeName: employee.name,
+      date: eventDate,
+      siteName: site_name || camera_name || 'CCTV Camera',
+      messageText: '',
+      facialRecognitionMatch: true,
+      matchConfidence: confidence,
+      punches: uniquePunches,
+      checkIn: finalCheckIn,
+      checkOut: finalCheckOut,
+      lunchOut: finalLunchOut,
+      lunchIn: finalLunchIn,
+      travelHours: existingAttendance ? (existingAttendance.travelHours || 0.0) : 0.0,
+      notes: existingAttendance ? (existingAttendance.notes || "") : "",
+      status: existingAttendance ? existingAttendance.status : "",
+      isLate: existingAttendance ? (existingAttendance.isLate || isLateCheckIn) : isLateCheckIn,
+      isHospitalCase: existingAttendance ? existingAttendance.isHospitalCase : false,
+      hospitalHours: existingAttendance ? existingAttendance.hospitalHours : 0.0,
+      scannedCheckIn: existingAttendance ? existingAttendance.scannedCheckIn : false
+    };
+
+    if (existingAttendance) {
+      attendanceEntry.id = existingAttendance.id;
+    } else {
+      if (isLateCheckIn) {
+        attendanceEntry.isLate = true;
+        attendanceEntry.scannedCheckIn = true;
+        attendanceEntry.status = "Late Check-in";
       }
     }
     
@@ -1395,7 +1631,8 @@ app.post('/api/face/cctv-event', async (req, res) => {
       imageBase64: image_base64,
       imageFilename: 'cctv_frame.jpg',
       status: req.body.status || 'recognized',
-      confidence: confidence
+      confidence: confidence,
+      videoUrl: video_url || ''
     };
     
     const savedEvent = database.saveCameraEvent(cameraEvent);
@@ -1927,6 +2164,186 @@ app.post('/api/selfies/reject', (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// --- Employee Mobile Self-Service APIs ---
+
+app.post('/api/employee/login', (req, res) => {
+  try {
+    const { employeeId, passcode } = req.body;
+    if (!employeeId || !passcode) {
+      return res.status(400).json({ error: "Employee ID and passcode are required." });
+    }
+    const db = database.read();
+    
+    // Normalize login lookup
+    const cleanId = String(employeeId).trim().toLowerCase();
+    const cleanPass = String(passcode).trim();
+    
+    const employee = db.employees.find(e => {
+      if (!e) return false;
+      const matchId = String(e.id).toLowerCase() === cleanId;
+      const matchUserId = String(e.userId || '').toLowerCase() === cleanId;
+      const matchPhone = String(e.phone || '').includes(cleanId);
+      return matchId || matchUserId || matchPhone;
+    });
+
+    if (!employee) {
+      return res.status(401).json({ error: "Invalid employee ID or phone number." });
+    }
+
+    if (String(employee.passcode || '1234') !== cleanPass) {
+      return res.status(401).json({ error: "Incorrect passcode." });
+    }
+
+    res.json(employee);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/employee/attendance', (req, res) => {
+  try {
+    const { employeeId } = req.query;
+    if (!employeeId) {
+      return res.status(400).json({ error: "employeeId is required" });
+    }
+    const db = database.read();
+    const list = db.attendance.filter(a => a && a.employeeId === employeeId);
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/employee/payroll', (req, res) => {
+  try {
+    const { employeeId } = req.query;
+    if (!employeeId) {
+      return res.status(400).json({ error: "employeeId is required" });
+    }
+    const db = database.read();
+    const list = (db.payroll || []).filter(p => p && p.employeeId === employeeId);
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/employee/loans', (req, res) => {
+  try {
+    const { employeeId } = req.query;
+    if (!employeeId) {
+      return res.status(400).json({ error: "employeeId is required" });
+    }
+    const db = database.read();
+    const employee = db.employees.find(e => e && e.id === employeeId);
+    if (!employee) {
+      return res.status(404).json({ error: "Employee not found" });
+    }
+    res.json(employee.loans || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Admin Loan Management APIs ---
+
+app.post('/api/employees/:id/loans', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, purpose, monthlyInstallment } = req.body;
+    
+    if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
+      return res.status(400).json({ error: "Valid loan amount is required." });
+    }
+    
+    const db = database.read();
+    const employee = db.employees.find(e => e && e.id === id);
+    if (!employee) {
+      return res.status(404).json({ error: "Employee record not found" });
+    }
+    
+    if (!employee.loans) employee.loans = [];
+    
+    const newLoan = {
+      id: `loan_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      amount: parseFloat(amount),
+      balance: parseFloat(amount),
+      purpose: purpose || "General loan",
+      monthlyInstallment: parseFloat(monthlyInstallment) || 0.0,
+      status: "active",
+      createdAt: new Date().toISOString(),
+      repayments: []
+    };
+    
+    employee.loans.push(newLoan);
+    database.writeAtomic(db);
+    database.syncToExcelAsync();
+    
+    res.status(201).json(newLoan);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/employees/:id/loans/:loanId/repayments', (req, res) => {
+  try {
+    const { id, loanId } = req.params;
+    const { amount, remarks } = req.body;
+    
+    if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
+      return res.status(400).json({ error: "Valid repayment amount is required." });
+    }
+    
+    const db = database.read();
+    const employee = db.employees.find(e => e && e.id === id);
+    if (!employee) {
+      return res.status(404).json({ error: "Employee record not found" });
+    }
+    
+    if (!employee.loans) employee.loans = [];
+    const loan = employee.loans.find(l => l.id === loanId);
+    if (!loan) {
+      return res.status(404).json({ error: "Loan record not found" });
+    }
+    
+    const payAmt = parseFloat(amount);
+    loan.balance = Math.max(0.0, Number((loan.balance - payAmt).toFixed(2)));
+    if (loan.balance <= 0) {
+      loan.status = "fully-paid";
+    }
+    
+    loan.repayments.push({
+      date: new Date().toISOString().split('T')[0],
+      amount: payAmt,
+      remarks: remarks || "Cash payment"
+    });
+    
+    database.writeAtomic(db);
+    database.syncToExcelAsync();
+    
+    res.json(loan);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// --- MPA Page Routes ---
+app.get('/dashboard', (req, res) => {
+  res.redirect('/');
+});
+const mpaPages = [
+  'logs', 'punches', 'travel', 'profiles', 'employees',
+  'payroll', 'welders', 'selfies', 'camera', 'unknown',
+  'sites', 'holidays', 'settings'
+];
+mpaPages.forEach(page => {
+  app.get(`/${page}`, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', `${page}.html`));
+  });
+});
+
 
 // --- On-Site Mobile Web Check-In Portal Routes ---
 app.get('/checkin', (req, res) => {
@@ -3234,6 +3651,38 @@ server.listen(PORT, () => {
   // Start WhatsApp Client integration
   whatsapp.initialize();
 
+  // Auto-start active CCTV camera streams on boot
+  try {
+    const cameras = database.getCctvCameras();
+    const db = database.read();
+    const activeCams = cameras.filter(cam => cam.status === 'active');
+    
+    activeCams.forEach(async (cam) => {
+      try {
+        const site = (db.sites || []).find(s => s.id === cam.siteId);
+        const siteName = site ? site.name : 'Office';
+        
+        console.log(`[CCTV Boot] Starting stream thread for active camera: ${cam.name}`);
+        await fetch(`${FACE_RECOGNITION_SERVICE}/api/cctv/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            camera_id: cam.id,
+            name: cam.name,
+            source: cam.source,
+            site_name: siteName,
+            event_type: cam.eventType,
+            threshold: 0.52
+          })
+        });
+      } catch (err) {
+        console.warn(`[CCTV Boot] Failed to auto-start stream for ${cam.name}: ${err.message}`);
+      }
+    });
+  } catch (err) {
+    console.error("[CCTV Boot] Failed to auto-start cameras list:", err);
+  }
+
   // Run initial daily closeout sweep to finalize any outstanding shifts from previous days
   try {
     const closed = database.autoCloseOutstandingShifts();
@@ -3257,5 +3706,62 @@ server.listen(PORT, () => {
       console.error("Scheduled closeout sweep failed:", e);
     }
   }, 60 * 60 * 1000); // 1 hour
+
+  // ── Python API Watchdog ─────────────────────────────────────────────────────
+  // Polls every 15 seconds. If the Python API was offline and just came back,
+  // or if fewer cameras are running than should be, re-sends start commands.
+  let _apiWasOffline = false;
+  setInterval(async () => {
+    try {
+      const resp = await fetch(`${FACE_RECOGNITION_SERVICE}/api/cctv/status`, { signal: AbortSignal.timeout(5000) });
+      if (!resp.ok) { _apiWasOffline = true; return; }
+      const statusData = await resp.json();
+      const runningIds = new Set(Object.keys(statusData.cameras || {}));
+
+      const cameras = database.getCctvCameras();
+      const db = database.read();
+      const activeCams = cameras.filter(cam => cam.status === 'active');
+      const missingCams = activeCams.filter(cam => !runningIds.has(cam.id));
+
+      if (_apiWasOffline || missingCams.length > 0) {
+        if (_apiWasOffline) {
+          console.log('[API Watchdog] Python API came back online — re-starting all cameras...');
+        } else {
+          console.log(`[API Watchdog] ${missingCams.length} camera(s) missing — re-starting them...`);
+        }
+        _apiWasOffline = false;
+
+        for (const cam of missingCams.length > 0 ? missingCams : activeCams) {
+          try {
+            const site = (db.sites || []).find(s => s.id === cam.siteId);
+            const siteName = site ? site.name : 'Office';
+            await fetch(`${FACE_RECOGNITION_SERVICE}/api/cctv/start`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                camera_id: cam.id,
+                name: cam.name,
+                source: cam.source,
+                site_name: siteName,
+                event_type: cam.eventType,
+                threshold: 0.52
+              }),
+              signal: AbortSignal.timeout(5000)
+            });
+            console.log(`[API Watchdog] Restarted camera: ${cam.name}`);
+          } catch (e) {
+            console.warn(`[API Watchdog] Failed to restart ${cam.name}: ${e.message}`);
+          }
+        }
+      }
+    } catch (err) {
+      // API is down/unreachable
+      if (!_apiWasOffline) {
+        console.warn('[API Watchdog] Python API is offline. Will retry...');
+      }
+      _apiWasOffline = true;
+    }
+  }, 15 * 1000); // every 15 seconds
+  // ───────────────────────────────────────────────────────────────────────────
 });
 
