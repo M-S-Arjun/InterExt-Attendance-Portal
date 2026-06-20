@@ -1,0 +1,16 @@
+{
+  "cctv_1781867453823_502242": {
+    "name": "Exit CCTV 1",
+    "source": "rtsps://admin:Gateway%40123@192.168.0.102:554/video/live?channel=1&subtype=1&unicast=true&proto=Onvif",
+    "site_name": "INTEREXT OFFICE",
+    "event_type": "exit",
+    "threshold": 0.52
+  },
+  "cctv_1781867453823_502241": {
+    "name": "Entrance CCTV 1",
+    "source": "rtsps://admin:Gateway%40123@192.168.0.101:554/video/live?channel=1&subtype=1&unicast=true&proto=Onvif",
+    "site_name": "INTEREXT OFFICE",
+    "event_type": "entry",
+    "threshold": 0.52
+  }
+}
