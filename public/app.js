@@ -254,6 +254,12 @@ document.addEventListener('keydown', function(event) {
 document.addEventListener('DOMContentLoaded', async () => {
   console.log("Bootstrap Dashboard initializations...");
   
+  // Set mobile portal absolute URL dynamically based on current origin
+  const mobilePortalUrlEl = document.getElementById('mobile-portal-url');
+  if (mobilePortalUrlEl) {
+    mobilePortalUrlEl.textContent = `${window.location.origin}/mobile`;
+  }
+  
   // Initialize Socket.io and register listeners immediately to prevent handshake race conditions on refresh
   socket = io();
   registerSocketEvents();
@@ -265,8 +271,63 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.documentElement.classList.add('light-theme');
   }
 
+  // Detect active page/tab from pathname
+  let currentPage = 'dashboard';
+  const path = window.location.pathname.replace(/\/$/, ''); // strip trailing slash
+  if (path === '/logs') currentPage = 'logs';
+  else if (path === '/punches') currentPage = 'punches';
+  else if (path === '/travel') currentPage = 'travel';
+  else if (path === '/profiles') currentPage = 'profiles';
+  else if (path === '/employees') currentPage = 'employees';
+  else if (path === '/payroll') currentPage = 'payroll';
+  else if (path === '/welders') currentPage = 'welders';
+  else if (path === '/selfies') currentPage = 'selfies';
+  else if (path === '/camera') currentPage = 'camera';
+  else if (path === '/unknown') currentPage = 'unknown';
+  else if (path === '/sites') currentPage = 'sites';
+  else if (path === '/holidays') currentPage = 'holidays';
+  else if (path === '/settings') currentPage = 'settings';
+  
+  state.activeTab = currentPage;
+
+  // Sidebar active highlighting
+  document.querySelectorAll('.nav-item').forEach(btn => btn.classList.remove('active'));
+  const activeBtn = Array.from(document.querySelectorAll('.nav-item')).find(btn => {
+    const clickAttr = btn.getAttribute('onclick') || '';
+    return clickAttr.includes(currentPage);
+  });
+  if (activeBtn) activeBtn.classList.add('active');
+
+  // Update page title and subtitle dynamically based on currentPage
+  const titleEl = document.getElementById('page-title');
+  const subtitleEl = document.getElementById('page-subtitle');
+  if (titleEl && subtitleEl) {
+    const titleMap = {
+      dashboard: ["Dashboard Overview", "Real-time daily wage attendance tracking"],
+      logs: ["Attendance Master Log", "Analyze daily logs, apply manual adjustments, and export wage CSVs"],
+      punches: ["Punches Master Registry", "Track and filter the chronological check-in and check-out punches for all employees"],
+      travel: ["Travel Time Log", "Monitor daily employee travel logs, halving payouts, and monthly summary metrics"],
+      profiles: ["Employee Profiles", "View comprehensive profiles, shift history, and attendance records for all employees"],
+      employees: ["Workers Registry", "Manage employee records, status toggles, and base wage rates"],
+      payroll: ["Monthly Salary Sheet", "Calculate component-wise salaries, LOP deductions, custom advances, and export summaries"],
+      selfies: ["Selfie Verification Center", "Verify real-time employee geolocations, timestamps, and anti-spoofing media records"],
+      camera: ["Camera Attendance", "Record office entry/exit events and map attendance to employee logs"],
+      unknown: ["Unknown Visitor Logs", "Real-time logs of unknown individuals detected on CCTV cameras"],
+      sites: ["Work Sites Registry", "Add and manage geographical site divisions"],
+      holidays: ["Company Public Holidays", "Manage official paid company holidays and visual calendars"],
+      settings: ["Shift Settings", "Set shift start/end benchmarks and wage credits thresholds"],
+      welders: ["Welders Weekly Report", "Weekly attendance and payroll summary ending on Fridays (Saturday to Friday)"]
+    };
+    const info = titleMap[currentPage] || titleMap.dashboard;
+    titleEl.textContent = info[0];
+    subtitleEl.textContent = info[1];
+  }
+
   // Set default filter date to today in log view
-  document.getElementById('log-filter-date').value = state.selectedFilterDate;
+  const logFilterDate = document.getElementById('log-filter-date');
+  if (logFilterDate) {
+    logFilterDate.value = state.selectedFilterDate;
+  }
   const punchesFilterDate = document.getElementById('punches-filter-date');
   if (punchesFilterDate) {
     punchesFilterDate.value = state.selectedFilterDate;
@@ -277,27 +338,61 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (payrollMonthInput) {
     payrollMonthInput.value = toLocalISOString(new Date()).substring(0, 7);
   }
-  setCameraEventTimestampNow();
+  
+  if (typeof setCameraEventTimestampNow === 'function') {
+    setCameraEventTimestampNow();
+  }
 
   // Render clock tick
-  updateHeaderClock();
-  setInterval(updateHeaderClock, 1000);
+  if (document.getElementById('header-datetime')) {
+    updateHeaderClock();
+    setInterval(updateHeaderClock, 1000);
+  }
 
   // Load initial REST API datasets
   await loadDatabaseCore();
   
-  // Initialize Chart.js layouts
-  initCharts();
-  
   // Sync chart options and toggle icons for the current theme on boot
-  updateChartTheme(isLight);
   updateThemeIcon(isLight);
   
-  // Load statistical values & active attendance logs
-  await refreshDashboardData();
-
-  // Load historical recent messages for the WhatsApp feed
-  await loadRecentMessages();
+  // Run specific page initializers
+  if (currentPage === 'dashboard') {
+    initCharts();
+    updateChartTheme(isLight);
+    await refreshDashboardData();
+    await loadRecentMessages();
+  } else if (currentPage === 'logs') {
+    await Promise.all([loadAttendanceLogs(), checkUndoStatus()]);
+  } else if (currentPage === 'punches') {
+    await Promise.all([loadAttendanceLogs(), checkUndoStatus()]);
+  } else if (currentPage === 'travel') {
+    await Promise.all([loadTravelLogs(), checkUndoStatus()]);
+  } else if (currentPage === 'profiles') {
+    await initProfilesTab();
+    await checkUndoStatus();
+  } else if (currentPage === 'employees') {
+    renderEmployeesTable();
+    await checkUndoStatus();
+  } else if (currentPage === 'payroll') {
+    await loadPayrollSheet();
+  } else if (currentPage === 'welders') {
+    await loadWeldersFridaysDropdown();
+  } else if (currentPage === 'selfies') {
+    await loadSelfieLogs();
+  } else if (currentPage === 'camera') {
+    await Promise.all([refreshCameraEvents(), loadCctvCameras()]);
+    initWebcamList();
+  } else if (currentPage === 'unknown') {
+    await refreshUnknownDetections();
+  } else if (currentPage === 'sites') {
+    renderSitesTable();
+    await checkUndoStatus();
+  } else if (currentPage === 'holidays') {
+    await loadHolidaysTab();
+    await checkUndoStatus();
+  } else if (currentPage === 'settings') {
+    await loadSettingsForm();
+  }
   
   // Create icons
   if (window.lucide) {
@@ -308,11 +403,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   // This ensures new WhatsApp check-ins appear without requiring a manual Refresh click.
   setInterval(async () => {
     try {
-      // Only fetch if the attendance or dashboard tab is visible (save resources)
-      if (state.activeTab === 'logs' || state.activeTab === 'dashboard') {
+      if (state.activeTab === 'dashboard') {
+        await refreshDashboardData();
+        await loadRecentMessages();
+      } else if (state.activeTab === 'logs' || state.activeTab === 'punches') {
         await loadAttendanceLogs();
+      } else if (state.activeTab === 'travel') {
+        await loadTravelLogs();
+      } else if (state.activeTab === 'selfies') {
+        await loadSelfieLogs();
+      } else if (state.activeTab === 'camera') {
+        await refreshCameraEvents();
+      } else if (state.activeTab === 'unknown') {
+        await refreshUnknownDetections();
       }
-      // Always refresh stats/counts in background for the header counters
+      
+      // Silently refresh stats in background for the header counters
       const statsRes = await fetch('/api/stats').then(r => r.json()).catch(() => null);
       if (statsRes && typeof updateStatCards === 'function') {
         updateStatCards(statsRes);
@@ -320,7 +426,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
       // Silent fail — auto-refresh should never break the UI
     }
-  }, 30000); // every 30 seconds
+  }, 30000); // every 30 secondsevery 30 seconds
 
 
   // Register Service Worker for PWA Standalone App Install on Dashboard
@@ -434,100 +540,7 @@ function updateHeaderClock() {
 
 // Tab switcher controller
 function switchTab(tabName) {
-  state.activeTab = tabName;
-  
-  // Remove active from all tabs
-  document.querySelectorAll('.nav-item').forEach(btn => btn.classList.remove('active'));
-  document.querySelectorAll('.tab-view').forEach(view => view.classList.remove('active'));
-  
-  // Set active link
-  const targetBtn = Array.from(document.querySelectorAll('.nav-item')).find(btn => btn.getAttribute('onclick').includes(tabName));
-  if (targetBtn) targetBtn.classList.add('active');
-  
-  // Set active view
-  document.getElementById(`tab-${tabName}`).classList.add('active');
-  
-  // Update header text
-  const title = document.getElementById('page-title');
-  const subtitle = document.getElementById('page-subtitle');
-  
-  switch(tabName) {
-    case 'dashboard':
-      title.textContent = "Dashboard Overview";
-      subtitle.textContent = "Real-time daily wage attendance tracking";
-      break;
-    case 'logs':
-      title.textContent = "Attendance Master Log";
-      subtitle.textContent = "Analyze daily logs, apply manual adjustments, and export wage CSVs";
-      loadAttendanceLogs();
-      break;
-    case 'punches':
-      title.textContent = "Punches Master Registry";
-      subtitle.textContent = "Track and filter the chronological check-in and check-out punches for all employees";
-      loadAttendanceLogs();
-      break;
-    case 'travel':
-      title.textContent = "Travel Time Log";
-      subtitle.textContent = "Monitor daily employee travel logs, halving payouts, and monthly summary metrics";
-      loadTravelLogs();
-      break;
-    case 'profiles':
-      title.textContent = "Employee Profiles";
-      subtitle.textContent = "View comprehensive profiles, shift history, and attendance records for all employees";
-      initProfilesTab();
-      break;
-    case 'employees':
-      title.textContent = "Workers Registry";
-      subtitle.textContent = "Manage employee records, status toggles, and base wage rates";
-      renderEmployeesTable();
-      break;
-    case 'payroll':
-      title.textContent = "Monthly Salary Sheet";
-      subtitle.textContent = "Calculate component-wise salaries, LOP deductions, custom advances, and export summaries";
-      loadPayrollSheet();
-      break;
-    case 'selfies':
-      title.textContent = "Selfie Verification Center";
-      subtitle.textContent = "Verify real-time employee geolocations, timestamps, and anti-spoofing media records";
-      loadSelfieLogs();
-      break;
-    case 'camera':
-      title.textContent = "Camera Attendance";
-      subtitle.textContent = "Record office entry/exit events and map attendance to employee logs";
-      refreshCameraEvents();
-      initWebcamList();
-      loadCctvCameras();
-      break;
-    case 'unknown':
-      title.textContent = "Unknown Visitor Logs";
-      subtitle.textContent = "Real-time logs of unknown individuals detected on CCTV cameras";
-      refreshUnknownDetections();
-      break;
-    case 'sites':
-      title.textContent = "Work Sites Registry";
-      subtitle.textContent = "Add and manage geographical site divisions";
-      renderSitesTable();
-      break;
-    case 'settings':
-      title.textContent = "Shift Settings";
-      subtitle.textContent = "Set shift start/end benchmarks and wage credits thresholds";
-      loadSettingsForm();
-      break;
-    case 'holidays':
-      title.textContent = "Company Public Holidays";
-      subtitle.textContent = "Manage official paid company holidays and visual calendars";
-      loadHolidaysTab();
-      break;
-    case 'welders':
-      title.textContent = "Welders Weekly Report";
-      subtitle.textContent = "Weekly attendance and payroll summary ending on Fridays (Saturday to Friday)";
-      loadWeldersFridaysDropdown();
-      break;
-  }
-
-  if (window.lucide) {
-    window.lucide.createIcons();
-  }
+  window.location.href = tabName === 'dashboard' ? '/' : `/${tabName}`;
 }
 
 // ==========================================================================
@@ -1231,6 +1244,7 @@ function applyFiltersLogs() {
 // Render filtered log table elements
 function renderAttendanceLogsTable(r) {
   const tbody = document.getElementById('attendance-table-body');
+  if (!tbody) return;
   tbody.innerHTML = "";
   
   if (r.length === 0) {
@@ -1396,13 +1410,18 @@ function applyFiltersPunches() {
   
   if (searchQuery) {
     filtered = filtered.filter(row => {
+      const empName = row.employeeName || '';
+      const userId = row.userId || '';
+      const siteName = row.siteName || '';
+      const status = row.status || '';
+      const date = row.date || '';
       const numPunches = row.punches ? row.punches.length.toString() : '0';
       return (
-        row.employeeName.toLowerCase().includes(searchQuery) ||
-        (row.userId && row.userId.toLowerCase().includes(searchQuery)) ||
-        row.siteName.toLowerCase().includes(searchQuery) ||
-        row.status.toLowerCase().includes(searchQuery) ||
-        row.date.includes(searchQuery) ||
+        empName.toLowerCase().includes(searchQuery) ||
+        userId.toLowerCase().includes(searchQuery) ||
+        siteName.toLowerCase().includes(searchQuery) ||
+        status.toLowerCase().includes(searchQuery) ||
+        date.includes(searchQuery) ||
         numPunches.includes(searchQuery)
       );
     });
@@ -1594,11 +1613,16 @@ function renderUnknownDetections(detections) {
           Location: ${det.siteName || 'Office'} (${det.cameraName || 'CCTV'})
         </div>
       </div>
-      <div style="margin-top: auto; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;">
+      <div style="margin-top: auto; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; gap: 8px;">
         <span style="font-size: 0.7rem; color: var(--text-tertiary);">Conf: ${(det.confidence * 100).toFixed(0)}%</span>
-        <button class="btn btn-secondary btn-sm" onclick="handleDeleteUnknown('${det.id}')" style="padding: 4px 8px; font-size: 0.75rem; height: 26px; color: var(--color-red); border-color: rgba(239, 68, 68, 0.2);" title="Clear Log">
-          <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i> Clear
-        </button>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-primary btn-sm" onclick="openAssignModal('${det.id}')" style="padding: 4px 8px; font-size: 0.75rem; height: 26px; display: inline-flex; align-items: center; gap: 4px; background: var(--color-primary); border-color: var(--color-primary);" title="Assign to Trained Employee">
+            <i data-lucide="user-plus" style="width: 12px; height: 12px;"></i> Assign
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="handleDeleteUnknown('${det.id}')" style="padding: 4px 8px; font-size: 0.75rem; height: 26px; color: var(--color-red); border-color: rgba(239, 68, 68, 0.2); display: inline-flex; align-items: center; gap: 4px;" title="Clear Log">
+            <i data-lucide="trash-2" style="width: 12px; height: 12px;"></i> Clear
+          </button>
+        </div>
       </div>
     `;
 
@@ -1622,6 +1646,119 @@ async function handleDeleteUnknown(id) {
     TransactionManager.showStatusToast("Failed to clear visitor log.", true);
   }
 }
+
+window.openAssignModal = function(detectionId) {
+  let modal = document.getElementById('assign-face-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'assign-face-modal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+      <div class="modal-content" style="max-width: 450px; background: var(--bg-card, #121420); border: 1px solid var(--glass-border); border-radius: var(--border-radius-md); box-shadow: var(--shadow-xl);">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--glass-border);">
+          <h3 style="margin: 0; font-size: 1.1rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+            <i data-lucide="user-plus" style="color: var(--color-primary); width: 20px; height: 20px;"></i>
+            Assign Face to Employee
+          </h3>
+          <button class="btn-close" onclick="closeAssignModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-secondary);">&times;</button>
+        </div>
+        <div class="modal-body" style="padding: 20px;">
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 16px;">
+            Select the employee this face belongs to. The raw CCTV face crop will be added to their training folder and the model will retrain.
+          </p>
+          <input type="hidden" id="assign-det-id">
+          <div class="form-group" style="display: flex; flex-direction: column; gap: 8px;">
+            <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-primary);">Employee Name</label>
+            <select id="assign-emp-select" class="form-control" style="width: 100%; padding: 8px; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); background: rgba(0,0,0,0.2); color: var(--text-primary);">
+              <!-- Populated dynamically -->
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--glass-border); display: flex; justify-content: flex-end; gap: 10px;">
+          <button type="button" class="btn btn-secondary" onclick="closeAssignModal()" style="padding: 8px 16px; font-size: 0.85rem; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); background: transparent; color: var(--text-primary); cursor: pointer;">Cancel</button>
+          <button type="button" class="btn btn-primary" onclick="submitAssignFace()" id="btn-submit-assign" style="padding: 8px 16px; font-size: 0.85rem; border-radius: var(--border-radius-sm); background: var(--color-primary); border: 1px solid var(--color-primary); color: white; cursor: pointer;">Train & Save</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  }
+
+  // Set the hidden detection ID
+  document.getElementById('assign-det-id').value = detectionId;
+
+  // Populate active employees dropdown
+  const select = document.getElementById('assign-emp-select');
+  if (select) {
+    select.innerHTML = '';
+    const activeEmployees = (state.employees || [])
+      .filter(e => e.status === 'active')
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    activeEmployees.forEach(emp => {
+      const option = document.createElement('option');
+      option.value = emp.id;
+      option.textContent = emp.name;
+      select.appendChild(option);
+    });
+  }
+
+  modal.classList.add('active');
+  if (window.lucide) {
+    window.lucide.createIcons();
+  }
+};
+
+window.closeAssignModal = function() {
+  const modal = document.getElementById('assign-face-modal');
+  if (modal) {
+    modal.classList.remove('active');
+  }
+};
+
+window.submitAssignFace = async function() {
+  const detectionId = document.getElementById('assign-det-id').value;
+  const employeeId = document.getElementById('assign-emp-select').value;
+  const submitBtn = document.getElementById('btn-submit-assign');
+
+  if (!detectionId || !employeeId) {
+    alert('Please select an employee.');
+    return;
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Retraining Model...';
+
+  try {
+    const resp = await fetch('/api/unknown-detections/assign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ detectionId, employeeId })
+    });
+
+    if (!resp.ok) {
+      const errData = await resp.json().catch(() => ({}));
+      throw new Error(errData.error || `Server error (${resp.status})`);
+    }
+
+    const result = await resp.json();
+    closeAssignModal();
+    
+    // Show toast notification
+    if (window.TransactionManager) {
+      TransactionManager.showStatusToast("Face assigned successfully! Model retrained.");
+    } else {
+      alert("Face assigned successfully! Model retrained.");
+    }
+    
+    await refreshUnknownDetections();
+  } catch (err) {
+    console.error('Failed to assign face:', err);
+    alert(`Error: ${err.message}`);
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Train & Save';
+  }
+};
 
 function renderCameraEventsTable(events) {
   const tbody = document.getElementById('camera-events-table-body');
@@ -1656,9 +1793,18 @@ function renderCameraEventsTable(events) {
     const eventLabel = event.eventType === 'entry' ? 'Entry' : 'Exit';
     const timestampText = new Date(event.timestamp).toLocaleString([], { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
     const imageCell = event.imageUrl ? `
-      <img src="${event.imageUrl}" class="selfie-thumbnail" onclick="openSelfieLightbox('${event.imageUrl}', \`<strong>Employee:</strong> ${escapeHtml(event.employeeName)}<br><strong>Location:</strong> ${escapeHtml(event.siteName || 'Office')}<br><strong>Event:</strong> ${escapeHtml(eventLabel)}<br><strong>Time:</strong> ${timestampText}\`)" 
-        style="width: 48px; height: 48px; object-fit: cover; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); cursor: pointer; transition: transform 0.2s;" 
-        onmouseover="this.style.transform='scale(1.08)'" onmouseout="this.style.transform='scale(1)'">
+      <div style="position: relative; display: inline-block;">
+        <img src="${event.imageUrl}" class="selfie-thumbnail" onclick="openSelfieLightbox('${event.imageUrl}', \`<strong>Employee:</strong> ${escapeHtml(event.employeeName)}<br><strong>Location:</strong> ${escapeHtml(event.siteName || 'Office')}<br><strong>Event:</strong> ${escapeHtml(eventLabel)}<br><strong>Time:</strong> ${timestampText}\`, '${event.videoUrl || ''}')" 
+          style="width: 48px; height: 48px; object-fit: cover; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); cursor: pointer; transition: transform 0.2s; display: block;" 
+          onmouseover="this.style.transform='scale(1.08)'" onmouseout="this.style.transform='scale(1)'">
+        ${event.videoUrl ? `
+          <div onclick="openSelfieLightbox('${event.imageUrl}', \`<strong>Employee:</strong> ${escapeHtml(event.employeeName)}<br><strong>Location:</strong> ${escapeHtml(event.siteName || 'Office')}<br><strong>Event:</strong> ${escapeHtml(eventLabel)}<br><strong>Time:</strong> ${timestampText}\`, '${event.videoUrl}')"
+               style="position: absolute; bottom: -2px; right: -2px; background: rgba(0, 230, 118, 0.9); color: #fff; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 8px; border: 1px solid var(--glass-border); font-weight: bold; box-shadow: 0 0 5px rgba(0,230,118,0.5);" 
+               title="Watch Event Video">
+            ▶
+          </div>
+        ` : ''}
+      </div>
     ` : '—';
 
     const statusVal = event.status || 'Recorded';
@@ -2006,6 +2152,7 @@ function openEmployeeModal() {
   document.getElementById('emp-designation').value = "";
   document.getElementById('emp-payment').value = "";
   document.getElementById('emp-phone').value = "";
+  document.getElementById('emp-passcode').value = "1234";
   document.getElementById('emp-monthly').value = "";
   document.getElementById('emp-daily').value = "";
   document.getElementById('emp-hourly').value = "";
@@ -2210,6 +2357,7 @@ function editEmployee(id) {
   document.getElementById('emp-payment').value = emp.paymentMode || "";
   document.getElementById('emp-monthly').value = emp.monthlyWage || "";
   document.getElementById('emp-phone').value = emp.phone || "";
+  document.getElementById('emp-passcode').value = emp.passcode || "1234";
   document.getElementById('emp-daily').value = emp.dailyRate || "";
   document.getElementById('emp-hourly').value = emp.hourlyRate || "";
   document.getElementById('emp-shift-start').value = emp.shiftStart || "";
@@ -2317,6 +2465,7 @@ async function handleEmployeeSubmit(e) {
     ptEnabled: document.getElementById('emp-pt-enabled').checked,
     fixedSalary: document.getElementById('emp-fixed-salary').checked,
     status: document.getElementById('emp-status').value,
+    passcode: document.getElementById('emp-passcode').value.trim() || "1234",
 
     // New Personal details fields
     address: document.getElementById('emp-address').value.trim(),
@@ -2463,6 +2612,12 @@ function handleImageFileSelect(input, docType) {
 
 // Initialize Employee Profiles Tab
 function initProfilesTab() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const queryEmpId = urlParams.get('employeeId');
+  if (queryEmpId) {
+    state.selectedProfileEmpId = queryEmpId;
+  }
+
   const list = state.employees || [];
   
   // Set default selected profile to first employee if none selected
@@ -2625,6 +2780,53 @@ function renderEmployeeProfile(emp) {
   const now = new Date();
   const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
+  // Render Loans HTML
+  let loansHtml = "";
+  const loans = emp.loans || [];
+  if (loans.length === 0) {
+    loansHtml = `<div style="color: var(--text-tertiary); font-size: 0.82rem; text-align: center; padding: 20px 0;">No active or past loans found.</div>`;
+  } else {
+    loansHtml = loans.map(loan => {
+      const isPaid = loan.status === 'fully-paid';
+      const statusBadge = isPaid 
+        ? `<span class="badge badge-secondary" style="margin: 0; font-size: 0.7rem; opacity: 0.6;">Fully Paid</span>` 
+        : `<span class="badge badge-green" style="margin: 0; font-size: 0.7rem;">Active</span>`;
+        
+      const repaymentRows = (loan.repayments || []).map(r => `
+        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; padding: 4px 0; border-bottom: 1px dashed rgba(255,255,255,0.04); color: var(--text-secondary);">
+          <span>${r.date} - ${r.remarks || 'Cash'}</span>
+          <span style="font-weight: 600; color: var(--color-success);">₹${Number(r.amount).toFixed(2)}</span>
+        </div>
+      `).join('');
+
+      const recordRepaymentBtn = isPaid 
+        ? '' 
+        : `<button class="btn btn-secondary" onclick="showRecordRepaymentModal('${emp.id}', '${loan.id}')" style="padding: 4px 8px; font-size: 0.7rem; height: 22px; width: auto; box-shadow: none; border-radius: 4px; margin-top: 8px;">Record Repayment</button>`;
+
+      return `
+        <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--glass-border); padding: 10px; border-radius: 6px; display: flex; flex-direction: column; gap: 4px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; font-weight: 600;">
+            <span>₹${loan.amount} (${loan.purpose})</span>
+            ${statusBadge}
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-secondary);">
+            <span>Balance: <strong>₹${loan.balance}</strong></span>
+            <span>Inst.: <strong>₹${loan.monthlyInstallment}/mo</strong></span>
+          </div>
+          
+          ${loan.repayments && loan.repayments.length > 0 ? `
+            <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.05);">
+              <span style="font-size: 0.72rem; text-transform: uppercase; font-weight: 700; color: var(--text-tertiary); display: block; margin-bottom: 4px;">Repayments:</span>
+              ${repaymentRows}
+            </div>
+          ` : ''}
+          
+          ${recordRepaymentBtn}
+        </div>
+      `;
+    }).join('');
+  }
+
   card.innerHTML = `
     <!-- Profile Header Card -->
     <div class="profile-header-card">
@@ -2749,6 +2951,19 @@ function renderEmployeeProfile(emp) {
             </span>
           </li>
         </ul>
+      </div>
+
+      <!-- Loans & Repayments -->
+      <div class="profile-detail-section" style="display: flex; flex-direction: column; max-height: 400px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--glass-border); padding-bottom: 8px; margin-bottom: 12px;">
+          <h3 class="profile-section-title" style="margin: 0; border: none; padding: 0;"><i data-lucide="wallet"></i> Loans & Repayments</h3>
+          <button class="btn btn-primary" onclick="showAddLoanModal('${emp.id}')" style="font-size: 0.75rem; padding: 4px 8px; height: 26px; width: auto; display: flex; align-items: center; gap: 4px; border-radius: 4px; cursor: pointer; box-shadow: none;">
+            <i data-lucide="plus" style="width: 14px; height: 14px;"></i> Add Loan
+          </button>
+        </div>
+        <div id="profile-loans-list" style="overflow-y: auto; flex-grow: 1; display: flex; flex-direction: column; gap: 10px; padding-right: 4px;">
+          ${loansHtml}
+        </div>
       </div>
     </div>
 
@@ -2966,8 +3181,7 @@ function handleProfileMonthChange(event) {
 
 // Redirect switch helper from Registry table clicks
 function viewProfileFromRegistry(empId) {
-  state.selectedProfileEmpId = empId;
-  switchTab('profiles');
+  window.location.href = `/profiles?employeeId=${empId}`;
 }
 
 // --- Work Sites CRUD ---
@@ -4728,20 +4942,72 @@ function renderSelfiesTable(data) {
   if (window.lucide) window.lucide.createIcons();
 }
 
-function openSelfieLightbox(imageUrl, metaHtml) {
-  const modal = document.getElementById('selfie-modal');
-  const modalImg = document.getElementById('selfie-modal-img');
-  const modalMeta = document.getElementById('selfie-modal-meta');
+function openSelfieLightbox(imageUrl, metaHtml, videoUrl = '') {
+  let modal = document.getElementById('selfie-modal');
+  let modalImg = document.getElementById('selfie-modal-img');
+  let modalVideo = document.getElementById('selfie-modal-video');
+  let modalMeta = document.getElementById('selfie-modal-meta');
   
-  if (modal && modalImg && modalMeta) {
-    modalImg.src = imageUrl;
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.id = 'selfie-modal';
+    modal.innerHTML = `
+      <div class="modal-content" style="max-width: 600px; background: var(--bg-card, #121420); border: 1px solid var(--glass-border); border-radius: var(--border-radius-md); box-shadow: var(--shadow-xl);">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--glass-border);">
+          <h3 id="selfie-modal-title" style="margin: 0; font-size: 1.1rem; font-weight: 700; color: var(--text-primary);">Attendance Capture Details</h3>
+          <button class="btn-close" onclick="closeSelfieModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-secondary);">&times;</button>
+        </div>
+        <div class="modal-body" style="text-align: center; padding: 20px;">
+          <img id="selfie-modal-img" src="" alt="Capture Image" style="max-width: 100%; max-height: 60vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border);">
+          <video id="selfie-modal-video" controls autoplay style="display: none; max-width: 100%; max-height: 60vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border);"></video>
+          <div id="selfie-modal-meta" style="margin-top: 15px; text-align: left; font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary);">
+            <!-- Loaded dynamically -->
+          </div>
+        </div>
+        <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--glass-border); display: flex; justify-content: flex-end;">
+          <button type="button" class="btn btn-secondary" onclick="closeSelfieModal()" style="padding: 8px 16px; font-size: 0.85rem; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); background: transparent; color: var(--text-primary); cursor: pointer;">Close</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modalImg = document.getElementById('selfie-modal-img');
+    modalVideo = document.getElementById('selfie-modal-video');
+    modalMeta = document.getElementById('selfie-modal-meta');
+  }
+  
+  if (modalMeta) {
     modalMeta.innerHTML = metaHtml;
+    
+    if (videoUrl) {
+      if (modalImg) modalImg.style.display = 'none';
+      if (modalVideo) {
+        modalVideo.style.display = 'inline-block';
+        modalVideo.src = videoUrl;
+        modalVideo.load();
+      }
+    } else {
+      if (modalVideo) {
+        modalVideo.style.display = 'none';
+        modalVideo.pause();
+        modalVideo.src = "";
+      }
+      if (modalImg) {
+        modalImg.style.display = 'inline-block';
+        modalImg.src = imageUrl;
+      }
+    }
     modal.classList.add('active');
   }
 }
 
 function closeSelfieModal() {
   const modal = document.getElementById('selfie-modal');
+  const modalVideo = document.getElementById('selfie-modal-video');
+  if (modalVideo) {
+    modalVideo.pause();
+    modalVideo.src = "";
+  }
   if (modal) {
     modal.classList.remove('active');
   }
@@ -4797,10 +5063,29 @@ async function openDisputeInspector(employeeId, employeeName, date) {
     modalBody.innerHTML = `
       <div style="display: grid; grid-template-columns: 1fr; gap: 20px; text-align: center; padding: 10px;">
         ${match.imageUrl ? `
-          <div style="position: relative;">
-            <img src="${match.imageUrl}" alt="CCTV Snapshot" style="max-width: 100%; max-height: 50vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border); object-fit: contain;">
-            <div style="position: absolute; bottom: 10px; right: 10px; background: rgba(0, 0, 0, 0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 500;">
-              Stored Face Snapshot
+          <div style="position: relative; display: inline-block; width: 100%;" id="dispute-media-container">
+            <img id="dispute-img" src="${match.imageUrl}" alt="CCTV Snapshot" style="max-width: 100%; max-height: 50vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border); object-fit: contain; display: block; margin: 0 auto;">
+            ${match.videoUrl ? `
+              <div id="dispute-play-btn" onclick="
+                const img = document.getElementById('dispute-img');
+                const btn = document.getElementById('dispute-play-btn');
+                const vid = document.getElementById('dispute-video');
+                if (img && btn && vid) {
+                  img.style.display = 'none';
+                  btn.style.display = 'none';
+                  vid.style.display = 'block';
+                  vid.play();
+                }
+              " style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0, 230, 118, 0.85); color: #fff; border-radius: 50%; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 24px; box-shadow: 0 0 20px rgba(0,230,118,0.6); transition: all 0.3s; border: 2px solid #fff;" 
+                 onmouseover="this.style.transform='translate(-50%, -50%) scale(1.1)'; this.style.backgroundColor='rgba(0, 230, 118, 1)'" 
+                 onmouseout="this.style.transform='translate(-50%, -50%) scale(1)'; this.style.backgroundColor='rgba(0, 230, 118, 0.85)'"
+                 title="Watch Capture Video">
+                ▶
+              </div>
+              <video id="dispute-video" src="${match.videoUrl}" controls style="display: none; max-width: 100%; max-height: 50vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border); object-fit: contain; margin: 0 auto;"></video>
+            ` : ''}
+            <div style="position: absolute; bottom: 10px; right: 10px; background: rgba(0, 0, 0, 0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 500; pointer-events: none;">
+              ${match.videoUrl ? 'CCTV Video Available' : 'Stored Face Snapshot'}
             </div>
           </div>
         ` : `
@@ -4844,6 +5129,11 @@ async function openDisputeInspector(employeeId, employeeName, date) {
 }
 
 function closeDisputeModal() {
+  const modalVideo = document.getElementById('dispute-video');
+  if (modalVideo) {
+    modalVideo.pause();
+    modalVideo.src = "";
+  }
   const modal = document.getElementById('dispute-modal');
   if (modal) {
     modal.classList.remove('active');
@@ -5861,6 +6151,43 @@ async function loadCctvCameras() {
         ? `<span style="width: 8px; height: 8px; border-radius: 50%; background: #2ed573; display: inline-block; box-shadow: 0 0 6px #2ed573;"></span>`
         : `<span style="width: 8px; height: 8px; border-radius: 50%; background: #71717a; display: inline-block;"></span>`;
 
+      const timeString = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + new Date().toLocaleTimeString('en-US', { hour12: false });
+      
+      const previewHtml = isRunning 
+        ? `<div style="width: 100%; aspect-ratio: 16/9; background: #000; border-radius: var(--border-radius-sm); overflow: hidden; margin-top: 4px; border: 1px solid var(--glass-border); display: flex; align-items: center; justify-content: center; position: relative; box-shadow: inset 0 0 20px rgba(0,0,0,0.8);">
+             <img src="/api/cctv/stream/${cam.id}" style="width: 100%; height: 100%; object-fit: cover;" alt="Live Stream" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+             <div style="display: none; flex-direction: column; align-items: center; gap: 8px; color: var(--text-tertiary); font-size: 0.75rem;">
+               <i data-lucide="video-off" style="width: 24px; height: 24px;"></i>
+               <span>Preview stream offline</span>
+             </div>
+             <!-- CCTV HUD Overlay -->
+             <div style="position: absolute; top: 8px; left: 8px; right: 8px; display: flex; justify-content: space-between; align-items: center; pointer-events: none; text-shadow: 1px 1px 2px #000; font-family: 'Courier New', monospace; font-weight: bold; font-size: 0.7rem; color: #fff; z-index: 5;">
+               <div style="display: flex; align-items: center; gap: 6px; background: rgba(0, 0, 0, 0.4); padding: 2px 6px; border-radius: 4px;">
+                 <span style="width: 6px; height: 6px; border-radius: 50%; background: #2ed573; display: inline-block; box-shadow: 0 0 4px #2ed573;"></span>
+                 <span>LIVE</span>
+               </div>
+               <div style="background: rgba(0, 0, 0, 0.4); padding: 2px 6px; border-radius: 4px; display: flex; align-items: center; gap: 4px;">
+                 <span style="color: #ff4757; font-weight: 800; animation: flash 1s steps(2, start) infinite;">●</span>
+                 <span>REC [${cam.eventType.toUpperCase()}]</span>
+               </div>
+             </div>
+             <!-- Bottom HUD Timestamp -->
+             <div style="position: absolute; bottom: 8px; left: 8px; right: 8px; display: flex; justify-content: space-between; align-items: center; pointer-events: none; text-shadow: 1px 1px 2px #000; font-family: 'Courier New', monospace; font-size: 0.65rem; color: rgba(255, 255, 255, 0.85); z-index: 5;">
+               <div style="background: rgba(0, 0, 0, 0.4); padding: 2px 6px; border-radius: 4px;">${cam.name.toUpperCase()}</div>
+               <div style="background: rgba(0, 0, 0, 0.4); padding: 2px 6px; border-radius: 4px;">${timeString}</div>
+             </div>
+             <!-- Scanline Screen Effect overlay -->
+             <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%); background-size: 100% 4px; pointer-events: none; opacity: 0.35;"></div>
+           </div>`
+        : `<div style="width: 100%; aspect-ratio: 16/9; background: rgba(0,0,0,0.3); border-radius: var(--border-radius-sm); overflow: hidden; margin-top: 4px; border: 1px dashed var(--glass-border); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--text-tertiary); font-size: 0.75rem; position: relative;">
+             <i data-lucide="video-off" style="width: 32px; height: 32px; color: var(--text-tertiary);"></i>
+             <span style="font-weight: 500;">Camera offline (Failed to connect)</span>
+             <div style="position: absolute; top: 8px; left: 8px; background: rgba(0, 0, 0, 0.5); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.7rem; color: #ff4757; display: flex; align-items: center; gap: 6px;">
+               <span style="width: 6px; height: 6px; border-radius: 50%; background: #ff4757; display: inline-block;"></span>
+               <span>OFFLINE</span>
+             </div>
+           </div>`;
+
       const card = document.createElement('div');
       card.className = 'glass-card cctv-camera-card';
       card.style.padding = '16px';
@@ -5879,6 +6206,7 @@ async function loadCctvCameras() {
           </div>
           ${statusBadge}
         </div>
+        ${previewHtml}
         <div style="font-size: 0.75rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 4px;">
           <div style="text-overflow: ellipsis; overflow: hidden; white-space: nowrap;"><span style="color: var(--text-tertiary);">Source:</span> <code style="color: var(--color-primary);">${cam.source}</code></div>
           <div><span style="color: var(--text-tertiary);">Target Location:</span> ${siteName}</div>
@@ -6756,7 +7084,113 @@ window.addEventListener('keydown', (e) => {
       if (typeof closeMetricEmployeesModal === 'function') closeMetricEmployeesModal();
       return;
     }
+
+    const loanModal = document.getElementById('loan-modal');
+    if (loanModal && loanModal.classList.contains('active')) {
+      if (typeof closeLoanModal === 'function') closeLoanModal();
+      return;
+    }
+
+    const repaymentModal = document.getElementById('repayment-modal');
+    if (repaymentModal && repaymentModal.classList.contains('active')) {
+      if (typeof closeRepaymentModal === 'function') closeRepaymentModal();
+      return;
+    }
   }
 });
+
+// --- Loan and Repayment UI Management ---
+
+window.showAddLoanModal = function(empId) {
+  document.getElementById('loan-emp-id').value = empId;
+  document.getElementById('loan-amount').value = "";
+  document.getElementById('loan-installment').value = "";
+  document.getElementById('loan-purpose').value = "";
+  document.getElementById('loan-modal').classList.add('active');
+};
+
+window.closeLoanModal = function() {
+  document.getElementById('loan-modal').classList.remove('active');
+};
+
+window.handleLoanSubmit = async function(e) {
+  e.preventDefault();
+  const empId = document.getElementById('loan-emp-id').value;
+  const amount = parseFloat(document.getElementById('loan-amount').value);
+  const monthlyInstallment = parseFloat(document.getElementById('loan-installment').value) || 0;
+  const purpose = document.getElementById('loan-purpose').value.trim();
+
+  try {
+    const res = await fetch(`/api/employees/${empId}/loans`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, monthlyInstallment, purpose })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "Failed to add loan");
+    }
+    const newLoan = await res.json();
+    
+    // Update local state
+    const emp = state.employees.find(x => x.id === empId);
+    if (emp) {
+      if (!emp.loans) emp.loans = [];
+      emp.loans.push(newLoan);
+    }
+    
+    closeLoanModal();
+    renderEmployeeProfile(emp);
+  } catch (err) {
+    alert(err.message);
+  }
+};
+
+window.showRecordRepaymentModal = function(empId, loanId) {
+  document.getElementById('repayment-emp-id').value = empId;
+  document.getElementById('repayment-loan-id').value = loanId;
+  document.getElementById('repayment-amount').value = "";
+  document.getElementById('repayment-remarks').value = "";
+  document.getElementById('repayment-modal').classList.add('active');
+};
+
+window.closeRepaymentModal = function() {
+  document.getElementById('repayment-modal').classList.remove('active');
+};
+
+window.handleRepaymentSubmit = async function(e) {
+  e.preventDefault();
+  const empId = document.getElementById('repayment-emp-id').value;
+  const loanId = document.getElementById('repayment-loan-id').value;
+  const amount = parseFloat(document.getElementById('repayment-amount').value);
+  const remarks = document.getElementById('repayment-remarks').value.trim();
+
+  try {
+    const res = await fetch(`/api/employees/${empId}/loans/${loanId}/repayments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, remarks })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "Failed to record repayment");
+    }
+    const updatedLoan = await res.json();
+    
+    // Update local state
+    const emp = state.employees.find(x => x.id === empId);
+    if (emp && emp.loans) {
+      const idx = emp.loans.findIndex(l => l.id === loanId);
+      if (idx !== -1) {
+        emp.loans[idx] = updatedLoan;
+      }
+    }
+    
+    closeRepaymentModal();
+    renderEmployeeProfile(emp);
+  } catch (err) {
+    alert(err.message);
+  }
+};
 
 
