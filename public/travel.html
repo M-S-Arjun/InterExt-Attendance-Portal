@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en" class="sidebar-collapsed">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#ff6b00">
+  <meta name="color-scheme" content="dark light">
+  <title>WhatsApp Attendance & Payroll Tracker</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Google Fonts - Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Lucide Icons (Local/Offline) -->
+  <script src="/lucide.min.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+  <!-- Sidebar Collapse State Restorer (Prevents Layout Flash on Load) -->
+  <script>
+    if (localStorage.getItem('sidebar-collapsed') === 'true') {
+      document.documentElement.classList.add('sidebar-collapsed');
+    }
+  </script>
+</head>
+<body>
+
+  <!-- Main Container -->
+  <div class="app-layout">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-brand" onclick="switchTab('dashboard')" style="cursor: pointer;">
+        <div class="brand-logo">
+          <img src="/logo.jpg" class="brand-logo-img" alt="Logo">
+        </div>
+        <div class="brand-text">
+          <h2>INTEREXT</h2>
+          <span>Attendance Panel</span>
+        </div>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <button class="nav-item active" onclick="switchTab('dashboard')">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('logs')">
+          <i data-lucide="calendar-range"></i>
+          <span>Attendance Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('punches')">
+          <i data-lucide="fingerprint"></i>
+          <span>Punches Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('travel')">
+          <i data-lucide="navigation"></i>
+          <span>Travel Time Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('profiles')">
+          <i data-lucide="user-circle"></i>
+          <span>Employee Profiles</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('employees')">
+          <i data-lucide="users"></i>
+          <span>Workers Registry</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('payroll')">
+          <i data-lucide="wallet"></i>
+          <span>Monthly Payroll</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('welders')">
+          <i data-lucide="file-spreadsheet"></i>
+          <span>Welders Weekly</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('selfies')">
+          <i data-lucide="camera"></i>
+          <span>Selfie Verifications</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('camera')">
+          <i data-lucide="video"></i>
+          <span>Camera Attendance</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('unknown')">
+          <i data-lucide="shield-alert"></i>
+          <span>Unknown Visitors</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('sites')">
+          <i data-lucide="map-pin"></i>
+          <span>Work Sites</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('holidays')">
+          <i data-lucide="calendar"></i>
+          <span>Holiday Calendar</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('settings')">
+          <i data-lucide="sliders"></i>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="connection-pill status-disconnected" id="sidebar-status-pill">
+          <div class="status-indicator-ping"></div>
+          <span id="sidebar-status-text">Disconnected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Content -->
+    <main class="main-content">
+      
+      <!-- Top Header -->
+      <header class="top-header">
+        <div class="header-left-group">
+          <div class="header-welcome">
+            <h1 id="page-title">Dashboard Overview</h1>
+            <p id="page-subtitle">Real-time daily wage attendance tracking</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="active-group-badge" id="active-group-badge" style="display: none;">
+            <i data-lucide="message-square"></i>
+            <span>Monitoring: <strong id="header-group-name">—</strong></span>
+          </div>
+          <div class="current-date-badge">
+            <i data-lucide="clock"></i>
+            <span id="header-datetime">Loading...</span>
+          </div>
+          <button class="btn-theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Light/Dark Theme">
+            <i data-lucide="sun" id="theme-icon-sun" style="display: none;"></i>
+            <i data-lucide="moon" id="theme-icon-moon"></i>
+          </button>
+        </div>
+      </header>
+
+      
+      <!-- TAB 2.5: TRAVEL TIME LOG VIEW -->
+      <div id="tab-travel" class="tab-view active">
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="navigation"></i> Travel Time Tracking Log</h3>
+              <p>Review daily worker travel times, 50% paid halving rule calculations, and payout amounts</p>
+            </div>
+            <div class="header-right flex-filters">
+              <div class="filter-group">
+                <label>Month</label>
+                <input type="month" id="travel-filter-month" class="form-control" onchange="applyFiltersTravel()">
+              </div>
+              <div class="filter-buttons">
+                <button class="btn btn-secondary btn-icon" onclick="resetTravelFilters()"><i data-lucide="refresh-cw"></i> Reset</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Metrics summary for travel time -->
+          <div class="metrics-grid" style="margin-bottom: 20px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+            <div class="metric-card bg-slate-card">
+              <div class="metric-title">Total Travel Hours (Reported)</div>
+              <div class="metric-value" id="travel-stat-reported">0.00 hrs</div>
+              <div class="metric-desc">Total travel time reported by supervisors</div>
+            </div>
+            <div class="metric-card bg-slate-card">
+              <div class="metric-title">Total Paid Hours (50%)</div>
+              <div class="metric-value text-green" id="travel-stat-paid">0.00 hrs</div>
+              <div class="metric-desc">Company policy 50% paid travel credit</div>
+            </div>
+            <div class="metric-card bg-slate-card">
+              <div class="metric-title">Total Travel Payout</div>
+              <div class="metric-value text-green" id="travel-stat-payout">₹0.00</div>
+              <div class="metric-desc">Calculated travel time payout amount</div>
+            </div>
+          </div>
+          
+          <!-- Master Log Excel-style Filters & Search Bar -->
+          <div class="table-control-bar">
+            <div class="table-control-left">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="travel-search-input" class="form-control" placeholder="Search by name, site, or source..." oninput="applyFiltersTravel()" autocomplete="off">
+              </div>
+            </div>
+          </div>
+          
+          <div class="overflow-x">
+            <table class="data-table" id="travel-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Employee Name</th>
+                  <th>Work Site</th>
+                  <th>Stated Travel Hours</th>
+                  <th>Paid Travel Hours</th>
+                  <th>Hourly Rate</th>
+                  <th>Travel Payout Amount</th>
+                  <th>WhatsApp Text Source</th>
+                  <th style="width: 100px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="travel-table-body">
+                <!-- Generated Dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      
+    </main>
+  </div>
+
+  
+
+  <!-- Lucide Script Boot -->
+  <script>
+    lucide.createIcons();
+  </script>
+  <!-- Frontend Controller Script -->
+  <script src="app.js"></script>
+</body>
+</html>

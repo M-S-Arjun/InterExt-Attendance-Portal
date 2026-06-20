@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en" class="sidebar-collapsed">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#ff6b00">
+  <meta name="color-scheme" content="dark light">
+  <title>WhatsApp Attendance & Payroll Tracker</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Google Fonts - Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Lucide Icons (Local/Offline) -->
+  <script src="/lucide.min.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+  <!-- Sidebar Collapse State Restorer (Prevents Layout Flash on Load) -->
+  <script>
+    if (localStorage.getItem('sidebar-collapsed') === 'true') {
+      document.documentElement.classList.add('sidebar-collapsed');
+    }
+  </script>
+</head>
+<body>
+
+  <!-- Main Container -->
+  <div class="app-layout">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-brand" onclick="switchTab('dashboard')" style="cursor: pointer;">
+        <div class="brand-logo">
+          <img src="/logo.jpg" class="brand-logo-img" alt="Logo">
+        </div>
+        <div class="brand-text">
+          <h2>INTEREXT</h2>
+          <span>Attendance Panel</span>
+        </div>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <button class="nav-item active" onclick="switchTab('dashboard')">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('logs')">
+          <i data-lucide="calendar-range"></i>
+          <span>Attendance Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('punches')">
+          <i data-lucide="fingerprint"></i>
+          <span>Punches Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('travel')">
+          <i data-lucide="navigation"></i>
+          <span>Travel Time Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('profiles')">
+          <i data-lucide="user-circle"></i>
+          <span>Employee Profiles</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('employees')">
+          <i data-lucide="users"></i>
+          <span>Workers Registry</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('payroll')">
+          <i data-lucide="wallet"></i>
+          <span>Monthly Payroll</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('welders')">
+          <i data-lucide="file-spreadsheet"></i>
+          <span>Welders Weekly</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('selfies')">
+          <i data-lucide="camera"></i>
+          <span>Selfie Verifications</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('camera')">
+          <i data-lucide="video"></i>
+          <span>Camera Attendance</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('unknown')">
+          <i data-lucide="shield-alert"></i>
+          <span>Unknown Visitors</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('sites')">
+          <i data-lucide="map-pin"></i>
+          <span>Work Sites</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('holidays')">
+          <i data-lucide="calendar"></i>
+          <span>Holiday Calendar</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('settings')">
+          <i data-lucide="sliders"></i>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="connection-pill status-disconnected" id="sidebar-status-pill">
+          <div class="status-indicator-ping"></div>
+          <span id="sidebar-status-text">Disconnected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Content -->
+    <main class="main-content">
+      
+      <!-- Top Header -->
+      <header class="top-header">
+        <div class="header-left-group">
+          <div class="header-welcome">
+            <h1 id="page-title">Dashboard Overview</h1>
+            <p id="page-subtitle">Real-time daily wage attendance tracking</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="active-group-badge" id="active-group-badge" style="display: none;">
+            <i data-lucide="message-square"></i>
+            <span>Monitoring: <strong id="header-group-name">—</strong></span>
+          </div>
+          <div class="current-date-badge">
+            <i data-lucide="clock"></i>
+            <span id="header-datetime">Loading...</span>
+          </div>
+          <button class="btn-theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Light/Dark Theme">
+            <i data-lucide="sun" id="theme-icon-sun" style="display: none;"></i>
+            <i data-lucide="moon" id="theme-icon-moon"></i>
+          </button>
+        </div>
+      </header>
+
+      
+      <!-- TAB 3.25: EMPLOYEE PROFILES VIEW -->
+      <div id="tab-profiles" class="tab-view active">
+        <div class="profiles-container">
+          <!-- Left Sidebar Employee List -->
+          <div class="profiles-sidebar">
+            <div class="sidebar-search-box">
+              <i data-lucide="search"></i>
+              <input type="text" id="profile-search-input" placeholder="Search employee..." oninput="filterProfilesSidebarList()" autocomplete="off">
+            </div>
+            <div class="profiles-list" id="profiles-sidebar-list">
+              <!-- Rendered Dynamically -->
+            </div>
+          </div>
+          
+          <!-- Right Profile Details Panel -->
+          <div class="profile-main-content" id="profile-details-card">
+            <div class="empty-profile-state">
+              <i data-lucide="user-circle"></i>
+              <h3>Select an Employee</h3>
+              <p>Choose an employee from the list on the left to view their detailed profile, shift history, and monthly statistics.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      
+    </main>
+  </div>
+
+  <!-- POPUP MODAL: Add Loan -->
+  <div class="modal" id="loan-modal">
+    <div class="modal-content glass-card" style="max-width: 450px;">
+      <div class="modal-header">
+        <h3><i data-lucide="wallet" style="color: var(--color-primary); vertical-align: middle; margin-right: 6px;"></i> Add Loan Record</h3>
+        <button class="btn-close" onclick="closeLoanModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="loan-form" onsubmit="handleLoanSubmit(event)">
+          <input type="hidden" id="loan-emp-id">
+          
+          <div class="form-group">
+            <label for="loan-amount">Loan Principal Amount (₹)</label>
+            <input type="number" id="loan-amount" class="form-control" placeholder="e.g. 5000" min="1" step="0.01" required>
+            <span class="help-text">The total loan amount granted to the employee</span>
+          </div>
+
+          <div class="form-group">
+            <label for="loan-installment">Monthly Installment Amount (₹)</label>
+            <input type="number" id="loan-installment" class="form-control" placeholder="e.g. 1000" min="0" step="0.01" required>
+            <span class="help-text">Deduction amount per month (if any)</span>
+          </div>
+
+          <div class="form-group">
+            <label for="loan-purpose">Purpose / Remarks</label>
+            <input type="text" id="loan-purpose" class="form-control" placeholder="e.g. Emergency medical expenses" required>
+            <span class="help-text">Description of the loan purpose</span>
+          </div>
+
+          <div class="modal-footer" style="padding-top: 12px; margin-top: 16px; border-top: 1px solid var(--glass-border); display: flex; justify-content: flex-end; gap: 8px;">
+            <button type="button" class="btn btn-secondary" onclick="closeLoanModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Grant Loan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- POPUP MODAL: Record Repayment -->
+  <div class="modal" id="repayment-modal">
+    <div class="modal-content glass-card" style="max-width: 450px;">
+      <div class="modal-header">
+        <h3><i data-lucide="arrow-down-circle" style="color: var(--color-success); vertical-align: middle; margin-right: 6px;"></i> Record Loan Repayment</h3>
+        <button class="btn-close" onclick="closeRepaymentModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="repayment-form" onsubmit="handleRepaymentSubmit(event)">
+          <input type="hidden" id="repayment-emp-id">
+          <input type="hidden" id="repayment-loan-id">
+          
+          <div class="form-group">
+            <label for="repayment-amount">Repayment Amount (₹)</label>
+            <input type="number" id="repayment-amount" class="form-control" placeholder="e.g. 1000" min="1" step="0.01" required>
+            <span class="help-text">The amount repaid by the employee</span>
+          </div>
+
+          <div class="form-group">
+            <label for="repayment-remarks">Remarks / Details</label>
+            <input type="text" id="repayment-remarks" class="form-control" placeholder="e.g. Cash payment / Salary deduction" required>
+            <span class="help-text">Optional details (e.g. Payment mode, month reference)</span>
+          </div>
+
+          <div class="modal-footer" style="padding-top: 12px; margin-top: 16px; border-top: 1px solid var(--glass-border); display: flex; justify-content: flex-end; gap: 8px;">
+            <button type="button" class="btn btn-secondary" onclick="closeRepaymentModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary" style="background: var(--color-success); border-color: var(--color-success);">Record Repayment</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lucide Script Boot -->
+  <script>
+    lucide.createIcons();
+  </script>
+  <!-- Frontend Controller Script -->
+  <script src="app.js"></script>
+</body>
+</html>

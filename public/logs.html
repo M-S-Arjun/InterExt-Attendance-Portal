@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en" class="sidebar-collapsed">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#ff6b00">
+  <meta name="color-scheme" content="dark light">
+  <title>WhatsApp Attendance & Payroll Tracker</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Google Fonts - Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Lucide Icons (Local/Offline) -->
+  <script src="/lucide.min.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+  <!-- Sidebar Collapse State Restorer (Prevents Layout Flash on Load) -->
+  <script>
+    if (localStorage.getItem('sidebar-collapsed') === 'true') {
+      document.documentElement.classList.add('sidebar-collapsed');
+    }
+  </script>
+</head>
+<body>
+
+  <!-- Main Container -->
+  <div class="app-layout">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-brand" onclick="switchTab('dashboard')" style="cursor: pointer;">
+        <div class="brand-logo">
+          <img src="/logo.jpg" class="brand-logo-img" alt="Logo">
+        </div>
+        <div class="brand-text">
+          <h2>INTEREXT</h2>
+          <span>Attendance Panel</span>
+        </div>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <button class="nav-item active" onclick="switchTab('dashboard')">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('logs')">
+          <i data-lucide="calendar-range"></i>
+          <span>Attendance Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('punches')">
+          <i data-lucide="fingerprint"></i>
+          <span>Punches Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('travel')">
+          <i data-lucide="navigation"></i>
+          <span>Travel Time Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('profiles')">
+          <i data-lucide="user-circle"></i>
+          <span>Employee Profiles</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('employees')">
+          <i data-lucide="users"></i>
+          <span>Workers Registry</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('payroll')">
+          <i data-lucide="wallet"></i>
+          <span>Monthly Payroll</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('welders')">
+          <i data-lucide="file-spreadsheet"></i>
+          <span>Welders Weekly</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('selfies')">
+          <i data-lucide="camera"></i>
+          <span>Selfie Verifications</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('camera')">
+          <i data-lucide="video"></i>
+          <span>Camera Attendance</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('unknown')">
+          <i data-lucide="shield-alert"></i>
+          <span>Unknown Visitors</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('sites')">
+          <i data-lucide="map-pin"></i>
+          <span>Work Sites</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('holidays')">
+          <i data-lucide="calendar"></i>
+          <span>Holiday Calendar</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('settings')">
+          <i data-lucide="sliders"></i>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="connection-pill status-disconnected" id="sidebar-status-pill">
+          <div class="status-indicator-ping"></div>
+          <span id="sidebar-status-text">Disconnected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Content -->
+    <main class="main-content">
+      
+      <!-- Top Header -->
+      <header class="top-header">
+        <div class="header-left-group">
+          <div class="header-welcome">
+            <h1 id="page-title">Dashboard Overview</h1>
+            <p id="page-subtitle">Real-time daily wage attendance tracking</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="active-group-badge" id="active-group-badge" style="display: none;">
+            <i data-lucide="message-square"></i>
+            <span>Monitoring: <strong id="header-group-name">—</strong></span>
+          </div>
+          <div class="current-date-badge">
+            <i data-lucide="clock"></i>
+            <span id="header-datetime">Loading...</span>
+          </div>
+          <button class="btn-theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Light/Dark Theme">
+            <i data-lucide="sun" id="theme-icon-sun" style="display: none;"></i>
+            <i data-lucide="moon" id="theme-icon-moon"></i>
+          </button>
+        </div>
+      </header>
+
+      
+      <!-- TAB 2: ATTENDANCE LOG VIEW -->
+      <div id="tab-logs" class="tab-view active">
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="file-spreadsheet"></i> Attendance Master Sheet</h3>
+            </div>
+            <div class="header-right flex-filters">
+              <div class="filter-group">
+                <label>Target Date</label>
+                <input type="date" id="log-filter-date" class="form-control" onchange="handleTargetDateChange()">
+              </div>
+              <div class="filter-group">
+                <label>Range Start</label>
+                <input type="date" id="log-filter-start" class="form-control" onchange="checkRangeChange()">
+              </div>
+              <div class="filter-group">
+                <label>Range End</label>
+                <input type="date" id="log-filter-end" class="form-control" onchange="checkRangeChange()">
+              </div>
+              <div class="filter-buttons">
+                <button class="btn btn-secondary btn-icon" id="btn-refresh-logs" onclick="refreshWhatsAppLogs()"><i data-lucide="refresh-cw"></i> Refresh</button>
+                <button class="btn btn-primary btn-icon" onclick="exportPayrollCSV()"><i data-lucide="download"></i> Export Excel</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Master Log Excel-style Filters & Search Bar -->
+          <div class="table-control-bar">
+            <div class="table-control-left">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="log-search-input" class="form-control" placeholder="Search by name, site, status or shift..." oninput="applyFiltersLogs()" autocomplete="off">
+              </div>
+            </div>
+            <div class="table-control-right">
+              <select id="log-filter-status" class="table-control-select" onchange="applyFiltersLogs()">
+                <option value="">-- All Statuses --</option>
+                <option value="completed">Present</option>
+                <option value="checked-in">Checked-In</option>
+                <option value="late">Late (Pending)</option>
+                <option value="Late Check-in">Late Check-in</option>
+                <option value="Early Check-out">Early Check-out</option>
+                <option value="half-day leave">Half Day</option>
+                <option value="absent">Absent</option>
+                <option value="leave">Leave</option>
+              </select>
+              <select id="log-filter-site" class="table-control-select" onchange="applyFiltersLogs()">
+                <option value="">-- All Sites --</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="overflow-x">
+            <table class="data-table" id="attendance-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Employee Name</th>
+                  <th>Status</th>
+                  <th>Punches</th>
+                  <th>Work Site</th>
+                  <th>Check-In</th>
+                  <th>Check-Out</th>
+                  <th>Total Hours</th>
+                  <th>Travel Time (Hrs)</th>
+                  <th>Shift Summary</th>
+                  <th>Calculated Pay</th>
+                  <th style="width: 100px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="attendance-table-body">
+                <!-- Generated Dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      
+    </main>
+  </div>
+
+  <!-- POPUP MODAL: Manual Attendance Adjuster -->
+  <div class="modal" id="attendance-modal">
+    <div class="modal-content glass-card">
+      <div class="modal-header">
+        <h3>Manual Attendance Adjuster</h3>
+        <button class="btn-close" onclick="closeAttendanceModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="attendance-form" onsubmit="handleAttendanceSubmit(event)">
+          <input type="hidden" id="att-id">
+          <input type="hidden" id="att-emp-id">
+          <input type="hidden" id="att-date">
+
+          <div class="form-group">
+            <label>Worker Name</label>
+            <input type="text" id="att-emp-name" class="form-control" disabled>
+          </div>
+
+          <div class="form-group">
+            <label for="att-status">Attendance Status</label>
+            <select id="att-status" class="form-control" onchange="toggleManualTimeFields(true)">
+              <option value="checked-in">Checked-In (Active duty)</option>
+              <option value="completed">Completed Shift (Present)</option>
+              <option value="late">Late (Pending Scan)</option>
+              <option value="Late Check-in">Late Check-in</option>
+              <option value="Early Check-out">Early Check-out</option>
+              <option value="half-day leave">Half Day</option>
+              <option value="absent">Absent</option>
+              <option value="leave">On Leave / Excused</option>
+            </select>
+          </div>
+
+          <div class="form-group" id="att-halfday-period-group" style="display: none;">
+            <label for="att-halfday-period">Half-Day Period Selector</label>
+            <select id="att-halfday-period" class="form-control" onchange="updateHalfDayTimes()">
+              <option value="first">First Half (Start of Shift to Lunch Break: 01:00 PM)</option>
+              <option value="second">Second Half (Post Lunch Break: 02:00 PM to End of Shift)</option>
+            </select>
+          </div>
+
+          <div class="form-group" id="att-site-group">
+            <label for="att-site">Work Site Assigned</label>
+            <select id="att-site" class="form-control">
+              <!-- Site list dynamically added -->
+            </select>
+          </div>
+
+          <div class="form-row modal-highlight-box" id="att-hospital-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; padding: 12px;">
+            <div class="override-checkbox-container" style="display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" id="att-is-hospital" style="accent-color: var(--color-primary); width: 16px; height: 16px; cursor: pointer;">
+              <label for="att-is-hospital" style="font-weight: 600; cursor: pointer; color: var(--text-primary);">Hospital Case</label>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="att-hospital-hours" style="font-size: 0.75rem; color: var(--text-secondary);">Hospital Hours (max 2h)</label>
+              <input type="number" id="att-hospital-hours" class="form-control" min="0" max="2" step="0.5" placeholder="0">
+            </div>
+          </div>
+
+          <div class="form-row" id="att-times-row">
+            <div class="form-group">
+              <label for="att-checkin">Check-In Time</label>
+              <input type="datetime-local" id="att-checkin" class="form-control">
+            </div>
+            <div class="form-group" id="att-checkout-group">
+              <label for="att-checkout">Check-Out Time</label>
+              <input type="datetime-local" id="att-checkout" class="form-control">
+            </div>
+          </div>
+
+          <!-- Custom Overrides Box -->
+          <div class="manual-override-box" id="att-override-box">
+            <div class="override-checkbox-container">
+              <input type="checkbox" id="att-override" onchange="toggleOverrideFields()">
+              <label for="att-override" class="text-amber"><strong>Enable Manual Hours & Wage Override</strong></label>
+            </div>
+            <p class="help-text">Check this box if you want to bypass the automated check-in/out hour calculation formulas and manually type exact payroll values.</p>
+            
+            <div class="override-fields" id="att-override-fields" style="display: none;">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="att-reg-hours">Regular Hours</label>
+                  <input type="number" id="att-reg-hours" class="form-control" min="0" max="24" step="0.01">
+                </div>
+                <div class="form-group">
+                  <label for="att-ot-hours">Overtime Hours</label>
+                  <input type="number" id="att-ot-hours" class="form-control" min="0" max="24" step="0.01">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="att-extra-hours">Extra Hours (Half-Day)</label>
+                  <input type="number" id="att-extra-hours" class="form-control" min="0" max="24" step="0.01">
+                </div>
+                <div class="form-group">
+                  <label for="att-wage">Calculated Wage (₹)</label>
+                  <input type="number" id="att-wage" class="form-control" min="0" step="0.01">
+                </div>
+              </div>
+              <div class="form-row" style="margin-top: 10px;">
+                <div class="override-checkbox-container">
+                  <input type="checkbox" id="att-is-fd">
+                  <label for="att-is-fd">Full-Day Shift Credit</label>
+                </div>
+                <div class="override-checkbox-container">
+                  <input type="checkbox" id="att-is-hd">
+                  <label for="att-is-hd">Half-Day Shift Credit</label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="att-travel-hours">Travel Hours Paid (daily)</label>
+            <input type="number" id="att-travel-hours" class="form-control" min="0" max="24" step="0.01" placeholder="0.00">
+          </div>
+
+          <div class="form-group">
+            <label for="att-notes">Administrative Notes</label>
+            <input type="text" id="att-notes" class="form-control" placeholder="Add custom comments (e.g. forgot phone)...">
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeAttendanceModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Adjustment</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dispute Inspector Popup Modal -->
+  <div class="modal" id="dispute-modal">
+    <div class="modal-content glass-card" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3>Face Recognition Dispute Inspector</h3>
+        <button class="btn-close" onclick="closeDisputeModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="dispute-modal-body" style="padding: 20px;">
+        <!-- Loaded dynamically -->
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeDisputeModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lucide Script Boot -->
+  <script>
+    lucide.createIcons();
+  </script>
+  <!-- Frontend Controller Script -->
+  <script src="app.js"></script>
+</body>
+</html>

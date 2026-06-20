@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en" class="sidebar-collapsed">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#ff6b00">
+  <meta name="color-scheme" content="dark light">
+  <title>WhatsApp Attendance & Payroll Tracker</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Google Fonts - Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Lucide Icons (Local/Offline) -->
+  <script src="/lucide.min.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+  <!-- Sidebar Collapse State Restorer (Prevents Layout Flash on Load) -->
+  <script>
+    if (localStorage.getItem('sidebar-collapsed') === 'true') {
+      document.documentElement.classList.add('sidebar-collapsed');
+    }
+  </script>
+</head>
+<body>
+
+  <!-- Main Container -->
+  <div class="app-layout">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-brand" onclick="switchTab('dashboard')" style="cursor: pointer;">
+        <div class="brand-logo">
+          <img src="/logo.jpg" class="brand-logo-img" alt="Logo">
+        </div>
+        <div class="brand-text">
+          <h2>INTEREXT</h2>
+          <span>Attendance Panel</span>
+        </div>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <button class="nav-item active" onclick="switchTab('dashboard')">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('logs')">
+          <i data-lucide="calendar-range"></i>
+          <span>Attendance Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('punches')">
+          <i data-lucide="fingerprint"></i>
+          <span>Punches Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('travel')">
+          <i data-lucide="navigation"></i>
+          <span>Travel Time Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('profiles')">
+          <i data-lucide="user-circle"></i>
+          <span>Employee Profiles</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('employees')">
+          <i data-lucide="users"></i>
+          <span>Workers Registry</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('payroll')">
+          <i data-lucide="wallet"></i>
+          <span>Monthly Payroll</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('welders')">
+          <i data-lucide="file-spreadsheet"></i>
+          <span>Welders Weekly</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('selfies')">
+          <i data-lucide="camera"></i>
+          <span>Selfie Verifications</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('camera')">
+          <i data-lucide="video"></i>
+          <span>Camera Attendance</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('unknown')">
+          <i data-lucide="shield-alert"></i>
+          <span>Unknown Visitors</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('sites')">
+          <i data-lucide="map-pin"></i>
+          <span>Work Sites</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('holidays')">
+          <i data-lucide="calendar"></i>
+          <span>Holiday Calendar</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('settings')">
+          <i data-lucide="sliders"></i>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="connection-pill status-disconnected" id="sidebar-status-pill">
+          <div class="status-indicator-ping"></div>
+          <span id="sidebar-status-text">Disconnected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Content -->
+    <main class="main-content">
+      
+      <!-- Top Header -->
+      <header class="top-header">
+        <div class="header-left-group">
+          <div class="header-welcome">
+            <h1 id="page-title">Dashboard Overview</h1>
+            <p id="page-subtitle">Real-time daily wage attendance tracking</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="active-group-badge" id="active-group-badge" style="display: none;">
+            <i data-lucide="message-square"></i>
+            <span>Monitoring: <strong id="header-group-name">—</strong></span>
+          </div>
+          <div class="current-date-badge">
+            <i data-lucide="clock"></i>
+            <span id="header-datetime">Loading...</span>
+          </div>
+          <button class="btn-theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Light/Dark Theme">
+            <i data-lucide="sun" id="theme-icon-sun" style="display: none;"></i>
+            <i data-lucide="moon" id="theme-icon-moon"></i>
+          </button>
+        </div>
+      </header>
+
+      
+      <!-- TAB 3.5: SELFIE VERIFICATIONS VIEW -->
+      <div id="tab-selfies" class="tab-view active">
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="shield-check"></i> On-Site Selfie Verification Board</h3>
+              <p>Review real-time EXIF geolocation metadata, capture timestamps, and verify anti-spoofing check-in records</p>
+            </div>
+            <div class="header-right flex-filters">
+              <button class="btn btn-secondary btn-icon" onclick="loadSelfieLogs()"><i data-lucide="refresh-cw"></i> Refresh Board</button>
+            </div>
+          </div>
+          
+          <!-- Selfie control bar -->
+          <div class="table-control-bar">
+            <div class="table-control-left">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="selfie-search-input" class="form-control" placeholder="Search by name, site, or status..." oninput="applyFiltersSelfies()">
+              </div>
+            </div>
+            <div class="table-control-right">
+              <select id="selfie-filter-status" class="table-control-select" onchange="applyFiltersSelfies()">
+                <option value="">-- All Statuses --</option>
+                <option value="verified">Verified On-Site</option>
+                <option value="flagged_location">Flagged: Location Mismatch</option>
+                <option value="flagged_time">Flagged: Pre-clicked Image</option>
+                <option value="warning_no_exif">Warning: Missing EXIF Data</option>
+                <option value="rejected">Admin Rejected</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="overflow-x" style="height: calc(100vh - 310px); border: 1px solid var(--glass-border); background-color: rgba(0, 0, 0, 0.08); border-radius: var(--border-radius-sm);">
+            <table class="data-table" id="selfies-table" style="min-width: 1500px;">
+              <thead>
+                <tr>
+                  <th style="width: 80px;">Selfie</th>
+                  <th>Worker Name</th>
+                  <th>Matched Site</th>
+                  <th>Received Time</th>
+                  <th>Image Captured (EXIF)</th>
+                  <th>GPS Coordinates</th>
+                  <th>Distance & Gap</th>
+                  <th>Status</th>
+                  <th style="width: 150px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="selfies-table-body">
+                <!-- Generated Dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      
+    </main>
+  </div>
+
+  <!-- Selfie Lightbox Popup Modal -->
+  <div class="modal" id="selfie-modal">
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3 id="selfie-modal-title">Selfie Check-In Details</h3>
+        <button class="btn-close" onclick="closeSelfieModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="text-align: center; padding: 20px;">
+        <img id="selfie-modal-img" src="" alt="Selfie Image" style="max-width: 100%; max-height: 60vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border);">
+        <div id="selfie-modal-meta">
+          <!-- Loaded dynamically -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeSelfieModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lucide Script Boot -->
+  <script>
+    lucide.createIcons();
+  </script>
+  <!-- Frontend Controller Script -->
+  <script src="app.js"></script>
+</body>
+</html>

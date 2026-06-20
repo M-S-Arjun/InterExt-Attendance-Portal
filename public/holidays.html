@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en" class="sidebar-collapsed">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#ff6b00">
+  <meta name="color-scheme" content="dark light">
+  <title>WhatsApp Attendance & Payroll Tracker</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Google Fonts - Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Lucide Icons (Local/Offline) -->
+  <script src="/lucide.min.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+  <!-- Sidebar Collapse State Restorer (Prevents Layout Flash on Load) -->
+  <script>
+    if (localStorage.getItem('sidebar-collapsed') === 'true') {
+      document.documentElement.classList.add('sidebar-collapsed');
+    }
+  </script>
+</head>
+<body>
+
+  <!-- Main Container -->
+  <div class="app-layout">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-brand" onclick="switchTab('dashboard')" style="cursor: pointer;">
+        <div class="brand-logo">
+          <img src="/logo.jpg" class="brand-logo-img" alt="Logo">
+        </div>
+        <div class="brand-text">
+          <h2>INTEREXT</h2>
+          <span>Attendance Panel</span>
+        </div>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <button class="nav-item active" onclick="switchTab('dashboard')">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('logs')">
+          <i data-lucide="calendar-range"></i>
+          <span>Attendance Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('punches')">
+          <i data-lucide="fingerprint"></i>
+          <span>Punches Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('travel')">
+          <i data-lucide="navigation"></i>
+          <span>Travel Time Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('profiles')">
+          <i data-lucide="user-circle"></i>
+          <span>Employee Profiles</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('employees')">
+          <i data-lucide="users"></i>
+          <span>Workers Registry</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('payroll')">
+          <i data-lucide="wallet"></i>
+          <span>Monthly Payroll</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('welders')">
+          <i data-lucide="file-spreadsheet"></i>
+          <span>Welders Weekly</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('selfies')">
+          <i data-lucide="camera"></i>
+          <span>Selfie Verifications</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('camera')">
+          <i data-lucide="video"></i>
+          <span>Camera Attendance</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('unknown')">
+          <i data-lucide="shield-alert"></i>
+          <span>Unknown Visitors</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('sites')">
+          <i data-lucide="map-pin"></i>
+          <span>Work Sites</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('holidays')">
+          <i data-lucide="calendar"></i>
+          <span>Holiday Calendar</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('settings')">
+          <i data-lucide="sliders"></i>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="connection-pill status-disconnected" id="sidebar-status-pill">
+          <div class="status-indicator-ping"></div>
+          <span id="sidebar-status-text">Disconnected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Content -->
+    <main class="main-content">
+      
+      <!-- Top Header -->
+      <header class="top-header">
+        <div class="header-left-group">
+          <div class="header-welcome">
+            <h1 id="page-title">Dashboard Overview</h1>
+            <p id="page-subtitle">Real-time daily wage attendance tracking</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="active-group-badge" id="active-group-badge" style="display: none;">
+            <i data-lucide="message-square"></i>
+            <span>Monitoring: <strong id="header-group-name">—</strong></span>
+          </div>
+          <div class="current-date-badge">
+            <i data-lucide="clock"></i>
+            <span id="header-datetime">Loading...</span>
+          </div>
+          <button class="btn-theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Light/Dark Theme">
+            <i data-lucide="sun" id="theme-icon-sun" style="display: none;"></i>
+            <i data-lucide="moon" id="theme-icon-moon"></i>
+          </button>
+        </div>
+      </header>
+
+      
+      <!-- TAB 9: HOLIDAY CALENDAR VIEW -->
+      <div id="tab-holidays" class="tab-view active">
+        <div class="glass-card holiday-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="calendar"></i> Company Public Holidays</h3>
+              <span class="badge badge-primary" id="holidays-count-badge">0 holidays</span>
+            </div>
+            <div class="header-right button-group" style="display: flex; gap: 8px;">
+              <button id="btn-holiday-undo" class="btn-undo" onclick="TransactionManager.undo()" title="Undo (Ctrl+Z)" disabled>
+                <i data-lucide="rotate-ccw"></i> Undo
+              </button>
+              <button id="btn-holiday-redo" class="btn-redo" onclick="TransactionManager.redo()" title="Redo (Ctrl+Y)" disabled>
+                <i data-lucide="rotate-cw"></i> Redo
+              </button>
+              <button class="btn btn-primary btn-icon" onclick="openHolidayModal()">
+                <i data-lucide="calendar-plus"></i> Add Public Holiday
+              </button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="holiday-layout">
+              <!-- Left side: Holidays Table -->
+              <div class="holiday-list-container">
+                <table class="data-table" id="holidays-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Day</th>
+                      <th>Holiday Name</th>
+                      <th style="width: 100px; text-align: center;">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="holidays-table-body">
+                    <!-- Loaded dynamically -->
+                  </tbody>
+                </table>
+              </div>
+              
+              <!-- Right side: Visual calendar grid cards -->
+              <div class="holiday-grid-container" id="holiday-calendar-grid">
+                <!-- Loaded dynamically (Month grids of 2026) -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    
+    </main>
+  </div>
+
+  <!-- POPUP MODAL: Add/Edit Holiday -->
+  <div class="modal" id="holiday-modal">
+    <div class="modal-content glass-card">
+      <div class="modal-header">
+        <h3 id="holiday-modal-title">Add New Public Holiday</h3>
+        <button class="btn-close" onclick="closeHolidayModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="holiday-form" onsubmit="handleHolidaySubmit(event)">
+          <input type="hidden" id="holiday-original-date">
+          <div class="form-group">
+            <label for="holiday-date">Holiday Date</label>
+            <input type="date" id="holiday-date" class="form-control" required>
+          </div>
+          <div class="form-group">
+            <label for="holiday-name">Holiday Name</label>
+            <input type="text" id="holiday-name" class="form-control" placeholder="e.g. Christmas, Vishu" required>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeHolidayModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Holiday</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lucide Script Boot -->
+  <script>
+    lucide.createIcons();
+  </script>
+  <!-- Frontend Controller Script -->
+  <script src="app.js"></script>
+</body>
+</html>

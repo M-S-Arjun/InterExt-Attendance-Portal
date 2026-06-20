@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en" class="sidebar-collapsed">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#ff6b00">
+  <meta name="color-scheme" content="dark light">
+  <title>WhatsApp Attendance & Payroll Tracker</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Google Fonts - Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Lucide Icons (Local/Offline) -->
+  <script src="/lucide.min.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+  <!-- Sidebar Collapse State Restorer (Prevents Layout Flash on Load) -->
+  <script>
+    if (localStorage.getItem('sidebar-collapsed') === 'true') {
+      document.documentElement.classList.add('sidebar-collapsed');
+    }
+  </script>
+</head>
+<body>
+
+  <!-- Main Container -->
+  <div class="app-layout">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-brand" onclick="switchTab('dashboard')" style="cursor: pointer;">
+        <div class="brand-logo">
+          <img src="/logo.jpg" class="brand-logo-img" alt="Logo">
+        </div>
+        <div class="brand-text">
+          <h2>INTEREXT</h2>
+          <span>Attendance Panel</span>
+        </div>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <button class="nav-item active" onclick="switchTab('dashboard')">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('logs')">
+          <i data-lucide="calendar-range"></i>
+          <span>Attendance Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('punches')">
+          <i data-lucide="fingerprint"></i>
+          <span>Punches Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('travel')">
+          <i data-lucide="navigation"></i>
+          <span>Travel Time Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('profiles')">
+          <i data-lucide="user-circle"></i>
+          <span>Employee Profiles</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('employees')">
+          <i data-lucide="users"></i>
+          <span>Workers Registry</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('payroll')">
+          <i data-lucide="wallet"></i>
+          <span>Monthly Payroll</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('welders')">
+          <i data-lucide="file-spreadsheet"></i>
+          <span>Welders Weekly</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('selfies')">
+          <i data-lucide="camera"></i>
+          <span>Selfie Verifications</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('camera')">
+          <i data-lucide="video"></i>
+          <span>Camera Attendance</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('unknown')">
+          <i data-lucide="shield-alert"></i>
+          <span>Unknown Visitors</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('sites')">
+          <i data-lucide="map-pin"></i>
+          <span>Work Sites</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('holidays')">
+          <i data-lucide="calendar"></i>
+          <span>Holiday Calendar</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('settings')">
+          <i data-lucide="sliders"></i>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="connection-pill status-disconnected" id="sidebar-status-pill">
+          <div class="status-indicator-ping"></div>
+          <span id="sidebar-status-text">Disconnected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Content -->
+    <main class="main-content">
+      
+      <!-- Top Header -->
+      <header class="top-header">
+        <div class="header-left-group">
+          <div class="header-welcome">
+            <h1 id="page-title">Dashboard Overview</h1>
+            <p id="page-subtitle">Real-time daily wage attendance tracking</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="active-group-badge" id="active-group-badge" style="display: none;">
+            <i data-lucide="message-square"></i>
+            <span>Monitoring: <strong id="header-group-name">—</strong></span>
+          </div>
+          <div class="current-date-badge">
+            <i data-lucide="clock"></i>
+            <span id="header-datetime">Loading...</span>
+          </div>
+          <button class="btn-theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Light/Dark Theme">
+            <i data-lucide="sun" id="theme-icon-sun" style="display: none;"></i>
+            <i data-lucide="moon" id="theme-icon-moon"></i>
+          </button>
+        </div>
+      </header>
+
+      
+      <!-- TAB 3.75: CAMERA ATTENDANCE VIEW -->
+      <div id="tab-camera" class="tab-view active">
+        <!-- Audio chime for successful auto scans -->
+        <audio id="sound-success" src="https://assets.mixkit.co/active_storage/sfx/911/911-84.wav" preload="auto"></audio>
+        <div class="glass-card log-panel">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="video"></i> Camera Attendance Control</h3>
+              <p>Monitor real-time CCTV facial recognition events and configure camera integration streams.</p>
+            </div>
+            <div class="header-right flex-filters" style="display: flex; gap: 10px;">
+              <button class="btn btn-secondary btn-icon" onclick="getFaceRecognitionStatus()" title="Check face recognition status">
+                <i data-lucide="info"></i> Model Status
+              </button>
+              <button class="btn btn-secondary btn-icon" onclick="trainFaceRecognitionModel()" style="background: rgba(255, 107, 0, 0.1); color: var(--color-primary); border-color: rgba(255, 107, 0, 0.2);" title="Train model with employee images">
+                <i data-lucide="brain"></i> Train Model
+              </button>
+              <button class="btn btn-secondary btn-icon" onclick="refreshCameraEvents()">
+                <i data-lucide="refresh-cw"></i> Refresh Events
+              </button>
+            </div>
+          </div>
+
+          <!-- CCTV Cameras Management Section -->
+          <div class="glass-card cctv-management-card" style="padding: 24px; margin-bottom: 24px;">
+            <div class="card-header flex-header" style="padding: 0 0 16px 0; margin-bottom: 16px; border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; align-items: center;">
+              <div class="header-left">
+                <h3 style="font-size: 0.95rem; margin: 0; display: flex; align-items: center; gap: 8px; font-weight: 700;">
+                  <i data-lucide="cctv" style="color: var(--color-primary); width: 18px; height: 18px;"></i>
+                  CCTV Camera Stream Integration
+                </h3>
+                <p style="font-size: 0.75rem; color: var(--text-tertiary); margin: 4px 0 0 0;">
+                  Configure office CCTV RTSP cameras (or video feeds) to automatically recognize and record employee attendance.
+                </p>
+              </div>
+              <div class="header-right button-group" style="display: flex; gap: 8px; align-items: center;">
+                <button id="btn-cctv-undo" class="btn-undo" onclick="TransactionManager.undo()" title="Undo (Ctrl+Z)" disabled style="height: 32px; font-size: 0.8rem; padding: 6px 12px;">
+                  <i data-lucide="rotate-ccw"></i> Undo
+                </button>
+                <button id="btn-cctv-redo" class="btn-redo" onclick="TransactionManager.redo()" title="Redo (Ctrl+Y)" disabled style="height: 32px; font-size: 0.8rem; padding: 6px 12px;">
+                  <i data-lucide="rotate-cw"></i> Redo
+                </button>
+                <button type="button" class="btn btn-primary btn-sm btn-icon" onclick="openAddCctvModal()" style="padding: 6px 12px; font-size: 0.8rem; height: 32px;">
+                  <i data-lucide="plus"></i> Add CCTV Camera
+                </button>
+              </div>
+            </div>
+
+            <!-- CCTV list layout -->
+            <div id="cctv-list-container" class="cctv-list-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
+              <div class="loading-state" style="grid-column: 1 / -1; text-align: center; padding: 20px; color: var(--text-tertiary);">
+                <i data-lucide="loader" class="animate-spin" style="margin-bottom: 8px;"></i>
+                <p style="margin: 0; font-size: 0.85rem;">Loading CCTV configurations...</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Camera Events History Section -->
+          <div class="card-header flex-header" style="border-top: 1px solid var(--glass-border); padding: 18px 24px; margin-top: 24px; margin-bottom: 0;">
+            <div class="header-left">
+              <h3 style="font-size: 1.05rem; font-weight: 600; display: flex; align-items: center; gap: 10px; color: var(--text-primary);">
+                <i data-lucide="file-spreadsheet" style="color: var(--color-primary); width: 18px; height: 18px;"></i>
+                Camera Attendance Event History
+              </h3>
+              <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px;">View all real-time facial recognition logs, webcam check-ins, and direction transitions.</p>
+            </div>
+          </div>
+
+          <div class="table-control-bar" style="flex-wrap: wrap; gap: 16px; border-bottom: 1px solid var(--glass-border); padding: 10px 24px;">
+            <div class="table-control-left" style="flex: 1 1 320px; min-width: 320px;">
+              <div class="search-wrapper">
+                <i data-lucide="search"></i>
+                <input type="text" id="camera-search-input" class="form-control" placeholder="Search by employee, site, or event type..." oninput="applyCameraFilters()">
+              </div>
+            </div>
+            <div class="table-control-right" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <select id="camera-filter-type" class="table-control-select" onchange="applyCameraFilters()">
+                <option value="">-- All Event Types --</option>
+                <option value="entry">Entry</option>
+                <option value="exit">Exit</option>
+              </select>
+              <select id="camera-filter-site" class="table-control-select" onchange="applyCameraFilters()">
+                <option value="">-- All Sites --</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="overflow-x" style="padding: 0 24px 24px 24px;">
+            <table class="data-table" id="camera-events-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Employee</th>
+                  <th>Event</th>
+                  <th>Site</th>
+                  <th>Timestamp</th>
+                  <th>Image</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="camera-events-table-body">
+                <!-- Generated Dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      
+    </main>
+  </div>
+
+  <!-- CCTV Configuration Modal -->
+  <div class="modal" id="cctv-modal">
+    <div class="modal-content glass-card">
+      <div class="modal-header">
+        <h3 id="cctv-modal-title">Configure CCTV Camera</h3>
+        <button class="btn-close" onclick="closeCctvModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="cctv-form" onsubmit="handleCctvSubmit(event)">
+          <input type="hidden" id="cctv-id">
+          
+          <div class="form-group">
+            <label for="cctv-preset">Preset Camera Configuration (Quick Select)</label>
+            <select id="cctv-preset" class="form-control" onchange="quickFillCctv(this.value)">
+              <option value="">-- Custom Manual Configuration --</option>
+              <option value="entrance-1">Entrance CCTV 1 (Entry Only)</option>
+              <option value="entrance-2">Entrance CCTV 2 (Entry Only)</option>
+              <option value="entrance-3">Entrance CCTV 3 (Entry Only)</option>
+              <option value="exit-1">Exit CCTV 1 (Exit Only)</option>
+              <option value="exit-2">Exit CCTV 2 (Exit Only)</option>
+              <option value="exit-3">Exit CCTV 3 (Exit Only)</option>
+            </select>
+          </div>
+          
+          <div class="form-group">
+            <label for="cctv-name">Camera Name</label>
+            <input type="text" id="cctv-name" class="form-control" placeholder="e.g. Warehouse Entrance CCTV" required>
+          </div>
+          
+          <div class="form-group">
+            <label for="cctv-source">Stream Source (RTSP URL, Video File Path, or Webcam Index)</label>
+            <input type="text" id="cctv-source" class="form-control" placeholder="e.g. rtsp://admin:password@192.168.1.100:554/h264, or 0, or uploads/test.mp4" required>
+            <span style="font-size: 0.7rem; color: var(--text-tertiary); margin-top: 4px; display: block;">
+              Use <strong>0</strong> or <strong>1</strong> to test with other webcams, or specify a video file path to simulate a CCTV feed.
+            </span>
+          </div>
+
+          <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div class="form-group">
+              <label for="cctv-site">Target Location / Site</label>
+              <select id="cctv-site" class="form-control" required></select>
+            </div>
+            <div class="form-group">
+              <label for="cctv-event-type">Attendance Action Mode</label>
+              <select id="cctv-event-type" class="form-control">
+                <option value="auto">Auto (Toggle Entry/Exit)</option>
+                <option value="entry">Entry Only</option>
+                <option value="exit">Exit Only</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="cctv-status">Status</label>
+            <select id="cctv-status" class="form-control">
+              <option value="active">Active (Processing Stream)</option>
+              <option value="inactive">Inactive (Disabled)</option>
+            </select>
+          </div>
+
+          <div class="modal-footer" style="padding-top: 12px; margin-top: 16px; border-top: 1px solid var(--glass-border); display: flex; justify-content: flex-end; gap: 8px;">
+            <button type="button" class="btn btn-secondary" onclick="closeCctvModal()">Cancel</button>
+            <button type="button" class="btn btn-secondary" onclick="testCctvConnection()" style="background: rgba(255, 107, 0, 0.1); color: var(--color-primary); border-color: rgba(255, 107, 0, 0.2);">Test Connection</button>
+            <button type="submit" class="btn btn-primary">Save Camera</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lucide Script Boot -->
+  <script>
+    lucide.createIcons();
+  </script>
+  <!-- Frontend Controller Script -->
+  <script src="app.js"></script>
+</body>
+</html>

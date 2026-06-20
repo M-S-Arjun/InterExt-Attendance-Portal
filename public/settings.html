@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en" class="sidebar-collapsed">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#ff6b00">
+  <meta name="color-scheme" content="dark light">
+  <title>WhatsApp Attendance & Payroll Tracker</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <!-- Google Fonts - Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Lucide Icons (Local/Offline) -->
+  <script src="/lucide.min.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+  <!-- Sidebar Collapse State Restorer (Prevents Layout Flash on Load) -->
+  <script>
+    if (localStorage.getItem('sidebar-collapsed') === 'true') {
+      document.documentElement.classList.add('sidebar-collapsed');
+    }
+  </script>
+</head>
+<body>
+
+  <!-- Main Container -->
+  <div class="app-layout">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-brand" onclick="switchTab('dashboard')" style="cursor: pointer;">
+        <div class="brand-logo">
+          <img src="/logo.jpg" class="brand-logo-img" alt="Logo">
+        </div>
+        <div class="brand-text">
+          <h2>INTEREXT</h2>
+          <span>Attendance Panel</span>
+        </div>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <button class="nav-item active" onclick="switchTab('dashboard')">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('logs')">
+          <i data-lucide="calendar-range"></i>
+          <span>Attendance Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('punches')">
+          <i data-lucide="fingerprint"></i>
+          <span>Punches Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('travel')">
+          <i data-lucide="navigation"></i>
+          <span>Travel Time Log</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('profiles')">
+          <i data-lucide="user-circle"></i>
+          <span>Employee Profiles</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('employees')">
+          <i data-lucide="users"></i>
+          <span>Workers Registry</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('payroll')">
+          <i data-lucide="wallet"></i>
+          <span>Monthly Payroll</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('welders')">
+          <i data-lucide="file-spreadsheet"></i>
+          <span>Welders Weekly</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('selfies')">
+          <i data-lucide="camera"></i>
+          <span>Selfie Verifications</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('camera')">
+          <i data-lucide="video"></i>
+          <span>Camera Attendance</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('unknown')">
+          <i data-lucide="shield-alert"></i>
+          <span>Unknown Visitors</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('sites')">
+          <i data-lucide="map-pin"></i>
+          <span>Work Sites</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('holidays')">
+          <i data-lucide="calendar"></i>
+          <span>Holiday Calendar</span>
+        </button>
+        <button class="nav-item" onclick="switchTab('settings')">
+          <i data-lucide="sliders"></i>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="connection-pill status-disconnected" id="sidebar-status-pill">
+          <div class="status-indicator-ping"></div>
+          <span id="sidebar-status-text">Disconnected</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Content -->
+    <main class="main-content">
+      
+      <!-- Top Header -->
+      <header class="top-header">
+        <div class="header-left-group">
+          <div class="header-welcome">
+            <h1 id="page-title">Dashboard Overview</h1>
+            <p id="page-subtitle">Real-time daily wage attendance tracking</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="active-group-badge" id="active-group-badge" style="display: none;">
+            <i data-lucide="message-square"></i>
+            <span>Monitoring: <strong id="header-group-name">—</strong></span>
+          </div>
+          <div class="current-date-badge">
+            <i data-lucide="clock"></i>
+            <span id="header-datetime">Loading...</span>
+          </div>
+          <button class="btn-theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Light/Dark Theme">
+            <i data-lucide="sun" id="theme-icon-sun" style="display: none;"></i>
+            <i data-lucide="moon" id="theme-icon-moon"></i>
+          </button>
+        </div>
+      </header>
+
+      
+      <!-- TAB 5: SETTINGS VIEW -->
+      <div id="tab-settings" class="tab-view active">
+        <div class="glass-card log-panel" style="max-width: 1200px; margin: 0 auto;">
+          <div class="card-header flex-header">
+            <div class="header-left">
+              <h3><i data-lucide="sliders"></i> Payroll & Wage Calculation Rules</h3>
+              <p>Configure parameters, ratios, multipliers, and statutory rates applied to payroll calculations</p>
+            </div>
+          </div>
+          
+          <div class="card-body">
+            <form id="settings-form" onsubmit="handleSettingsSubmit(event)">
+              
+              <!-- WhatsApp Settings Card Section -->
+              <h4 class="settings-sec-title" style="margin-top: 0;"><i data-lucide="message-square"></i> WhatsApp Group Connection</h4>
+              <div class="form-group" style="max-width: 600px; margin-bottom: 30px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: 500;">Attendance Group Names to Monitor</label>
+                <div id="settings-groups-container" style="display: flex; flex-direction: row; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 8px;">
+                  <!-- Dynamic group input rows -->
+                </div>
+                <span class="help-text">Enter the WhatsApp group names you wish to monitor. Use the "+" button to add more groups.</span>
+              </div>
+              
+              <!-- Calculations Table Config Section -->
+              <h4 class="settings-sec-title"><i data-lucide="calculator"></i> Payroll & Statutory Deduction Rules</h4>
+              
+              <div class="overflow-x" style="margin-bottom: 30px;">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Payroll Component</th>
+                      <th>Automated Mathematical Calculation Method</th>
+                      <th style="width: 250px;">Editable Configuration Rule / Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <!-- Component 1: Daily Shift Hours Thresholds -->
+                    <tr>
+                      <td><strong>Full-Day Shift Threshold</strong></td>
+                      <td>Awarded if daily working hours are &ge; standard limit. Wages calculated as:<br><code style="font-size:0.75rem;">Daily Salary + (Overtime Hours * Hourly Rate)</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-full-hours" class="form-control" min="1" max="24" step="0.5" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>hours</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>Half-Day Shift Threshold</strong></td>
+                      <td>Awarded if daily hours fall below Full-Day but &ge; Half-Day. Wages calculated as:<br><code style="font-size:0.75rem;">(Basic % of Daily Salary) + (Extra Hours * Hourly Rate)</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-half-hours" class="form-control" min="1" max="24" step="0.5" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>hours</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Basic, DA, Allowances -->
+                    <tr>
+                      <td><strong>Basic Salary Component</strong></td>
+                      <td>Basic component share of worker's monthly wages:<br><code style="font-size:0.75rem;">Gross Salary * Basic Percentage</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-basic-ratio" class="form-control" min="0" max="100" step="1" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>% of Gross</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>DA (Dearness Allowance)</strong></td>
+                      <td>DA component share of worker's monthly wages:<br><code style="font-size:0.75rem;">Gross Salary * DA Percentage</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-da-ratio" class="form-control" min="0" max="100" step="1" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>% of Gross</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>Other Allowances</strong></td>
+                      <td>Other Allowances share of worker's monthly wages:<br><code style="font-size:0.75rem;">Gross Salary * Allowances Percentage</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-allowances-ratio" class="form-control" min="0" max="100" step="1" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>% of Gross</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 2: Overtime multiplier -->
+                    <tr>
+                      <td><strong>Overtime (OT) Rate</strong></td>
+                      <td>Hourly payment rate applied to overtime hours worked:<br><code style="font-size:0.75rem;">OT Hours * Hourly Wage * Multiplier</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-ot-multiplier" class="form-control" min="0.5" max="5" step="0.05" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>x hourly rate</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 3: Travel Time ratio -->
+                    <tr>
+                      <td><strong>Travel Time Paid Ratio</strong></td>
+                      <td>Fraction of reported travel hours paid under company policy:<br><code style="font-size:0.75rem;">Stated Travel Hours * Paid Ratio * Hourly Wage</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-travel-ratio" class="form-control" min="0" max="1" step="0.05" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>(e.g. 0.50 = 50%)</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 4: LOP Deduction Rate -->
+                    <tr>
+                      <td><strong>Loss of Pay (LOP)</strong></td>
+                      <td>Daily wage deduction rate applied to absent days:<br><code style="font-size:0.75rem;">LOP Days * Daily Wage * Multiplier</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-lop-rate" class="form-control" min="0" max="3" step="0.05" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>x daily rate</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 5: Provident Fund PF -->
+                    <tr>
+                      <td><strong>Provident Fund (PF)</strong></td>
+                      <td>Employee contribution auto-deducted from monthly wages:<br><code style="font-size:0.75rem;">Basic Salary * PF Rate</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-pf-rate" class="form-control" min="0" max="50" step="0.01" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>% of Basic</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 6: ESIC -->
+                    <tr>
+                      <td><strong>ESIC Contribution</strong></td>
+                      <td>Employee contribution auto-deducted from monthly wages:<br><code style="font-size:0.75rem;">Earned Salary * ESIC Rate</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <input type="number" id="settings-esic-rate" class="form-control" min="0" max="10" step="0.01" required style="width:120px; display:inline-block; margin-right:8px;">
+                            <span>% of Earned</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    
+                    <!-- Component 7: PT flat tax -->
+                    <tr>
+                      <td><strong>Professional Tax (PT)</strong></td>
+                      <td>Flat monthly professional tax deduction amount:<br><code style="font-size:0.75rem;">Flat P.T. Tax Amount</code></td>
+                      <td>
+                        <div class="form-group" style="margin:0;">
+                          <div class="input-group-append">
+                            <span>₹</span>
+                            <input type="number" id="settings-pt-tax" class="form-control" min="0" max="1000" step="1" required style="width:100px; display:inline-block; margin-left:4px;">
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              
+              <div class="settings-actions">
+                <button type="submit" class="btn btn-primary btn-icon"><i data-lucide="save"></i> Save Rules & Ratios Configuration</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Mobile App download section -->
+        <div class="glass-card" style="margin-top: 25px; padding: 20px;">
+          <div class="card-header flex-header" style="padding: 0 0 15px 0; border-bottom: 1px solid var(--glass-border); margin-bottom: 15px;">
+            <div class="header-left">
+              <h3 style="font-size: 1.1rem; font-weight: 700; display: flex; align-items: center; gap: 8px;"><i data-lucide="smartphone" style="color: var(--color-primary);"></i> Mobile Self-Service Apps</h3>
+              <p>Provide employees direct access to downloading standalone self-service portals</p>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
+            <!-- Android Card -->
+            <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--glass-border); padding: 15px; border-radius: 8px; display: flex; flex-direction: column; justify-content: space-between;">
+              <div>
+                <h4 style="font-weight: 600; font-size: 0.95rem; margin-bottom: 5px; color: var(--color-primary);"><i data-lucide="android" style="vertical-align: middle;"></i> Android Native App (.APK)</h4>
+                <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; margin-bottom: 15px;">Compiles direct access into a standalone APK. Safe to download and install on any Android phone.</p>
+              </div>
+              <a href="/downloads/attendance_app.apk" class="btn btn-primary btn-icon" download style="width: auto; align-self: flex-start; height: 38px;">
+                <i data-lucide="download"></i> Download Android APK
+              </a>
+            </div>
+            <!-- iOS Safari PWA Card -->
+            <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--glass-border); padding: 15px; border-radius: 8px; display: flex; flex-direction: column; justify-content: space-between;">
+              <div>
+                <h4 style="font-weight: 600; font-size: 0.95rem; margin-bottom: 5px; color: #3b82f6;"><i data-lucide="smartphone" style="vertical-align: middle;"></i> iPhone iOS Safari PWA</h4>
+                <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; margin-bottom: 15px;">Open the link below on Safari iPhone, then tap Share → Add to Home Screen to install as a native app.</p>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                <a id="mobile-portal-link" href="/mobile" target="_blank" class="btn btn-secondary btn-icon" style="width: auto; align-self: flex-start; height: 38px; font-size: 0.85rem; padding: 0 14px;">
+                  <i data-lucide="external-link"></i> Open Employee Portal
+                </a>
+                <div style="font-size: 0.72rem; color: var(--text-tertiary); display: flex; align-items: center; gap: 4px;">
+                  <i data-lucide="info" style="width: 12px; height: 12px;"></i>
+                  <span>URL: <code id="mobile-portal-url" style="user-select:all; background: rgba(255,255,255,0.05); padding: 2px 5px; border-radius: 4px;">/mobile</code></span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      
+    </main>
+  </div>
+
+  
+
+  <!-- Lucide Script Boot -->
+  <script>
+    lucide.createIcons();
+  </script>
+  <!-- Frontend Controller Script -->
+  <script src="app.js"></script>
+</body>
+</html>
