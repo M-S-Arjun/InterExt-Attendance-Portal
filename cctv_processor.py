@@ -7,6 +7,13 @@ import numpy as np
 import base64
 import logging
 import traceback
+try:
+    from scipy.optimize import linear_sum_assignment
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
+    logger_bootstrap = logging.getLogger(__name__)
+    logger_bootstrap.warning("scipy not available — falling back to greedy centroid matching")
 
 # Configure logging
 logging.basicConfig(
@@ -83,7 +90,7 @@ def crossing_direction(l1, l2, t_prev, t_curr):
 # ==========================================================================
 
 class CCTVStreamProcessor(threading.Thread):
-    def __init__(self, camera_id, name, source, site_name, event_type, threshold=0.62, node_server="http://localhost:3000"):
+    def __init__(self, camera_id, name, source, site_name, event_type, threshold=0.52, node_server="http://localhost:3000"):
         super().__init__()
         self.camera_id = camera_id
         self.name = name
@@ -100,9 +107,9 @@ class CCTVStreamProcessor(threading.Thread):
         # Centroid tracker details (Multi-target face tracking)
         self.tracks = {}  # { track_id: { "centroids": [], "bboxes": [], "emp_id": None, "confidence": 0.0, "frames_active": 0, "last_seen_time": float, "liveness_passed": bool, "motion_verified": bool, "approaching": bool, "door_open_seen": bool, "crossed": bool, "crossing_time": float, "crossing_direction": str } }
         self.next_track_id = 0
-        self.max_disappeared_seconds = 1.5
+        self.max_disappeared_seconds = 3.5   # Raised from 1.5s — people take 2-4s to walk through
         self.cooldowns = {}  # { employee_id: timestamp }
-        self.cooldown_seconds = 15  # Cooldown to prevent double triggers
+        self.cooldown_seconds = 8  # Reduced from 15s — allow natural re-entry/exit
         
         # Door opening/closing detection state
         self.door_baseline = None
@@ -121,19 +128,23 @@ class CCTVStreamProcessor(threading.Thread):
             pass
 
     def check_correlation_mode(self):
-        with active_cameras_lock:
-            for cam_id, proc in active_cameras.items():
-                if cam_id != self.camera_id and proc.site_name == self.site_name:
-                    if (self.event_type == 'entry' and proc.event_type == 'exit') or \
-                       (self.event_type == 'exit' and proc.event_type == 'entry'):
-                        return True
+        # Disable Dual-Camera Correlation Mode completely to prevent silent skips and drops.
+        # Each camera is physically positioned for a specific direction (Entrance vs Exit)
+        # and should operate independently.
         return False
+
 
     def run(self):
         self.running = True
         logger.info(f"[{self.name}] Starting professional sequence-state stream capture on: {self.source}")
         
-        cap = cv2.VideoCapture(self.source)
+        if isinstance(self.source, int):
+            cap = cv2.VideoCapture(self.source)
+        else:
+            # Disable TLS certificate verification for self-signed certificates
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "tls_verify;0"
+            cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
+            
         if not cap.isOpened():
             logger.error(f"[{self.name}] Failed to open video source: {self.source}")
             self.running = False
@@ -157,20 +168,21 @@ class CCTVStreamProcessor(threading.Thread):
 
         while self.running:
             try:
-                # Process frames every 0.15 seconds for continuous high-speed tracking
-                time.sleep(0.15)
+                # Adaptive sleep: 0.15s when idle, 0.05s when active tracks are present
+                if len(self.tracks) > 0:
+                    time.sleep(0.05)
+                else:
+                    time.sleep(0.15)
                 
                 frame = self.latest_frame
                 if frame is None:
                     continue
                 
-                # Downscale for performance efficiency
+                # We no longer downscale the frame in Python, as InsightFace's detector
+                # internally handles resizing to 480x480 for detection speed, but crops the
+                # face from the original high-resolution frame. This preserves high-quality
+                # face crops for recognition, vastly increasing similarity matching scores.
                 h, w = frame.shape[:2]
-                max_size = 480
-                if max(h, w) > max_size:
-                    scale = max_size / max(h, w)
-                    frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-                    h, w = frame.shape[:2]
 
                 correlation_mode = self.check_correlation_mode()
                 
@@ -188,6 +200,11 @@ class CCTVStreamProcessor(threading.Thread):
                     cx = int((x1 + x2) / 2)
                     cy = int((y1 + y2) / 2)
                     
+                    # ROI filter flag: Exclude left 35% of the frame (workspace area) for Entrance CCTV 1
+                    is_roi_ignored = False
+                    if "Entrance CCTV 1" in self.name and cx < w * 0.35:
+                        is_roi_ignored = True
+                    
                     # Face recognition comparison
                     emp_id = None
                     confidence = 0.0
@@ -204,6 +221,9 @@ class CCTVStreamProcessor(threading.Thread):
                         if best_score >= self.threshold:
                             emp_id = best_match
                             confidence = float(best_score)
+                            logger.info(f"[{self.name}] Face recognized: {emp_id} (score: {best_score:.3f}, threshold: {self.threshold})")
+                        else:
+                            logger.info(f"[{self.name}] Face unrecognized: best match {best_match} (score: {best_score:.3f}, threshold: {self.threshold})")
                     
                     # Liveness Check: Texture variance analysis (Laplacian Var)
                     liveness = False
@@ -220,7 +240,8 @@ class CCTVStreamProcessor(threading.Thread):
                         "centroid": (cx, cy),
                         "emp_id": emp_id,
                         "confidence": confidence,
-                        "liveness": liveness
+                        "liveness": liveness,
+                        "roi_ignored": is_roi_ignored
                     })
                 
                 # 3. Update tracker and sequence state machine with current detections
@@ -282,10 +303,10 @@ class CCTVStreamProcessor(threading.Thread):
     def update_tracker(self, detections, frame):
         now = time.time()
         
-        # If no active tracks, register all detections
+        # If no active tracks, register all detections as new tracks
         if len(self.tracks) == 0:
             for det in detections:
-                self.register_track(det, now)
+                self.register_track(det, now, frame)
             return
 
         track_ids = list(self.tracks.keys())
@@ -294,47 +315,88 @@ class CCTVStreamProcessor(threading.Thread):
         matched_detections = set()
         matched_tracks = set()
 
-        # Centroid distance mapping (ByteTrack-style tracking)
-        for det_idx, det in enumerate(detections):
-            det_centroid = det["centroid"]
-            min_dist = float('inf')
-            best_track_idx = -1
-            
-            for t_idx, t_centroid in enumerate(track_centroids):
-                dist = np.linalg.norm(np.array(det_centroid) - np.array(t_centroid))
-                if dist < min_dist:
-                    min_dist = dist
-                    best_track_idx = t_idx
-            
-            # Match if centroid distance is within 80 pixels
-            if min_dist < 80.0 and best_track_idx != -1:
-                tid = track_ids[best_track_idx]
-                if tid not in matched_tracks:
-                    self.update_track(tid, det, now, frame)
-                    matched_detections.add(det_idx)
+        # ── Hungarian Algorithm: Optimal 1-to-1 assignment ─────────────────────
+        # Builds a cost matrix of shape (num_detections × num_tracks) and finds
+        # the globally optimal match so each detection → at most 1 track and
+        # each track → at most 1 detection. Handles 3-5 simultaneous people.
+        MATCH_THRESHOLD = 300.0  # pixels — generous to prevent track fragmentation on low frame rates
+
+        if len(detections) > 0 and len(track_ids) > 0:
+            cost_matrix = np.zeros((len(detections), len(track_ids)), dtype=np.float32)
+            for d_idx, det in enumerate(detections):
+                dc = np.array(det["centroid"], dtype=np.float32)
+                det_emp = det.get("emp_id")
+                for t_idx, tc in enumerate(track_centroids):
+                    tid = track_ids[t_idx]
+                    track_emp = self.tracks[tid].get("best_emp_id")
+                    # Prevent matching different recognized employees
+                    if det_emp and track_emp and det_emp != track_emp:
+                        cost_matrix[d_idx, t_idx] = 999999.0
+                    else:
+                        cost_matrix[d_idx, t_idx] = np.linalg.norm(dc - np.array(tc, dtype=np.float32))
+
+            if _HAS_SCIPY:
+                # Optimal assignment via Hungarian algorithm
+                row_ind, col_ind = linear_sum_assignment(cost_matrix)
+                assignments = list(zip(row_ind, col_ind))
+            else:
+                # Greedy fallback (original behaviour)
+                assignments = []
+                used_tracks = set()
+                for d_idx in range(len(detections)):
+                    best_t = int(np.argmin(cost_matrix[d_idx]))
+                    if best_t not in used_tracks:
+                        assignments.append((d_idx, best_t))
+                        used_tracks.add(best_t)
+
+            for d_idx, t_idx in assignments:
+                if cost_matrix[d_idx, t_idx] < MATCH_THRESHOLD:
+                    tid = track_ids[t_idx]
+                    self.update_track(tid, detections[d_idx], now, frame)
+                    matched_detections.add(d_idx)
                     matched_tracks.add(tid)
 
-        # Register unmatched detections as new tracks
+        # Register every unmatched detection as a brand-new independent track
         for det_idx, det in enumerate(detections):
             if det_idx not in matched_detections:
-                self.register_track(det, now)
+                if det.get("roi_ignored", False):
+                    logger.info(f"[{self.name}] Skipping registration of new track in ignored ROI area at centroid {det['centroid']}")
+                    continue
+                self.register_track(det, now, frame)
 
-        # Delete expired tracks or evaluate fallback logs for crossed targets
-        for tid in track_ids:
+        # Expire or confirm unmatched tracks
+        for tid in list(track_ids):
             if tid not in matched_tracks:
+                if tid not in self.tracks:
+                    continue  # Already deleted
                 disappeared_duration = now - self.tracks[tid]["last_seen_time"]
-                
-                # Fallback: if they crossed but disappeared before door close, confirm event anyway (fail-safe)
-                if self.tracks[tid]["crossed"]:
-                    self.confirm_attendance_event(tid, frame)
-                    del self.tracks[tid]
+
+                if not self.tracks[tid].get("crossed", False) and disappeared_duration >= self.max_disappeared_seconds:
+                    # Final fallback trajectory check on expiration
+                    self.check_fallback_trajectory(tid, frame)
+
+                # Immediately confirm if they already crossed (even if just disappeared)
+                if self.tracks[tid].get("crossed", False):
+                    if not self.tracks[tid].get("confirmed", False):
+                        self.tracks[tid]["confirmed"] = True
+                        self.confirm_attendance_event(tid, self.tracks[tid].get("best_frame", frame))
+                    # Prevent hijacking: do not delete the track until it has actually disappeared
+                    if disappeared_duration >= self.max_disappeared_seconds:
+                        del self.tracks[tid]
                 elif disappeared_duration >= self.max_disappeared_seconds:
-                    logger.debug(f"[{self.name}] Expiring track {tid}")
+                    logger.info(f"[{self.name}] Expiring uncrossed track {tid} without marking attendance.")
                     del self.tracks[tid]
 
-    def register_track(self, det, now):
+
+    def register_track(self, det, now, frame):
         tid = self.next_track_id
         self.next_track_id += 1
+        bbox = det["bbox"]
+        area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+        track_min_y = det["centroid"][1]  # Track persistent min/max for y-displacement check
+        track_max_y = det["centroid"][1]
+        track_min_x = det["centroid"][0]
+        track_max_x = det["centroid"][0]
         self.tracks[tid] = {
             "centroids": [det["centroid"]],
             "bboxes": [det["bbox"]],
@@ -350,7 +412,24 @@ class CCTVStreamProcessor(threading.Thread):
             "door_open_seen": False,
             "crossed": False,
             "crossing_time": 0.0,
-            "crossing_direction": ""
+            "crossing_direction": "",
+            
+            # Best quality tracking variables
+            "best_area": area,
+            "best_frame": frame.copy() if frame is not None else None,
+            "best_bbox": det["bbox"],
+            "best_emp_id": det["emp_id"],
+            "best_confidence": det["confidence"],
+            "confirmed": False,
+
+            # Persistent extremes (survive centroid buffer trimming)
+            "track_min_y": track_min_y,
+            "track_max_y": track_max_y,
+            "track_min_x": track_min_x,
+            "track_max_x": track_max_x,
+            
+            # Video frames buffer
+            "frames_buffer": [frame.copy()] if frame is not None else [],
         }
         logger.debug(f"[{self.name}] Registered new face track {tid}")
 
@@ -363,25 +442,134 @@ class CCTVStreamProcessor(threading.Thread):
         curr_dist = abs(centroids[-1][1] - line_y)
         return curr_dist < prev_dist and curr_dist < 80.0
 
+    def check_fallback_trajectory(self, tid, frame):
+        """Check if track has crossed/moved in entry/exit direction using fallback trajectory/displacement metrics."""
+        track = self.tracks[tid]
+        if len(track["centroids"]) < 2:
+            return
+            
+        h, w = frame.shape[:2] if frame is not None else (720, 1280)
+        is_entry_cam = 'entrance' in self.name.lower() or 'entry' in self.name.lower() or self.event_type == 'entry'
+        is_exit_cam = 'exit' in self.name.lower() or self.event_type == 'exit'
+        
+        x_start, y_start = track["centroids"][0]
+        x_end, y_end = track["centroids"][-1]
+        
+        p_min_y = track.get("track_min_y", y_end)
+        p_max_y = track.get("track_max_y", y_end)
+        p_min_x = track.get("track_min_x", x_end)
+        p_max_x = track.get("track_max_x", x_end)
+        
+        crossed = False
+        crossing_point = None
+        crossing_dir = ""
+        
+        if is_entry_cam:
+            y_line = int(h * 0.6)
+            x_left = int(w * 0.35)
+            x_right = int(w * 0.70)
+            
+            # Entry: track ends below/near y_line and overall downward movement (y increases)
+            if y_end > y_line - 50 and (y_end - y_start > 15 or y_end - p_min_y > 15):
+                crossed = True
+                crossing_point = (int(x_end), y_line)
+                crossing_dir = "entry"
+                logger.info(f"[{self.name}] [Fallback Path] Verified entry by downward motion vector: {y_start:.1f} -> {y_end:.1f}")
+            # Exit: track ends above/near y_line and overall upward movement (y decreases)
+            elif y_end < y_line + 50 and (y_start - y_end > 15 or p_max_y - y_end > 15):
+                crossed = True
+                crossing_point = (int(x_end), y_line)
+                crossing_dir = "exit"
+                logger.info(f"[{self.name}] [Fallback Path] Verified exit by upward motion vector: {y_start:.1f} -> {y_end:.1f}")
+            else:
+                # Check horizontal displacement based on start position relative to door posts
+                if 0.35 * w <= x_start <= 0.70 * w:
+                    if x_start - x_end > 15:
+                        crossed = True
+                        crossing_point = (x_left, int(y_end))
+                        crossing_dir = "entry"
+                        logger.info(f"[{self.name}] [Fallback Path] Verified entry by leftward turn: {x_start:.1f} -> {x_end:.1f}")
+                    elif x_end - x_start > 15:
+                        crossed = True
+                        crossing_point = (x_right, int(y_end))
+                        crossing_dir = "entry"
+                        logger.info(f"[{self.name}] [Fallback Path] Verified entry by rightward turn: {x_start:.1f} -> {x_end:.1f}")
+                elif x_start < 0.35 * w:
+                    if x_end - x_start > 15:
+                        crossed = True
+                        crossing_point = (x_left, int(y_end))
+                        crossing_dir = "exit"
+                        logger.info(f"[{self.name}] [Fallback Path] Verified exit by rightward movement from left: {x_start:.1f} -> {x_end:.1f}")
+                elif x_start > 0.70 * w:
+                    if x_start - x_end > 15:
+                        crossed = True
+                        crossing_point = (x_right, int(y_end))
+                        crossing_dir = "exit"
+                        logger.info(f"[{self.name}] [Fallback Path] Verified exit by leftward movement from right: {x_start:.1f} -> {x_end:.1f}")
+                
+        elif is_exit_cam:
+            x_left = int(w * 0.32)
+            x_right = int(w * 0.55)
+            
+            # Start/passed near door center region (removed restrictive p_min_y constraint)
+            started_near_center = (
+                (p_min_x <= x_right + 150) and (p_max_x >= x_left - 150)
+            )
+            
+            if started_near_center:
+                y_start = track["centroids"][0][1]
+                y_end = track["centroids"][-1][1]
+                track_min_y = track.get("track_min_y", y_start)
+                track_max_y = track.get("track_max_y", y_start)
+                
+                downward_dist = max(y_end - y_start, y_end - track_min_y)
+                upward_dist = max(y_start - y_end, track_max_y - y_end)
+                
+                # Check if there is any substantial movement (vertical or horizontal)
+                x_start = track["centroids"][0][0]
+                x_end = track["centroids"][-1][0]
+                moved_horizontally = abs(x_end - x_start) > 15 or x_end < x_left or x_end > x_right
+                
+                if downward_dist > 15 or upward_dist > 15 or moved_horizontally:
+                    crossed = True
+                    crossing_point = (int(x_end), int(y_end))
+                    if downward_dist > upward_dist:
+                        crossing_dir = "exit"
+                    else:
+                        crossing_dir = "entry"
+                    logger.info(f"[{self.name}] [Fallback Path] Verified {crossing_dir} by vertical trajectory: down={downward_dist:.1f}, up={upward_dist:.1f}")
+                    
+        if crossed:
+            track["crossed"] = True
+            track["crossing_time"] = time.time()
+            track["crossing_point"] = crossing_point
+            track["crossing_direction"] = crossing_dir
+
     def update_track(self, tid, det, now, frame):
         track = self.tracks[tid]
         prev_centroid = track["centroids"][-1]
         curr_centroid = det["centroid"]
-
-        # Virtual line settings (Horizontal line across the exact center of frame)
-        h, w = frame.shape[:2]
-        p1 = (0, int(h * 0.5))
-        p2 = (w, int(h * 0.5))
 
         track["centroids"].append(curr_centroid)
         track["bboxes"].append(det["bbox"])
         track["frames_active"] += 1
         track["last_seen_time"] = now
 
-        # Update identity if matched in this frame
+        # Calculate current bounding box area
+        x1, y1, x2, y2 = det["bbox"]
+        area = (x2 - x1) * (y2 - y1)
+        
+        # If this frame has a larger face area, update the best quality frame
+        if frame is not None and area > track.get("best_area", 0):
+            track["best_area"] = area
+            track["best_frame"] = frame.copy()
+            track["best_bbox"] = det["bbox"]
+
+        # Update best matched identity during the entire track
         if det["emp_id"] is not None:
-            track["emp_id"] = det["emp_id"]
-            track["confidence"] = det["confidence"]
+            if track.get("best_emp_id") is None or det["confidence"] > track.get("best_confidence", 0):
+                track["best_emp_id"] = det["emp_id"]
+                track["best_confidence"] = det["confidence"]
         
         if det["liveness"]:
             track["liveness_passed"] = True
@@ -399,84 +587,187 @@ class CCTVStreamProcessor(threading.Thread):
             track["centroids"].pop(0)
             track["bboxes"].pop(0)
 
-        # ==========================================================================
-        # MULTI-STAGE STATE MACHINE SEQUENCE LOGIC
-        # ==========================================================================
-        
-        # 1. Detect Approaching State
-        if self.is_approaching_line(track["centroids"], h):
-            if not track["approaching"]:
-                track["approaching"] = True
-                logger.info(f"[{self.name}] [Sequence] Step 1/4: Employee {track['emp_id'] or 'unknown'} approaching door.")
+        # Update persistent extremes each frame (survives buffer trimming)
+        track["track_min_y"] = min(track.get("track_min_y", curr_centroid[1]), curr_centroid[1])
+        track["track_max_y"] = max(track.get("track_max_y", curr_centroid[1]), curr_centroid[1])
+        track["track_min_x"] = min(track.get("track_min_x", curr_centroid[0]), curr_centroid[0])
+        track["track_max_x"] = max(track.get("track_max_x", curr_centroid[0]), curr_centroid[0])
 
-        # 2. Detect Door Opening State
-        if track["approaching"] and (self.door_state in ("opening", "open")):
-            if not track["door_open_seen"]:
-                track["door_open_seen"] = True
-                logger.info(f"[{self.name}] [Sequence] Step 2/4: Door opening observed for approaching employee {track['emp_id'] or 'unknown'}.")
+        # Buffer frames for video recording
+        if frame is not None:
+            if "frames_buffer" not in track:
+                track["frames_buffer"] = []
+            track["frames_buffer"].append(frame.copy())
+            if len(track["frames_buffer"]) > 240:
+                track["frames_buffer"].pop(0)
 
-        correlation_mode = self.check_correlation_mode()
+        # Path tracking and crossing checks
+        h, w = frame.shape[:2] if frame is not None else (720, 1280)
+        is_entry_cam = 'entrance' in self.name.lower() or 'entry' in self.name.lower() or self.event_type == 'entry'
+        is_exit_cam = 'exit' in self.name.lower() or self.event_type == 'exit'
 
-        # 3. Detect Line Crossing State
-        if segments_intersect(p1, p2, prev_centroid, curr_centroid):
-            direction = crossing_direction(p1, p2, prev_centroid, curr_centroid)
-            track["crossed"] = True
-            track["crossing_direction"] = direction
-            track["crossing_time"] = now
-            logger.info(f"[{self.name}] [Sequence] Step 3/4: Bbox crossed virtual line. Direction: {direction}")
+        x_start, y_start = track["centroids"][0]
+        prev_x, prev_y = prev_centroid
+        curr_x, curr_y = curr_centroid
+
+        if not track.get("crossed", False):
+            crossed = False
+            crossing_point = None
+            crossing_dir = ""
+
+            if is_entry_cam:
+                y_line = int(h * 0.6)
+                x_left = int(w * 0.35)
+                x_right = int(w * 0.70)
+                
+                # Check 1: Horizontal crossing downwards/upwards
+                if prev_y <= y_line < curr_y:
+                    crossed = True
+                    dy = curr_y - prev_y
+                    x_intersect = prev_x + (curr_x - prev_x) * (y_line - prev_y) / dy if dy > 0 else curr_x
+                    crossing_point = (int(x_intersect), y_line)
+                    crossing_dir = "entry"
+                elif prev_y >= y_line > curr_y:
+                    crossed = True
+                    dy = prev_y - curr_y
+                    x_intersect = prev_x + (curr_x - prev_x) * (prev_y - y_line) / dy if dy > 0 else curr_x
+                    crossing_point = (int(x_intersect), y_line)
+                    crossing_dir = "exit"
+                
+                # Check 2: Left door post crossing (x_left)
+                # Right-to-left is entry, Left-to-right is exit
+                elif prev_x >= x_left and curr_x < x_left:
+                    crossed = True
+                    dx = prev_x - curr_x
+                    y_intersect = prev_y + (curr_y - prev_y) * (x_left - curr_x) / dx if dx > 0 else curr_y
+                    crossing_point = (x_left, int(y_intersect))
+                    crossing_dir = "entry"
+                elif prev_x <= x_left and curr_x > x_left:
+                    crossed = True
+                    dx = curr_x - prev_x
+                    y_intersect = prev_y + (curr_y - prev_y) * (x_left - prev_x) / dx if dx > 0 else curr_y
+                    crossing_point = (x_left, int(y_intersect))
+                    crossing_dir = "exit"
+                
+                # Check 3: Right door post crossing (x_right)
+                # Left-to-right is entry, Right-to-left is exit
+                elif prev_x <= x_right and curr_x > x_right:
+                    crossed = True
+                    dx = curr_x - prev_x
+                    y_intersect = prev_y + (curr_y - prev_y) * (x_right - prev_x) / dx if dx > 0 else curr_y
+                    crossing_point = (x_right, int(y_intersect))
+                    crossing_dir = "entry"
+                elif prev_x >= x_right and curr_x < x_right:
+                    crossed = True
+                    dx = prev_x - curr_x
+                    y_intersect = prev_y + (curr_y - prev_y) * (x_right - curr_x) / dx if dx > 0 else curr_y
+                    crossing_point = (x_right, int(y_intersect))
+                    crossing_dir = "exit"
+                
+                # Check 4: Segment intersection
+                elif not crossed:
+                    mv_p1 = (prev_x, prev_y)
+                    mv_p2 = (curr_x, curr_y)
+                    left_line_top = (x_left, 0)
+                    left_line_bot = (x_left, h)
+                    right_line_top = (x_right, 0)
+                    right_line_bot = (x_right, h)
+                    if segments_intersect(mv_p1, mv_p2, left_line_top, left_line_bot):
+                        crossed = True
+                        crossing_point = (x_left, curr_y)
+                        crossing_dir = "entry" if curr_x < prev_x else "exit"
+                    elif segments_intersect(mv_p1, mv_p2, right_line_top, right_line_bot):
+                        crossed = True
+                        crossing_point = (x_right, curr_y)
+                        crossing_dir = "entry" if curr_x > prev_x else "exit"
             
-            if correlation_mode:
-                emp_id = track["emp_id"]
-                if emp_id:
-                    liveness_passed = track["liveness_passed"]
-                    motion_verified = track.get("motion_verified", False)
-                    
-                    if not liveness_passed:
-                        logger.warning(f"[{self.name}] [Correlation Rejected] {emp_id} failed texture liveness check.")
-                        track["crossed"] = False
-                    elif not motion_verified:
-                        logger.warning(f"[{self.name}] [Correlation Rejected] {emp_id} coordinates are static (no micro-movement).")
-                        track["crossed"] = False
+            elif is_exit_cam:
+                x_left = int(w * 0.32)
+                x_right = int(w * 0.55)
+
+                # Use persistent extremes (survive buffer trimming)
+                p_min_y = track.get("track_min_y", curr_y)
+                p_min_x = track.get("track_min_x", curr_x)
+                p_max_x = track.get("track_max_x", curr_x)
+
+                # Person is relevant if their path overlapped the door zone
+                started_in_center = (
+                    (p_min_x <= x_right + 150) and (p_max_x >= x_left - 150)
+                )
+
+                if started_in_center:
+                    has_crossed_boundary = False
+                    crossing_point_candidate = None
+
+                    # ── Left line crossing ──
+                    if (prev_x >= x_left and curr_x < x_left) or (prev_x <= x_left and curr_x > x_left):
+                        has_crossed_boundary = True
+                        dx = abs(prev_x - curr_x)
+                        y_intersect = prev_y + (curr_y - prev_y) * abs(x_left - prev_x) / dx if dx > 0 else curr_y
+                        crossing_point_candidate = (x_left, int(y_intersect))
+                    # ── Right line crossing ──
+                    elif (prev_x >= x_right and curr_x < x_right) or (prev_x <= x_right and curr_x > x_right):
+                        has_crossed_boundary = True
+                        dx = abs(prev_x - curr_x)
+                        y_intersect = prev_y + (curr_y - prev_y) * abs(x_right - prev_x) / dx if dx > 0 else curr_y
+                        crossing_point_candidate = (x_right, int(y_intersect))
+                    # ── Segment intersection ──
                     else:
-                        target_type = None
-                        if self.event_type == 'entry' and direction == 'entry':
-                            target_type = 'entry'
-                        elif self.event_type == 'exit' and direction == 'exit':
-                            target_type = 'exit'
-                            
-                        if target_type:
-                            with pending_correlations_lock:
-                                pending_correlations[emp_id] = {
-                                    "type": target_type,
-                                    "timestamp": now,
-                                    "camera_id": self.camera_id,
-                                    "employee_name": emp_id,
-                                    "confidence": track["confidence"]
-                                }
-                            logger.info(f"[{self.name}] [CORRELATION REGISTERED] Registered pending {target_type} for {emp_id}")
-                            track["crossed"] = False  # Reset to prevent double registering
-                            track["approaching"] = False
-                            track["door_open_seen"] = False
-                else:
-                    logger.warning(f"[{self.name}] Line crossed but face not recognized yet.")
+                        mv_p1 = (prev_x, prev_y)
+                        mv_p2 = (curr_x, curr_y)
+                        left_line_top = (x_left, 0)
+                        left_line_bot = (x_left, h)
+                        right_line_top = (x_right, 0)
+                        right_line_bot = (x_right, h)
+                        if segments_intersect(mv_p1, mv_p2, left_line_top, left_line_bot):
+                            has_crossed_boundary = True
+                            crossing_point_candidate = (x_left, curr_y)
+                        elif segments_intersect(mv_p1, mv_p2, right_line_top, right_line_bot):
+                            has_crossed_boundary = True
+                            crossing_point_candidate = (x_right, curr_y)
 
-        # 4. Detect Door Closing & Confirm Event (Step 4/4)
-        if not correlation_mode and track["crossed"]:
-            time_since_crossing = now - track["crossing_time"]
-            
-            # Transition triggers on door close, OR automatically after 5s as a fail-safe
-            if self.door_state == "closed":
-                logger.info(f"[{self.name}] [Sequence] Step 4/4: Door closed. Event confirmed.")
-                self.confirm_attendance_event(tid, frame)
-            elif time_since_crossing >= 5.0:
-                logger.info(f"[{self.name}] [Sequence] Step 4/4: Door close timeout (5s). Event confirmed via fallback.")
-                self.confirm_attendance_event(tid, frame)
+                    # ── Vertical threshold crossing ──
+                    y_start = track["centroids"][0][1]
+                    y_end = curr_y
+                    track_min_y = track.get("track_min_y", y_start)
+                    track_max_y = track.get("track_max_y", y_start)
+
+                    downward_dist = max(y_end - y_start, y_end - track_min_y)
+                    upward_dist = max(y_start - y_end, track_max_y - y_end)
+
+                    if downward_dist > 15 or upward_dist > 15:
+                        has_crossed_boundary = True
+                        if crossing_point_candidate is None:
+                            crossing_point_candidate = (curr_x, curr_y)
+
+                    if has_crossed_boundary:
+                        crossed = True
+                        crossing_point = crossing_point_candidate
+                        if downward_dist > upward_dist:
+                            crossing_dir = "exit"
+                        elif upward_dist > downward_dist:
+                            crossing_dir = "entry"
+                        else:
+                            crossing_dir = "exit"
+
+            if crossed:
+                track["crossed"] = True
+                track["crossing_time"] = now
+                track["crossing_point"] = crossing_point
+                track["crossing_direction"] = crossing_dir
+                logger.info(f"[{self.name}] [Path Track] Verified crossing at {crossing_point} for track {tid} with direction: {crossing_dir}")
+
+        # Run fallback trajectory analysis if standard checks did not trigger
+        if not track.get("crossed", False):
+            self.check_fallback_trajectory(tid, frame)
+
 
     def confirm_attendance_event(self, tid, frame):
         track = self.tracks[tid]
-        emp_id = track["emp_id"]
-        confidence = track["confidence"]
-        direction = track["crossing_direction"]
+        emp_id = track.get("best_emp_id", track["emp_id"])
+        confidence = track.get("best_confidence", track["confidence"])
+        bbox = track.get("best_bbox", track["bboxes"][-1])
+        direction = track.get("crossing_direction", "entry")
 
         # Reset crossing flags to prevent duplicate loops
         track["crossed"] = False
@@ -488,62 +779,140 @@ class CCTVStreamProcessor(threading.Thread):
             emp_id = "unknown"
             is_unknown = True
 
-        # Anti-spoofing validation (Liveness + Motion checks)
-        if not track["liveness_passed"]:
-            logger.warning(f"[{self.name}] [Sequence Rejected] Blocked spoofing attempt: {emp_id} failed texture liveness check.")
-            return
-        
-        if not track.get("motion_verified", False):
-            logger.warning(f"[{self.name}] [Sequence Rejected] Blocked spoofing attempt: {emp_id} coordinates are static (no micro-movement).")
-            return
+        # Cooldown check (only for recognized employees)
+        if emp_id != 'unknown':
+            now = time.time()
+            last_seen = self.cooldowns.get(emp_id, 0)
+            if now - last_seen < self.cooldown_seconds:
+                logger.debug(f"[{self.name}] Cooldown active for {emp_id}. Skipping confirmation.")
+                return
+            self.cooldowns[emp_id] = now
 
-        # Cooldown check
-        now = time.time()
-        last_seen = self.cooldowns.get(emp_id, 0)
-        if now - last_seen < self.cooldown_seconds:
-            logger.debug(f"[{self.name}] Cooldown active for {emp_id}. Skipping confirmation.")
-            return
-        
-        self.cooldowns[emp_id] = now
+        # Resolve event based on track crossing direction
+        resolved_event = track.get("crossing_direction")
+        if not resolved_event or resolved_event not in ["entry", "exit"]:
+            resolved_event = self.event_type
+            if resolved_event == 'auto':
+                # Try to determine from camera name first as it is 100% reliable
+                if 'entrance' in self.name.lower() or 'entry' in self.name.lower():
+                    resolved_event = 'entry'
+                elif 'exit' in self.name.lower():
+                    resolved_event = 'exit'
+                else:
+                    resolved_event = direction
 
-        # Map direction based on camera config
-        resolved_event = self.event_type
-        if resolved_event == 'auto':
-            resolved_event = direction
+        logger.info(f"[{self.name}] [CONFIRMED] Employee {emp_id} attendance logged. Event: {resolved_event}")
 
-        logger.info(f"[{self.name}] [SEQUENCE VERIFIED & CONFIRMED] Employee {emp_id} attendance logged. Event: {resolved_event}")
+        # Crop raw face from the clean frame before drawing audit markings
+        raw_face_base64 = ""
+        if frame is not None:
+            try:
+                h, w = frame.shape[:2]
+                x1, y1, x2, y2 = map(int, bbox)
+                # Add padding around face crop to ensure better training resolution
+                pad_w = int((x2 - x1) * 0.15)
+                pad_h = int((y2 - y1) * 0.15)
+                crop_y1 = max(0, y1 - pad_h)
+                crop_y2 = min(h, y2 + pad_h)
+                crop_x1 = max(0, x1 - pad_w)
+                crop_x2 = min(w, x2 + pad_w)
+                face_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+                
+                if face_crop.size > 0:
+                    _, crop_buf = cv2.imencode('.jpg', face_crop)
+                    raw_face_base64 = base64.b64encode(crop_buf).decode('utf-8')
+            except Exception as crop_err:
+                logger.error(f"[{self.name}] Error cropping face: {crop_err}")
 
         # Render visual bounding boxes, vector lines, and trajectory history on the frame for auditing
-        audit_frame = frame.copy()
-        h, w = frame.shape[:2]
-        p1 = (0, int(h * 0.5))
-        p2 = (w, int(h * 0.5))
+        audit_frame = frame.copy() if frame is not None else np.zeros((720, 1280, 3), dtype=np.uint8)
+        h, w = audit_frame.shape[:2]
         
-        # Draw virtual line (Red)
-        cv2.line(audit_frame, p1, p2, (0, 0, 255), 3)
-        cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE", (10, p1[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        # Draw camera name and action overlay
+        cv2.putText(audit_frame, f"{self.name} - {resolved_event.upper()}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
-        # Draw current face bounding box
-        bbox = track["bboxes"][-1]
+        # Draw best face bounding box
         x1, y1, x2, y2 = map(int, bbox)
-        cv2.rectangle(audit_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(audit_frame, f"{emp_id} ({confidence*100:.1f}%)", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        if is_unknown:
+            cv2.rectangle(audit_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            cv2.putText(audit_frame, "Unknown Visitor", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        else:
+            cv2.rectangle(audit_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(audit_frame, f"{emp_id} ({confidence*100:.1f}%)", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-        # Draw trajectory history line
+        # Draw visual boundary lines
+        is_entry_cam = 'entrance' in self.name.lower() or 'entry' in self.name.lower() or self.event_type == 'entry'
+        is_exit_cam = 'exit' in self.name.lower() or self.event_type == 'exit'
+
+        if is_entry_cam:
+            y_line = int(h * 0.6)
+            x_left = int(w * 0.35)
+            x_right = int(w * 0.70)
+            cv2.line(audit_frame, (0, y_line), (w, y_line), (0, 0, 255), 2)
+            cv2.line(audit_frame, (x_left, 0), (x_left, h), (0, 0, 255), 2)
+            cv2.line(audit_frame, (x_right, 0), (x_right, h), (0, 0, 255), 2)
+            cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (MID)", (10, y_line - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (LEFT)", (x_left + 5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (RIGHT)", (x_right + 10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+        elif is_exit_cam:
+            x_left = int(w * 0.32)
+            x_right = int(w * 0.55)
+            cv2.line(audit_frame, (x_left, 0), (x_left, h), (0, 0, 255), 2)
+            cv2.line(audit_frame, (x_right, 0), (x_right, h), (0, 0, 255), 2)
+            cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (LEFT)", (x_left + 5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (RIGHT)", (x_right + 10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+
+        # Draw trajectory history line (cyan)
         for i in range(1, len(track["centroids"])):
             c_prev = tuple(map(int, track["centroids"][i-1]))
             c_curr = tuple(map(int, track["centroids"][i]))
             cv2.line(audit_frame, c_prev, c_curr, (255, 255, 0), 2)
             cv2.circle(audit_frame, c_curr, 4, (0, 255, 255), -1)
 
+        # Draw crossing point (yellow dot) if exists
+        crossing_pt = track.get("crossing_point")
+        if crossing_pt is not None:
+            cv2.circle(audit_frame, tuple(map(int, crossing_pt)), 8, (0, 255, 255), -1)
+
+        # Record short 10-second video of the track
+        video_url = ""
+        frames_buffer = track.get("frames_buffer", [])
+        if len(frames_buffer) > 0:
+            try:
+                out_dir = r"D:\Whatsapp Attendance Tracking\public\uploads\camera_videos"
+                os.makedirs(out_dir, exist_ok=True)
+                video_filename = f"video_{int(time.time() * 1000)}_{emp_id}.mp4"
+                video_path = os.path.join(out_dir, video_filename)
+                
+                h_f, w_f = frames_buffer[0].shape[:2]
+                fourcc = cv2.VideoWriter_fourcc(*'avc1')
+                out = cv2.VideoWriter(video_path, fourcc, 15.0, (w_f, h_f))
+                if not out.isOpened():
+                    # Fallback to mp4v if avc1 fails
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    out = cv2.VideoWriter(video_path, fourcc, 15.0, (w_f, h_f))
+                
+                if out.isOpened():
+                    for f in frames_buffer:
+                        out.write(f)
+                    out.release()
+                    video_url = f"/uploads/camera_videos/{video_filename}"
+                    logger.info(f"[{self.name}] Saved track video to {video_url}")
+                else:
+                    logger.error(f"[{self.name}] Failed to initialize VideoWriter for track video.")
+            except Exception as vid_err:
+                logger.error(f"[{self.name}] Error saving track video: {vid_err}")
+            finally:
+                track["frames_buffer"] = []
+
         # Encode frame to base64
         _, buffer = cv2.imencode('.jpg', audit_frame)
         jpg_as_text = base64.b64encode(buffer).decode('utf-8')
 
-        # Report to Node server
-        self.report_attendance(emp_id, confidence, jpg_as_text, resolved_event)
+        # Report to Node server, passing clean raw face crop for mapping
+        self.report_attendance(emp_id, confidence, jpg_as_text, resolved_event, raw_face_base64=raw_face_base64, video_url=video_url)
 
-    def report_attendance(self, employee_id, confidence, image_base64_raw, event_type=None, status=None):
+    def report_attendance(self, employee_id, confidence, image_base64_raw, event_type=None, status=None, raw_face_base64="", video_url=""):
         try:
             url = f"{self.node_server}/api/face/cctv-event"
             payload = {
@@ -554,7 +923,9 @@ class CCTVStreamProcessor(threading.Thread):
                 'site_name': self.site_name,
                 'event_type': event_type or self.event_type,
                 'status': status,
-                'image_base64': image_base64_raw
+                'image_base64': image_base64_raw,
+                'raw_face_base64': raw_face_base64,
+                'video_url': video_url
             }
             resp = requests.post(url, json=payload, timeout=5)
             if resp.status_code == 200:
@@ -741,7 +1112,7 @@ class CCTVStreamProcessor(threading.Thread):
         self.running = False
 
 
-def start_cctv_thread(camera_id, name, source, site_name, event_type, threshold=0.62, node_server="http://localhost:3000"):
+def start_cctv_thread(camera_id, name, source, site_name, event_type, threshold=0.52, node_server="http://localhost:3000"):
     with active_cameras_lock:
         if camera_id in active_cameras:
             logger.info(f"Camera thread {camera_id} is already running. Stopping it...")

@@ -776,6 +776,23 @@ class Database {
       }
     }
 
+    if (event.raw_face_base64) {
+      try {
+        const uploadsDir = path.join(__dirname, 'public', 'uploads', 'camera');
+        if (!fs.existsSync(uploadsDir)) {
+          fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+        const filename = `raw_${event.id}.jpg`;
+        const filepath = path.join(uploadsDir, filename);
+        const buffer = Buffer.from(event.raw_face_base64, 'base64');
+        fs.writeFileSync(filepath, buffer);
+        event.rawFaceUrl = `/uploads/camera/${filename}`;
+        delete event.raw_face_base64;
+      } catch (imgErr) {
+        console.warn('[UnknownDetection] Failed to save raw face image:', imgErr.message);
+      }
+    }
+
     const existingIndex = db.unknownDetections.findIndex(e => e.id === event.id);
     if (existingIndex >= 0) {
       db.unknownDetections[existingIndex] = { ...db.unknownDetections[existingIndex], ...event };
@@ -796,6 +813,14 @@ class Database {
       if (event.imageUrl) {
         try {
           const filepath = path.join(__dirname, 'public', event.imageUrl);
+          if (fs.existsSync(filepath)) {
+            fs.unlinkSync(filepath);
+          }
+        } catch(e) {}
+      }
+      if (event.rawFaceUrl) {
+        try {
+          const filepath = path.join(__dirname, 'public', event.rawFaceUrl);
           if (fs.existsSync(filepath)) {
             fs.unlinkSync(filepath);
           }

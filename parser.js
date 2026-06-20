@@ -931,7 +931,7 @@ class AttendanceParser {
       }
       // Remove explicit dates to prevent date numbers from being parsed as hours (e.g. "17" in "17/06/26")
       lineForTimeMatching = lineForTimeMatching.replace(/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/g, '');
-      lineForTimeMatching = lineForTimeMatching.replace(/\b\d{1,2}[/-]\d{1,2}\b/g, '');
+      lineForTimeMatching = lineForTimeMatching.replace(/\b\d{1,2}\/\d{1,2}\b/g, '');
       
       const timeRegex = /\b(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)\b/gi;
       const timeMatches = lineForTimeMatching.match(timeRegex) || [];
@@ -1658,7 +1658,7 @@ class AttendanceParser {
       console.log(`[Parser] Detected single-worker multi-line report.`);
       let singleWorkerDate = todayStr;
       for (const line of activeLines) {
-        const hasDateWord = /\b(?:yesterday|today|tomorrow|innale|innu|nale|munninale|minnannu|\d{1,2}[/-]\d{1,2})\b/i.test(line);
+        const hasDateWord = /\b(?:yesterday|today|tomorrow|innale|innu|nale|munninale|minnannu|\d{1,2}\/\d{1,2})\b/i.test(line);
         if (hasDateWord) {
           const dates = extractTargetDates(line, messageTimestamp);
           if (dates.length > 0) {
@@ -1777,7 +1777,7 @@ class AttendanceParser {
         return false;
       }
       
-      const isExplicitDate = /^\s*[\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?]\s*:?\s*$/.test(lineLower) || 
+      const isExplicitDate = /^\s*\[\d{1,2}\/\d{1,2}(?:[/-]\d{2,4})?\]\s*:?\s*$/.test(lineLower) || 
                              /^\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*:?\s*$/.test(lineLower);
       const isRelativeDateOnly = /^\s*(yesterday|today|tomorrow|innale|innu|nale|munninale|minnannu)\b\s*:?\s*$/i.test(lineLower);
       if (isExplicitDate || isRelativeDateOnly) {
@@ -1834,7 +1834,7 @@ class AttendanceParser {
         const cleanLine = line.toLowerCase();
         // Check if individual line specifies its own date
         const lineDates = extractTargetDates(cleanLine, messageTimestamp);
-        const hasRelativeOrExplicit = /\b(?:yesterday|today|tomorrow|innale|innu|nale|munninale|minnannu|\d{1,2}[/-]\d{1,2})\b/i.test(cleanLine);
+        const hasRelativeOrExplicit = /\b(?:yesterday|today|tomorrow|innale|innu|nale|munninale|minnannu|\d{1,2}\/\d{1,2})\b/i.test(cleanLine);
         const targetDate = hasRelativeOrExplicit && lineDates.length > 0 ? lineDates[0] : listDefaultDate;
 
         const res = this.parseSingleLine(cleanLine, targetDate, defaultSiteObj, "", messageTimestamp);
