@@ -25,6 +25,14 @@ const bcrypt = require('bcryptjs');
 
 const FACE_RECOGNITION_MIN_CONFIDENCE = 0.52;
 
+function getLocalDateString(dateInput = new Date()) {
+  const d = new Date(dateInput);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 // In-memory stack to store resolved/deleted exception actions for the undo function
 const undoStack = [];
 const redoStack = [];
@@ -185,7 +193,8 @@ function requireAdminAuth(req, res, next) {
     reqPath.startsWith('/mobile') ||
     reqPath.startsWith('/checkin') ||
     reqPath.startsWith('/api/checkin') ||
-    reqPath.startsWith('/api/employee')
+    reqPath.startsWith('/api/employee') ||
+    reqPath === '/api/face/cctv-event'
   ) {
     return next();
   }
@@ -294,7 +303,7 @@ app.get('/api/debug/whatsapp-screenshot', async (req, res) => {
 
 // System General Analytics
 app.get('/api/stats', (req, res) => {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateString();
   const employees = database.getEmployees();
   const activeEmpCount = employees.filter(e => e.status === 'active').length;
   const attendanceToday = database.getAttendanceForDate(todayStr);
@@ -575,7 +584,7 @@ app.get('/api/attendance', (req, res) => {
     return res.json(database.getAttendanceForRange(startDate, endDate));
   }
   
-  const targetDate = date || new Date().toISOString().split('T')[0];
+  const targetDate = date || getLocalDateString();
   res.json(database.getAttendanceForDate(targetDate));
 });
 
@@ -644,7 +653,7 @@ app.post('/api/attendance/camera', (req, res) => {
       return res.status(400).json({ error: 'Employee not found.' });
     }
 
-    const eventDate = new Date(timestamp).toISOString().split('T')[0];
+    const eventDate = getLocalDateString(timestamp);
     const cameraEvent = {
       employeeId,
       employeeName: employee.name,
@@ -1263,6 +1272,27 @@ app.get('/api/unknown-detections', (req, res) => {
   }
 });
 
+// POST Restore/Save Unknown Detection
+app.post('/api/unknown-detections', (req, res) => {
+  try {
+    const event = req.body;
+    const db = database.read();
+    if (!db.unknownDetections) db.unknownDetections = [];
+    
+    // Check if it already exists
+    const index = db.unknownDetections.findIndex(e => e.id === event.id);
+    if (index === -1) {
+      db.unknownDetections.push(event);
+      database.writeAtomic(db);
+      io.emit('unknown_detection_updated', event);
+    }
+    res.json({ success: true, detection: event });
+  } catch (err) {
+    console.error('[API] Restore unknown detection failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE Unknown Detection
 app.delete('/api/unknown-detections/:id', (req, res) => {
   try {
@@ -1500,11 +1530,11 @@ app.post('/api/unknown-detections/assign', async (req, res) => {
     console.log(`[API] Assigned CCTV face crop to employee "${employee.name}" at: ${targetPath}`);
 
     // Trigger face retraining
-    console.log('[API] Triggering model retraining...');
     const imagesDir = path.join(__dirname, 'uploads', 'face_training');
     const formData = new URLSearchParams();
     formData.append('images_dir', imagesDir);
-    formData.append('force', 'true'); // Force retrain to rebuild all embeddings
+    formData.append('force', 'false'); // Don't force retrain everyone
+    formData.append('employee_id', cleanName); // Only retrain this employee
 
     // Call Python face training service
     let retrainSuccess = false;
@@ -1997,7 +2027,7 @@ app.post('/api/pending/resolve', (req, res) => {
     if (!emp) return res.status(400).json({ error: "Employee name is required." });
 
     const targetSiteName = site ? site.name : (normalizedSiteName || "Main Site");
-    const targetDate = date || new Date().toISOString().split('T')[0];
+    const targetDate = date || getLocalDateString();
     const timestamp = time ? new Date(`${targetDate}T${time}`).toISOString() : new Date().toISOString();
 
     let record = {};
@@ -2266,7 +2296,7 @@ app.post('/api/pending/redo', (req, res) => {
       if (!emp) return res.status(400).json({ error: "Employee name is required." });
 
       const targetSiteName = site ? site.name : (normalizedSiteName || "Main Site");
-      const targetDate = date || new Date().toISOString().split('T')[0];
+      const targetDate = date || getLocalDateString();
       const timestamp = time ? new Date(`${targetDate}T${time}`).toISOString() : new Date().toISOString();
 
       let record = {};
@@ -2605,7 +2635,7 @@ app.post('/api/employees/:id/loans/:loanId/repayments', (req, res) => {
     }
     
     loan.repayments.push({
-      date: new Date().toISOString().split('T')[0],
+      date: getLocalDateString(),
       amount: payAmt,
       remarks: remarks || "Cash payment"
     });
@@ -3333,7 +3363,7 @@ app.get('/api/export', (req, res) => {
       csvContent += `${date},${name},${status},${site},${inTime},${outTime},${totalHours},${fullDay},${halfDay},${extra},${ot},${wage},${rawText},"${note}"\n`;
     });
 
-    const fileDateStr = new Date().toISOString().split('T')[0];
+    const fileDateStr = getLocalDateString();
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="Attendance_Payroll_Export_${startDate}_to_${endDate}_generated_${fileDateStr}.csv"`);
     res.status(200).send(csvContent);
@@ -3457,7 +3487,7 @@ app.get('/api/export/excel', (req, res) => {
     
     const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     
-    const fileDateStr = new Date().toISOString().split('T')[0];
+    const fileDateStr = getLocalDateString();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="Attendance_Payroll_Export_${startDate}_to_${endDate}_generated_${fileDateStr}.xlsx"`);
     res.send(buffer);
@@ -3686,7 +3716,7 @@ app.get('/api/export/payroll/excel', async (req, res) => {
     const buffer = await workbook.xlsx.writeBuffer();
     
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="Salary_Sheet_Export_${targetMonth}_generated_${new Date().toISOString().split('T')[0]}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="Salary_Sheet_Export_${targetMonth}_generated_${getLocalDateString()}.xlsx"`);
     res.send(buffer);
   } catch (err) {
     res.status(500).send(`Export failed: ${err.message}`);

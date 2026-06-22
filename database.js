@@ -6,6 +6,14 @@ const DB_PATH = path.join(__dirname, 'data.json');
 const BACKUPS_DIR = path.join(__dirname, 'backups');
 const EXCEL_PATH = path.join(__dirname, 'Attendance_Payroll.xlsx');
 
+function getLocalDateString(dateInput = new Date()) {
+  const d = new Date(dateInput);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 // Default Database Schema with elegant seed data
 const DEFAULT_DB = {
   employees: [],
@@ -491,7 +499,7 @@ class Database {
       try {
         const checkInDate = new Date(checkInTime);
         if (!isNaN(checkInDate.getTime())) {
-          const dateStr = checkInDate.toISOString().split('T')[0];
+          const dateStr = getLocalDateString(checkInDate);
           const isSunday = checkInDate.getDay() === 0;
           const db = this.read();
           const holidays = db.holidays || [];
@@ -674,8 +682,8 @@ class Database {
     
     const db = this.read();
     
-    // Loop over each day in range
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    // Loop over each day in range safely in UTC
+    for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
       const dateStr = d.toISOString().split('T')[0];
       const dailySheet = this.getAttendanceForDate(dateStr, db);
       list.push(...dailySheet);
@@ -814,7 +822,8 @@ class Database {
         try {
           const filepath = path.join(__dirname, 'public', event.imageUrl);
           if (fs.existsSync(filepath)) {
-            fs.unlinkSync(filepath);
+            // Keep files on disk to support TransactionManager undo deletes
+            // fs.unlinkSync(filepath);
           }
         } catch(e) {}
       }
@@ -822,7 +831,8 @@ class Database {
         try {
           const filepath = path.join(__dirname, 'public', event.rawFaceUrl);
           if (fs.existsSync(filepath)) {
-            fs.unlinkSync(filepath);
+            // Keep files on disk to support TransactionManager undo deletes
+            // fs.unlinkSync(filepath);
           }
         } catch(e) {}
       }
@@ -973,7 +983,7 @@ class Database {
     // Set defaults
     record.id = record.id || `att_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
     record.employeeName = employee.name;
-    record.date = record.date || new Date().toISOString().split('T')[0];
+    record.date = record.date || getLocalDateString();
 
     // Manual override forces punches to exactly matching new times
     if (record.isManualOverride) {
@@ -1277,8 +1287,8 @@ class Database {
     }
 
     const todayStr = messageTimestamp
-      ? new Date(messageTimestamp).toISOString().split('T')[0]
-      : new Date().toISOString().split('T')[0];
+      ? getLocalDateString(messageTimestamp)
+      : getLocalDateString();
     
     // Determine target attendance log date from the parsed timestamps (or fallback to today)
     let targetDateStr = todayStr;
@@ -1610,7 +1620,7 @@ class Database {
           
           if (!hasFullShift) {
             // Find target date (from items or message timestamp)
-            const targetDateStr = parsedData.items.find(i => i.checkInTime)?.checkInTime?.split('T')[0] || new Date(messageTimestamp || Date.now()).toISOString().split('T')[0];
+            const targetDateStr = parsedData.items.find(i => i.checkInTime)?.checkInTime?.split('T')[0] || getLocalDateString(messageTimestamp || Date.now());
             
             // Gather all check-in/out times from OTHER workers' parsed items for this date
             const otherItems = parsedData.items.filter(item => item.matchedEmployeeId !== supervisor.id);
@@ -1671,7 +1681,7 @@ class Database {
   autoCloseOutstandingShifts() {
     const db = this.read();
     const settings = this.getSettings();
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getLocalDateString();
     
     // Find all attendance records from previous days that are still "checked-in"
     const pendingLogs = db.attendance.filter(log => log.date < todayStr && log.status === 'checked-in');
@@ -1758,7 +1768,7 @@ class Database {
       
       // If no unique dates logged but employees exist, log at least today's absent list
       if (uniqueDates.length === 0) {
-        uniqueDates.push(new Date().toISOString().split('T')[0]);
+        uniqueDates.push(getLocalDateString());
       }
 
       const excelRows = [];
@@ -2138,8 +2148,8 @@ class Database {
     const dayNames = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
     const datesOfWeek = [];
     for (let i = -6; i <= 0; i++) {
-      const d = new Date(fridayDate);
-      d.setDate(fridayDate.getDate() + i);
+      const d = new Date(fridayDate.getTime());
+      d.setUTCDate(d.getUTCDate() + i);
       datesOfWeek.push(d.toISOString().split('T')[0]);
     }
     
