@@ -4944,60 +4944,84 @@ function renderSelfiesTable(data) {
 
 function openSelfieLightbox(imageUrl, metaHtml, videoUrl = '') {
   let modal = document.getElementById('selfie-modal');
-  let modalImg = document.getElementById('selfie-modal-img');
-  let modalVideo = document.getElementById('selfie-modal-video');
-  let modalMeta = document.getElementById('selfie-modal-meta');
   
   if (!modal) {
     modal = document.createElement('div');
     modal.className = 'modal';
     modal.id = 'selfie-modal';
-    modal.innerHTML = `
-      <div class="modal-content" style="max-width: 600px; background: var(--bg-card, #121420); border: 1px solid var(--glass-border); border-radius: var(--border-radius-md); box-shadow: var(--shadow-xl);">
-        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--glass-border);">
-          <h3 id="selfie-modal-title" style="margin: 0; font-size: 1.1rem; font-weight: 700; color: var(--text-primary);">Attendance Capture Details</h3>
-          <button class="btn-close" onclick="closeSelfieModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-secondary);">&times;</button>
-        </div>
-        <div class="modal-body" style="text-align: center; padding: 20px;">
-          <img id="selfie-modal-img" src="" alt="Capture Image" style="max-width: 100%; max-height: 60vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border);">
-          <video id="selfie-modal-video" controls autoplay style="display: none; max-width: 100%; max-height: 60vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border);"></video>
-          <div id="selfie-modal-meta" style="margin-top: 15px; text-align: left; font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary);">
-            <!-- Loaded dynamically -->
-          </div>
-        </div>
-        <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--glass-border); display: flex; justify-content: flex-end;">
-          <button type="button" class="btn btn-secondary" onclick="closeSelfieModal()" style="padding: 8px 16px; font-size: 0.85rem; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); background: transparent; color: var(--text-primary); cursor: pointer;">Close</button>
-        </div>
-      </div>
-    `;
     document.body.appendChild(modal);
-    modalImg = document.getElementById('selfie-modal-img');
-    modalVideo = document.getElementById('selfie-modal-video');
-    modalMeta = document.getElementById('selfie-modal-meta');
   }
   
-  if (modalMeta) {
-    modalMeta.innerHTML = metaHtml;
-    
-    if (videoUrl) {
-      if (modalImg) modalImg.style.display = 'none';
-      if (modalVideo) {
-        modalVideo.style.display = 'inline-block';
-        modalVideo.src = videoUrl;
-        modalVideo.load();
-      }
-    } else {
-      if (modalVideo) {
-        modalVideo.style.display = 'none';
-        modalVideo.pause();
-        modalVideo.src = "";
-      }
-      if (modalImg) {
-        modalImg.style.display = 'inline-block';
-        modalImg.src = imageUrl;
-      }
+  // Clean up classes
+  modal.className = 'modal';
+  
+  // Dynamic layout max-width: wider for side-by-side, standard for single media
+  const modalWidth = (imageUrl && videoUrl) ? '800px' : '500px';
+  
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: ${modalWidth}; background: var(--bg-card, #121420); border: 1px solid var(--glass-border); border-radius: var(--border-radius-md); box-shadow: var(--shadow-xl); overflow: hidden; display: flex; flex-direction: column; transition: max-width 0.3s ease;">
+      <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--glass-border);">
+        <h3 id="selfie-modal-title" style="margin: 0; font-size: 1.1rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+          <i data-lucide="fingerprint" style="color: var(--color-primary); width: 20px; height: 20px;"></i>
+          Attendance Capture Details
+        </h3>
+        <button class="btn-close" onclick="closeSelfieModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-secondary); transition: color 0.2s;" onmouseover="this.style.color='var(--color-primary)'" onmouseout="this.style.color='var(--text-secondary)'">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 20px; overflow-y: auto; max-height: 75vh;">
+        
+        <!-- Media layout container -->
+        <div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; margin-bottom: 20px;">
+          
+          ${imageUrl ? `
+            <div style="flex: 1 1 280px; max-width: 100%; display: flex; flex-direction: column;">
+              <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; justify-content: center;">
+                <i data-lucide="image" style="width: 15px; height: 15px; color: var(--color-primary);"></i> Capture Photo
+              </div>
+              <div style="position: relative; overflow: hidden; border-radius: 8px; border: 1px solid var(--glass-border); background: #0b0c13; aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-lg);">
+                <img id="selfie-modal-img" src="${imageUrl}" alt="Capture Image" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+              </div>
+            </div>
+          ` : ''}
+          
+          ${videoUrl ? `
+            <div style="flex: 1 1 280px; max-width: 100%; display: flex; flex-direction: column;">
+              <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; justify-content: center;">
+                <i data-lucide="video" style="width: 15px; height: 15px; color: #00e676;"></i> Event Video
+              </div>
+              <div style="position: relative; overflow: hidden; border-radius: 8px; border: 1px solid var(--glass-border); background: #0b0c13; aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-lg);">
+                <video id="selfie-modal-video" controls autoplay style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                  <source src="${videoUrl}" type="video/mp4">
+                  Your browser does not support the video tag.
+                </video>
+              </div>
+            </div>
+          ` : ''}
+          
+        </div>
+        
+        <!-- Metadata section -->
+        <div id="selfie-modal-meta" style="background: rgba(255,255,255,0.02); border: 1px solid var(--glass-border); border-radius: 8px; padding: 16px; font-size: 0.85rem; line-height: 1.6; color: var(--text-secondary);">
+          ${metaHtml}
+        </div>
+      </div>
+      <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--glass-border); display: flex; justify-content: flex-end; background: rgba(0,0,0,0.15);">
+        <button type="button" class="btn btn-secondary" onclick="closeSelfieModal()" style="padding: 8px 16px; font-size: 0.85rem; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); background: transparent; color: var(--text-primary); cursor: pointer; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='rgba(255,255,255,0.05)'" onmouseout="this.style.backgroundColor='transparent'">Close</button>
+      </div>
+    </div>
+  `;
+  
+  modal.classList.add('active');
+  
+  if (videoUrl) {
+    const modalVideo = document.getElementById('selfie-modal-video');
+    if (modalVideo) {
+      modalVideo.load();
+      modalVideo.play().catch(e => console.log("Autoplay prevented:", e));
     }
-    modal.classList.add('active');
+  }
+  
+  if (window.lucide) {
+    window.lucide.createIcons();
   }
 }
 
