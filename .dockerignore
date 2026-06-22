@@ -1,0 +1,10 @@
+node_modules
+.git
+.gitignore
+backups
+*.log
+whatsapp_screenshot.png
+.wwebjs_auth
+.wwebjs_cache
+dist
+C:\Users\New\.gemini\antigravity

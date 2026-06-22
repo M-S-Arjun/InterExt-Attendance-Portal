@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  attendance-web:
+    build: .
+    image: interext-attendance:latest
+    container_name: interext-attendance-web
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      # Map the source directory to persist data.json, xlsx and uploads
+      - .:/app
+      # Exclude node_modules from host mapping to prevent platform architecture conflicts
+      - /app/node_modules
+    environment:
+      - PORT=3000
+      - NODE_ENV=production

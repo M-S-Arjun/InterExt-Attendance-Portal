@@ -21,6 +21,7 @@ const socketIo = require('socket.io');
 const XLSX = require('xlsx');
 const database = require('./database');
 const whatsapp = require('./whatsapp');
+const bcrypt = require('bcryptjs');
 
 const FACE_RECOGNITION_MIN_CONFIDENCE = 0.52;
 
@@ -144,6 +145,9 @@ app.use((req, res, next) => {
   next();
 });
 
+// Memory-based cache for active admin sessions (zero-dependency session security)
+const activeSessions = new Set();
+
 // Simple helper to parse cookies from headers
 function parseCookies(cookieHeader) {
   const list = {};
@@ -186,15 +190,11 @@ function requireAdminAuth(req, res, next) {
     return next();
   }
   
-  // 2. Extract and verify token
+  // 2. Extract and verify session token against active session cache
   const cookies = parseCookies(req.headers.cookie);
   const adminToken = cookies['admin_token'];
   
-  const db = database.read();
-  const settings = db.settings || {};
-  const expectedPassword = settings.adminPassword || 'admin123';
-  
-  if (adminToken === expectedPassword) {
+  if (adminToken && activeSessions.has(adminToken)) {
     return next();
   }
   
@@ -222,9 +222,18 @@ app.post('/api/admin/login', (req, res) => {
     const settings = db.settings || {};
     const expectedPassword = settings.adminPassword || 'admin123';
     
-    if (password === expectedPassword) {
+    // Check if expectedPassword is a bcrypt hash.
+    // Bcrypt hashes start with $2a$ or $2b$ and have a length of 60.
+    const isHash = typeof expectedPassword === 'string' && expectedPassword.startsWith('$2a$');
+    const passwordMatch = isHash ? bcrypt.compareSync(password, expectedPassword) : (password === expectedPassword);
+    
+    if (passwordMatch) {
+      // Generate a secure session token
+      const sessionToken = Math.random().toString(36).substring(2) + Date.now().toString(36);
+      activeSessions.add(sessionToken);
+      
       // Set a cookie (lasts 30 days)
-      res.cookie('admin_token', password, { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: false });
+      res.cookie('admin_token', sessionToken, { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: false });
       return res.json({ success: true });
     }
     
@@ -236,6 +245,11 @@ app.post('/api/admin/login', (req, res) => {
 
 // POST /api/admin/logout endpoint
 app.post('/api/admin/logout', (req, res) => {
+  const cookies = parseCookies(req.headers.cookie);
+  const adminToken = cookies['admin_token'];
+  if (adminToken) {
+    activeSessions.delete(adminToken);
+  }
   res.clearCookie('admin_token');
   res.json({ success: true });
 });
@@ -388,6 +402,10 @@ app.get('/api/settings', (req, res) => {
 
 app.post('/api/settings', (req, res) => {
   const settingsData = { ...req.body };
+  
+  if (settingsData.adminPassword) {
+    settingsData.adminPassword = bcrypt.hashSync(settingsData.adminPassword, 10);
+  }
   
   // Format the group names list cleanly (comma-separated, trimmed)
   if (settingsData.whatsappGroupName) {
