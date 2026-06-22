@@ -1,5 +1,13 @@
 const database = require('./database');
 
+function getLocalDateString(dateInput = new Date()) {
+  const d = new Date(dateInput);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 // Standard Levenshtein Distance implementation for fuzzy matching
 function levenshteinDistance(s1, s2) {
   const track = Array(s2.length + 1).fill(null).map(() =>
@@ -1190,8 +1198,8 @@ class AttendanceParser {
     cleanedText = cleanedText.replace(/\b(\d{1,2})\.(\d{2})\b/g, '$1:$2');
 
     const todayStr = messageTimestamp
-      ? new Date(messageTimestamp).toISOString().split('T')[0]
-      : new Date().toISOString().split('T')[0];
+      ? getLocalDateString(messageTimestamp)
+      : getLocalDateString();
 
     // ============================================================
     // REGIONAL LANGUAGE TRANSLATION
