@@ -4,6 +4,123 @@ function toLocalISOString(date) {
   return new Date(date.getTime() - tzOffset).toISOString();
 }
 
+function getLocalDateString(date = new Date()) {
+  return toLocalISOString(date).split('T')[0];
+}
+
+// ==========================================================================
+// DYNAMIC FLATPICKR DATEPICKER INTEGRATION
+// ==========================================================================
+// Dynamically load Flatpickr CSS
+const fpCss = document.createElement('link');
+fpCss.rel = 'stylesheet';
+fpCss.href = 'https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css';
+document.head.appendChild(fpCss);
+
+// Dynamically load Flatpickr JS
+const fpJs = document.createElement('script');
+fpJs.src = 'https://cdn.jsdelivr.net/npm/flatpickr';
+fpJs.onload = () => {
+  // Intercept programmatic value changes to sync flatpickr instances automatically
+  try {
+    const originalValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    const originalValueGetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').get;
+    Object.defineProperty(HTMLInputElement.prototype, 'value', {
+      get: function() {
+        return originalValueGetter.call(this);
+      },
+      set: function(val) {
+        originalValueSetter.call(this, val);
+        if (this.type === 'date' && this._flatpickr && !this._fpUpdating) {
+          this._fpUpdating = true;
+          try {
+            this._flatpickr.setDate(val, false);
+          } finally {
+            this._fpUpdating = false;
+          }
+        }
+      }
+    });
+  } catch (e) {
+    console.warn("Could not intercept value setter:", e);
+  }
+
+  initAllFlatpickrs();
+  
+  // Observe DOM for dynamically added date inputs (e.g. inside modals)
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      if (mutation.addedNodes && mutation.addedNodes.length > 0) {
+        initAllFlatpickrs();
+      }
+    });
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+};
+document.head.appendChild(fpJs);
+
+function initAllFlatpickrs() {
+  if (typeof flatpickr === 'undefined') return;
+  document.querySelectorAll('input[type="date"]').forEach(input => {
+    if (input.classList.contains('fp-initialized')) return;
+    input.classList.add('fp-initialized');
+    
+    const val = input.value;
+    
+    const fp = flatpickr(input, {
+      dateFormat: 'Y-m-d',
+      altInput: true,
+      altFormat: 'd-M-Y',
+      defaultDate: val || null,
+      onChange: function(selectedDates, dateStr) {
+        // Trigger original change event for listeners
+        const event = new Event('change', { bubbles: true });
+        input.dispatchEvent(event);
+        if (input.onchange) {
+          input.onchange();
+        }
+      },
+      onReady: function(selectedDates, dateStr, instance) {
+        // Add native-like Clear and Today buttons at the bottom of calendar
+        const container = instance.calendarContainer;
+        if (!container.querySelector('.flatpickr-footer')) {
+          const footer = document.createElement('div');
+          footer.className = 'flatpickr-footer';
+          
+          const clearBtn = document.createElement('button');
+          clearBtn.type = 'button';
+          clearBtn.className = 'btn-fp-clear';
+          clearBtn.textContent = 'Clear';
+          clearBtn.onclick = () => {
+            instance.clear();
+            instance.close();
+            const event = new Event('change', { bubbles: true });
+            input.dispatchEvent(event);
+            if (input.onchange) input.onchange();
+          };
+          
+          const todayBtn = document.createElement('button');
+          todayBtn.type = 'button';
+          todayBtn.className = 'btn-fp-today';
+          todayBtn.textContent = 'Today';
+          todayBtn.onclick = () => {
+            instance.setDate(new Date());
+            instance.close();
+            const event = new Event('change', { bubbles: true });
+            input.dispatchEvent(event);
+            if (input.onchange) input.onchange();
+          };
+          
+          footer.appendChild(clearBtn);
+          footer.appendChild(todayBtn);
+          container.appendChild(footer);
+        }
+      }
+    });
+    input._flatpickr = fp;
+  });
+}
+
 function formatTimeSafely(timeStr) {
   if (!timeStr || timeStr === "—" || timeStr === "null" || timeStr === "undefined") return "—";
   const str = String(timeStr);
@@ -89,8 +206,8 @@ const TransactionManager = {
     const hasUndo = this.undoStack.length > 0;
     const hasRedo = this.redoStack.length > 0;
 
-    const undoBtns = ['btn-employee-undo', 'btn-site-undo', 'btn-holiday-undo', 'btn-cctv-undo'];
-    const redoBtns = ['btn-employee-redo', 'btn-site-redo', 'btn-holiday-redo', 'btn-cctv-redo'];
+    const undoBtns = ['btn-employee-undo', 'btn-site-undo', 'btn-holiday-undo', 'btn-cctv-undo', 'btn-unknown-undo'];
+    const redoBtns = ['btn-employee-redo', 'btn-site-redo', 'btn-holiday-redo', 'btn-cctv-redo', 'btn-unknown-redo'];
 
     undoBtns.forEach(id => {
       const btn = document.getElementById(id);
@@ -108,6 +225,7 @@ const TransactionManager = {
     if (type === 'site') return data.name;
     if (type === 'holiday') return data.name || data.date;
     if (type === 'cctv') return data.name;
+    if (type === 'unknown') return data.cameraName || 'Visitor';
     return '';
   },
 
@@ -442,11 +560,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Set up automatic daily/hourly wage calculation when monthly wage is inputted
   initEmployeeWageAutoCalculation();
 
-  // Register live-calculating event listeners for attendance modal
-  document.getElementById('att-checkin').addEventListener('change', updateCalculatedHoursAndWage);
-  document.getElementById('att-checkout').addEventListener('change', updateCalculatedHoursAndWage);
-  document.getElementById('att-is-hospital').addEventListener('change', updateCalculatedHoursAndWage);
-  document.getElementById('att-hospital-hours').addEventListener('change', updateCalculatedHoursAndWage);
+  // Register live-calculating event listeners for attendance modal (safely checking element existence)
+  const attCheckin = document.getElementById('att-checkin');
+  const attCheckout = document.getElementById('att-checkout');
+  const attIsHospital = document.getElementById('att-is-hospital');
+  const attHospitalHours = document.getElementById('att-hospital-hours');
+
+  if (attCheckin) attCheckin.addEventListener('change', updateCalculatedHoursAndWage);
+  if (attCheckout) attCheckout.addEventListener('change', updateCalculatedHoursAndWage);
+  if (attIsHospital) attIsHospital.addEventListener('change', updateCalculatedHoursAndWage);
+  if (attHospitalHours) attHospitalHours.addEventListener('change', updateCalculatedHoursAndWage);
 });
 
 // Load core static schemas (employees, sites, settings)
@@ -1559,6 +1682,7 @@ async function refreshUnknownDetections() {
     const resp = await fetch('/api/unknown-detections');
     if (!resp.ok) throw new Error(`Unknown detections load failed (${resp.status})`);
     const detections = await resp.json();
+    window.loadedUnknownDetections = detections;
     renderUnknownDetections(detections);
   } catch (err) {
     console.error("Failed to refresh unknown detections:", err);
@@ -1638,12 +1762,29 @@ function renderUnknownDetections(detections) {
 }
 
 async function handleDeleteUnknown(id) {
+  const detection = (window.loadedUnknownDetections || []).find(d => d.id === id);
+  if (!detection) return;
   if (!confirm("Are you sure you want to clear this visitor log?")) return;
-  try {
-    const resp = await fetch(`/api/unknown-detections/${id}`, { method: 'DELETE' });
+
+  const deleteFn = async (data) => {
+    const resp = await fetch(`/api/unknown-detections/${data.id}`, { method: 'DELETE' });
     if (!resp.ok) throw new Error(`Failed to delete detection (${resp.status})`);
-    TransactionManager.showStatusToast("Visitor log cleared successfully.");
     await refreshUnknownDetections();
+  };
+
+  const restoreFn = async (data) => {
+    const resp = await fetch('/api/unknown-detections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!resp.ok) throw new Error(`Failed to restore detection (${resp.status})`);
+    await refreshUnknownDetections();
+  };
+
+  try {
+    await deleteFn(detection);
+    TransactionManager.registerDelete('unknown', detection, deleteFn, restoreFn);
   } catch (err) {
     console.error("Error deleting detection:", err);
     TransactionManager.showStatusToast("Failed to clear visitor log.", true);
@@ -1787,16 +1928,12 @@ window.submitAssignFace = async function() {
     closeAssignModal();
     
     // Show toast notification
-    if (window.TransactionManager) {
-      TransactionManager.showStatusToast("Face assigned successfully! Model retrained.");
-    } else {
-      alert("Face assigned successfully! Model retrained.");
-    }
+    TransactionManager.showStatusToast("Face assigned successfully! Model retrained.");
     
     await refreshUnknownDetections();
   } catch (err) {
     console.error('Failed to assign face:', err);
-    alert(`Error: ${err.message}`);
+    TransactionManager.showStatusToast(`Error: ${err.message}`, true);
   } finally {
     submitBtn.disabled = false;
     submitBtn.textContent = 'Train & Save';
@@ -4252,7 +4389,7 @@ function updateCharts() {
   for (let i = 6; i >= 0; i--) {
     const d = new Date(today);
     d.setDate(today.getDate() - i);
-    const dateStr = d.toISOString().split('T')[0];
+    const dateStr = getLocalDateString(d);
     
     // Format day labels
     const dayLabel = d.toLocaleDateString([], { weekday: 'short', month: 'numeric', day: 'numeric' });
@@ -4369,8 +4506,8 @@ async function loadPayrollSheet() {
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    startEl.value = firstDay.toISOString().split('T')[0];
-    endEl.value = lastDay.toISOString().split('T')[0];
+    startEl.value = getLocalDateString(firstDay);
+    endEl.value = getLocalDateString(lastDay);
   }
   
   const start = startEl.value;
@@ -7329,5 +7466,6 @@ function injectAdminLogoutButton() {
     }
   }
 }
+
 
 

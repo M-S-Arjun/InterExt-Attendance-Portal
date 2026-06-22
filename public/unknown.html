@@ -152,7 +152,13 @@
                 Real-time logs of unknown individuals detected entering or exiting the office premises via CCTV cameras.
               </p>
             </div>
-            <div class="header-right">
+            <div class="header-right" style="display: flex; gap: 8px; align-items: center;">
+              <button id="btn-unknown-undo" class="btn-undo" onclick="TransactionManager.undo()" title="Undo (Ctrl+Z)" disabled>
+                <i data-lucide="rotate-ccw"></i> Undo
+              </button>
+              <button id="btn-unknown-redo" class="btn-redo" onclick="TransactionManager.redo()" title="Redo (Ctrl+Y)" disabled>
+                <i data-lucide="rotate-cw"></i> Redo
+              </button>
               <button class="btn btn-secondary btn-icon" onclick="refreshUnknownDetections()">
                 <i data-lucide="refresh-cw"></i> Refresh Detections
               </button>
