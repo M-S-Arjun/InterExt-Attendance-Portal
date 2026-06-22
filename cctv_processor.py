@@ -205,22 +205,31 @@ class CCTVStreamProcessor(threading.Thread):
                     if "Entrance CCTV 1" in self.name and cx < w * 0.35:
                         is_roi_ignored = True
                     
-                    # Face recognition comparison
+                    # Vectorized face recognition: build employee matrix once per frame batch
+                    # and compute all similarity scores in a single matmul (O(N) instead of O(N*M))
                     emp_id = None
                     confidence = 0.0
                     if face.embedding is not None and model.embeddings_db:
                         embedding = face.embedding / np.linalg.norm(face.embedding)
-                        best_match = None
-                        best_score = 0
-                        for e_id, e_embed in model.embeddings_db.items():
-                            similarity = np.dot(embedding, e_embed)
-                            if similarity > best_score:
-                                best_score = similarity
-                                best_match = e_id
-                        
+
+                        # Rebuild embedding matrix cache if DB changed
+                        db_len = len(model.embeddings_db)
+                        if getattr(self, "_emb_matrix_len", -1) != db_len:
+                            emb_ids = list(model.embeddings_db.keys())
+                            emb_mat = np.array(list(model.embeddings_db.values()), dtype=np.float32)  # shape: (N, D)
+                            self._emb_ids = emb_ids
+                            self._emb_mat = emb_mat
+                            self._emb_matrix_len = db_len
+
+                        # Single matrix multiply gives scores for ALL employees at once
+                        scores = self._emb_mat @ embedding  # shape: (N,)
+                        best_idx = int(np.argmax(scores))
+                        best_score = float(scores[best_idx])
+                        best_match = self._emb_ids[best_idx]
+
                         if best_score >= self.threshold:
                             emp_id = best_match
-                            confidence = float(best_score)
+                            confidence = best_score
                             logger.info(f"[{self.name}] Face recognized: {emp_id} (score: {best_score:.3f}, threshold: {self.threshold})")
                         else:
                             logger.info(f"[{self.name}] Face unrecognized: best match {best_match} (score: {best_score:.3f}, threshold: {self.threshold})")
@@ -319,7 +328,7 @@ class CCTVStreamProcessor(threading.Thread):
         # Builds a cost matrix of shape (num_detections × num_tracks) and finds
         # the globally optimal match so each detection → at most 1 track and
         # each track → at most 1 detection. Handles 3-5 simultaneous people.
-        MATCH_THRESHOLD = 300.0  # pixels — generous to prevent track fragmentation on low frame rates
+        MATCH_THRESHOLD = 120.0  # pixels — tight to correctly isolate multiple people in the same frame
 
         if len(detections) > 0 and len(track_ids) > 0:
             cost_matrix = np.zeros((len(detections), len(track_ids)), dtype=np.float32)
@@ -357,10 +366,15 @@ class CCTVStreamProcessor(threading.Thread):
                     matched_tracks.add(tid)
 
         # Register every unmatched detection as a brand-new independent track
+        # Guard: limit max concurrent tracks to 8 to prevent memory exhaustion
+        MAX_CONCURRENT_TRACKS = 8
         for det_idx, det in enumerate(detections):
             if det_idx not in matched_detections:
                 if det.get("roi_ignored", False):
                     logger.info(f"[{self.name}] Skipping registration of new track in ignored ROI area at centroid {det['centroid']}")
+                    continue
+                if len(self.tracks) >= MAX_CONCURRENT_TRACKS:
+                    logger.warning(f"[{self.name}] Max concurrent tracks ({MAX_CONCURRENT_TRACKS}) reached. Dropping new detection.")
                     continue
                 self.register_track(det, now, frame)
 
@@ -594,11 +608,12 @@ class CCTVStreamProcessor(threading.Thread):
         track["track_max_x"] = max(track.get("track_max_x", curr_centroid[0]), curr_centroid[0])
 
         # Buffer frames for video recording
+        # Cap at 180 frames (~12s at 15fps) — memory safe with multiple concurrent tracks
         if frame is not None:
             if "frames_buffer" not in track:
                 track["frames_buffer"] = []
             track["frames_buffer"].append(frame.copy())
-            if len(track["frames_buffer"]) > 240:
+            if len(track["frames_buffer"]) > 180:
                 track["frames_buffer"].pop(0)
 
         # Path tracking and crossing checks
@@ -756,6 +771,16 @@ class CCTVStreamProcessor(threading.Thread):
                 track["crossing_point"] = crossing_point
                 track["crossing_direction"] = crossing_dir
                 logger.info(f"[{self.name}] [Path Track] Verified crossing at {crossing_point} for track {tid} with direction: {crossing_dir}")
+
+                # ── Immediate multi-person confirmation ──────────────────────────────────
+                # For recognized employees: confirm instantly at the moment of line crossing
+                # so that multiple people crossing simultaneously are all logged without
+                # waiting for their individual tracks to expire one-by-one.
+                best_emp = track.get("best_emp_id")
+                if best_emp and not track.get("confirmed", False):
+                    track["confirmed"] = True
+                    self.confirm_attendance_event(tid, track.get("best_frame", frame))
+                # Unknown visitors still confirm at track expiry (so we capture the full exit video)
 
         # Run fallback trajectory analysis if standard checks did not trigger
         if not track.get("crossed", False):
