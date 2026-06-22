@@ -144,6 +144,102 @@ app.use((req, res, next) => {
   next();
 });
 
+// Simple helper to parse cookies from headers
+function parseCookies(cookieHeader) {
+  const list = {};
+  if (!cookieHeader) return list;
+  cookieHeader.split(';').forEach(cookie => {
+    let [name, ...rest] = cookie.split('=');
+    name = name.trim();
+    if (!name) return;
+    const value = rest.join('=').trim();
+    list[name] = decodeURIComponent(value);
+  });
+  return list;
+}
+
+// Allowed public assets/endpoints
+const publicPaths = [
+  '/login',
+  '/api/admin/login',
+  '/style.css',
+  '/lucide.min.js',
+  '/logo.jpg',
+  '/manifest.json',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/sw.js',
+  '/favicon.ico'
+];
+
+function requireAdminAuth(req, res, next) {
+  const reqPath = req.path;
+  
+  // 1. Allow explicit public paths and worker app endpoints
+  if (
+    publicPaths.includes(reqPath) ||
+    reqPath.startsWith('/mobile') ||
+    reqPath.startsWith('/checkin') ||
+    reqPath.startsWith('/api/checkin') ||
+    reqPath.startsWith('/api/employee')
+  ) {
+    return next();
+  }
+  
+  // 2. Extract and verify token
+  const cookies = parseCookies(req.headers.cookie);
+  const adminToken = cookies['admin_token'];
+  
+  const db = database.read();
+  const settings = db.settings || {};
+  const expectedPassword = settings.adminPassword || 'admin123';
+  
+  if (adminToken === expectedPassword) {
+    return next();
+  }
+  
+  // 3. Reject API requests with 401
+  if (req.xhr || req.headers.accept?.includes('json') || reqPath.startsWith('/api/')) {
+    return res.status(401).json({ error: 'Unauthorized. Admin login required.' });
+  }
+  
+  // 4. Redirect standard browser page loads to login screen
+  res.redirect('/login');
+}
+
+app.use(requireAdminAuth);
+
+// GET /login route
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+// POST /api/admin/login endpoint
+app.post('/api/admin/login', (req, res) => {
+  try {
+    const { password } = req.body;
+    const db = database.read();
+    const settings = db.settings || {};
+    const expectedPassword = settings.adminPassword || 'admin123';
+    
+    if (password === expectedPassword) {
+      // Set a cookie (lasts 30 days)
+      res.cookie('admin_token', password, { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: false });
+      return res.json({ success: true });
+    }
+    
+    res.status(401).json({ error: 'Invalid admin password.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/logout endpoint
+app.post('/api/admin/logout', (req, res) => {
+  res.clearCookie('admin_token');
+  res.json({ success: true });
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Serve Employee Mobile Self-Service Portal at /mobile
@@ -1166,9 +1262,10 @@ app.delete('/api/unknown-detections/:id', (req, res) => {
 });
 
 // POST Assign Unknown Detection to Employee and Trigger retrain
+// POST Assign Unknown Detection to Employee and Trigger retrain
 app.post('/api/unknown-detections/assign', async (req, res) => {
   try {
-    const { detectionId, employeeId } = req.body;
+    const { detectionId, employeeId, registerAttendance, eventType } = req.body;
     if (!detectionId || !employeeId) {
       return res.status(400).json({ error: 'detectionId and employeeId are required.' });
     }
@@ -1192,6 +1289,182 @@ app.post('/api/unknown-detections/assign', async (req, res) => {
     const rawFacePath = path.join(__dirname, 'public', detection.rawFaceUrl);
     if (!fs.existsSync(rawFacePath)) {
       return res.status(404).json({ error: 'Raw face image file missing on disk.' });
+    }
+
+    // 1. Manually allot attendance if requested
+    if (registerAttendance) {
+      let resolvedEventType = eventType || 'auto';
+      if (resolvedEventType === 'auto') {
+        const camName = detection.cameraName || '';
+        if (camName.toLowerCase().includes('entrance') || camName.toLowerCase().includes('entry')) {
+          resolvedEventType = 'entry';
+        } else {
+          resolvedEventType = 'exit';
+        }
+      }
+
+      const timestamp = detection.timestamp || new Date().toISOString();
+      const eventDate = timestamp.split('T')[0];
+      
+      const existingAttendance = (db.attendance || []).find(
+        a => a.employeeId === employee.id && a.date === eventDate
+      );
+      
+      const now = new Date(timestamp);
+      const isScanLateTime = (() => {
+        if (!employee.shiftStart) return false;
+        const [sh, sm] = employee.shiftStart.split(':').map(Number);
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+        const shiftStartMinutes = sh * 60 + sm;
+        return nowMinutes > shiftStartMinutes;
+      })();
+      
+      const isLateCheckInPendingScan = existingAttendance && existingAttendance.status === 'late' && !existingAttendance.scannedCheckIn;
+      const isLateCheckIn = isLateCheckInPendingScan || (!existingAttendance && isScanLateTime);
+      
+      let punches = [];
+      if (existingAttendance) {
+        if (existingAttendance.punches && existingAttendance.punches.length > 0) {
+          punches = [...existingAttendance.punches];
+        } else {
+          if (existingAttendance.checkIn) {
+            punches.push({
+              time: existingAttendance.checkIn,
+              type: 'in',
+              siteName: existingAttendance.siteName || '—',
+              messageText: existingAttendance.messageText || 'Check-In',
+              source: existingAttendance.scannedCheckIn ? 'Selfie' : 'WhatsApp'
+            });
+          }
+          if (existingAttendance.checkOut) {
+            punches.push({
+              time: existingAttendance.checkOut,
+              type: 'out',
+              siteName: existingAttendance.siteName || '—',
+              messageText: existingAttendance.messageText || 'Check-Out',
+              source: existingAttendance.scannedCheckIn ? 'Selfie' : 'WhatsApp'
+            });
+          }
+        }
+      }
+      
+      const newPunchType = resolvedEventType === 'entry' ? 'in' : 'out';
+      
+      punches.push({
+        time: timestamp,
+        type: newPunchType,
+        siteName: detection.cameraName || 'CCTV Camera',
+        messageText: `CCTV Face manually resolved (${detection.confidence ? (detection.confidence * 100).toFixed(0) : '100'}%)`,
+        source: 'CCTV',
+        videoUrl: detection.videoUrl || ''
+      });
+      
+      const uniquePunches = [];
+      const seen = new Set();
+      const DEDUPE_WINDOW_MS = 8 * 1000;
+      
+      punches.forEach(p => {
+        const t = new Date(p.time).getTime();
+        const bucket = Math.floor(t / DEDUPE_WINDOW_MS) * DEDUPE_WINDOW_MS;
+        const key = `${bucket}_${p.type}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          uniquePunches.push(p);
+        }
+      });
+      
+      uniquePunches.sort((a, b) => new Date(a.time) - new Date(b.time));
+      
+      let finalCheckIn = null;
+      let finalCheckOut = null;
+      const ins = uniquePunches.filter(p => p.type === 'in');
+      if (ins.length > 0) finalCheckIn = ins[0].time;
+      
+      if (uniquePunches.length > 0) {
+        const lastPunch = uniquePunches[uniquePunches.length - 1];
+        if (lastPunch.type === 'in') {
+          finalCheckOut = null;
+        } else {
+          finalCheckOut = lastPunch.time;
+        }
+      }
+      
+      let finalLunchOut = null;
+      let finalLunchIn = null;
+      for (let i = 0; i < uniquePunches.length; i++) {
+        const p = uniquePunches[i];
+        const pDate = new Date(p.time);
+        const pHour = pDate.getHours();
+        if (p.type === 'out' && pHour === 13 && !finalLunchOut) {
+          finalLunchOut = p.time;
+          for (let j = i + 1; j < uniquePunches.length; j++) {
+            if (uniquePunches[j].type === 'in') {
+              finalLunchIn = uniquePunches[j].time;
+              break;
+            }
+          }
+        }
+      }
+      
+      const attendanceEntry = {
+        employeeId: employee.id,
+        employeeName: employee.name,
+        date: eventDate,
+        siteName: detection.siteName || 'Office',
+        messageText: '',
+        facialRecognitionMatch: true,
+        matchConfidence: detection.confidence || 1.0,
+        punches: uniquePunches,
+        checkIn: finalCheckIn,
+        checkOut: finalCheckOut,
+        lunchOut: finalLunchOut,
+        lunchIn: finalLunchIn,
+        travelHours: existingAttendance ? (existingAttendance.travelHours || 0.0) : 0.0,
+        notes: existingAttendance ? (existingAttendance.notes || "") : "",
+        status: existingAttendance ? existingAttendance.status : "",
+        isLate: existingAttendance ? (existingAttendance.isLate || isLateCheckIn) : isLateCheckIn,
+        isHospitalCase: existingAttendance ? existingAttendance.isHospitalCase : false,
+        hospitalHours: existingAttendance ? existingAttendance.hospitalHours : 0.0,
+        scannedCheckIn: existingAttendance ? existingAttendance.scannedCheckIn : false
+      };
+      
+      if (existingAttendance) {
+        attendanceEntry.id = existingAttendance.id;
+        if (existingAttendance.messageText) {
+          attendanceEntry.messageText = existingAttendance.messageText + ` | CCTV Face manually resolved - auto ${resolvedEventType}`;
+        } else {
+          attendanceEntry.messageText = `CCTV Face manually resolved - auto ${resolvedEventType}`;
+        }
+      } else {
+        if (isLateCheckIn) {
+          attendanceEntry.isLate = true;
+          attendanceEntry.scannedCheckIn = true;
+          attendanceEntry.status = "Late Check-in";
+        }
+        attendanceEntry.messageText = `CCTV Face manually resolved - auto ${resolvedEventType}`;
+      }
+      
+      const cameraEvent = {
+        id: `cctv_log_${Date.now()}`,
+        employeeId: employee.id,
+        employeeName: employee.name,
+        eventType: resolvedEventType,
+        siteName: detection.siteName || 'Office',
+        timestamp: timestamp,
+        date: eventDate,
+        imageUrl: detection.imageUrl || '',
+        imageFilename: 'cctv_frame.jpg',
+        status: 'manually_resolved',
+        confidence: detection.confidence || 1.0,
+        videoUrl: detection.videoUrl || ''
+      };
+      
+      const savedEvent = database.saveCameraEvent(cameraEvent);
+      const savedAttendance = database.saveAttendance(attendanceEntry);
+      
+      io.emit('attendance_updated', savedAttendance);
+      io.emit('camera_event_recorded', savedEvent);
+      console.log(`[API] Manually recorded camera event and attendance for employee: ${employee.name}`);
     }
 
     // Clean name for directory format (matches face recognition python service formatting)

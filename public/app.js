@@ -394,6 +394,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadSettingsForm();
   }
   
+  // Inject Logout Button in Sidebar
+  injectAdminLogoutButton();
+  
   // Create icons
   if (window.lucide) {
     window.lucide.createIcons();
@@ -1662,8 +1665,8 @@ window.openAssignModal = function(detectionId) {
           </h3>
           <button class="btn-close" onclick="closeAssignModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-secondary);">&times;</button>
         </div>
-        <div class="modal-body" style="padding: 20px;">
-          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 16px;">
+        <div class="modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 16px;">
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0;">
             Select the employee this face belongs to. The raw CCTV face crop will be added to their training folder and the model will retrain.
           </p>
           <input type="hidden" id="assign-det-id">
@@ -1671,6 +1674,22 @@ window.openAssignModal = function(detectionId) {
             <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-primary);">Employee Name</label>
             <select id="assign-emp-select" class="form-control" style="width: 100%; padding: 8px; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); background: rgba(0,0,0,0.2); color: var(--text-primary);">
               <!-- Populated dynamically -->
+            </select>
+          </div>
+          
+          <div class="form-group" style="margin-bottom: 0;">
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--text-primary); cursor: pointer; user-select: none;">
+              <input type="checkbox" id="assign-register-attendance" checked style="accent-color: var(--color-primary); cursor: pointer;">
+              <span>Also allot/record attendance for this detection</span>
+            </label>
+          </div>
+          
+          <div class="form-group" id="assign-event-type-group" style="display: flex; flex-direction: column; gap: 8px;">
+            <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-primary);">Event Direction</label>
+            <select id="assign-event-type" class="form-control" style="width: 100%; padding: 8px; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); background: rgba(0,0,0,0.2); color: var(--text-primary);">
+              <option value="auto">Auto-detect from Camera Name</option>
+              <option value="entry">Entry (Check-In)</option>
+              <option value="exit">Exit (Check-Out)</option>
             </select>
           </div>
         </div>
@@ -1681,7 +1700,24 @@ window.openAssignModal = function(detectionId) {
       </div>
     `;
     document.body.appendChild(modal);
+
+    // Toggle event-type selection based on attendance check
+    const checkbox = document.getElementById('assign-register-attendance');
+    const typeGroup = document.getElementById('assign-event-type-group');
+    if (checkbox && typeGroup) {
+      checkbox.addEventListener('change', (e) => {
+        typeGroup.style.display = e.target.checked ? 'flex' : 'none';
+      });
+    }
   }
+
+  // Reset defaults on open
+  const checkbox = document.getElementById('assign-register-attendance');
+  const typeSelect = document.getElementById('assign-event-type');
+  const typeGroup = document.getElementById('assign-event-type-group');
+  if (checkbox) checkbox.checked = true;
+  if (typeSelect) typeSelect.value = 'auto';
+  if (typeGroup) typeGroup.style.display = 'flex';
 
   // Set the hidden detection ID
   document.getElementById('assign-det-id').value = detectionId;
@@ -1718,6 +1754,8 @@ window.closeAssignModal = function() {
 window.submitAssignFace = async function() {
   const detectionId = document.getElementById('assign-det-id').value;
   const employeeId = document.getElementById('assign-emp-select').value;
+  const registerAttendance = document.getElementById('assign-register-attendance')?.checked || false;
+  const eventType = document.getElementById('assign-event-type')?.value || 'auto';
   const submitBtn = document.getElementById('btn-submit-assign');
 
   if (!detectionId || !employeeId) {
@@ -1732,7 +1770,12 @@ window.submitAssignFace = async function() {
     const resp = await fetch('/api/unknown-detections/assign', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ detectionId, employeeId })
+      body: JSON.stringify({ 
+        detectionId, 
+        employeeId, 
+        registerAttendance, 
+        eventType 
+      })
     });
 
     if (!resp.ok) {
@@ -3896,6 +3939,30 @@ async function handleSettingsSubmit(e) {
     console.error("Settings save failed:", err);
   }
 }
+
+async function handleAdminPasswordSubmit(e) {
+  e.preventDefault();
+  const password = document.getElementById('admin-password-input').value;
+  if (!password || password.trim().length < 4) {
+    alert("Password must be at least 4 characters long.");
+    return;
+  }
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminPassword: password })
+    }).then(r => r.json());
+    
+    state.settings = res;
+    alert("Admin password updated successfully!");
+    document.getElementById('admin-password-input').value = "";
+  } catch (err) {
+    console.error("Password update failed:", err);
+    alert("Error updating password.");
+  }
+}
+window.handleAdminPasswordSubmit = handleAdminPasswordSubmit;
 
 // --- Date Range Filter adjustments ---
 function syncDateFilterInputs() {
@@ -7216,5 +7283,51 @@ window.handleRepaymentSubmit = async function(e) {
     alert(err.message);
   }
 };
+
+window.handleAdminLogout = async function() {
+  if (confirm("Are you sure you want to log out from the Admin panel?")) {
+    try {
+      await fetch('/api/admin/logout', { method: 'POST' });
+      window.location.href = '/login';
+    } catch (err) {
+      console.error("Logout failed:", err);
+      document.cookie = "admin_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+      window.location.href = '/login';
+    }
+  }
+}
+
+function injectAdminLogoutButton() {
+  const footer = document.querySelector('.sidebar-footer');
+  if (footer) {
+    if (document.getElementById('admin-logout-btn')) return;
+    
+    const logoutBtn = document.createElement('button');
+    logoutBtn.id = 'admin-logout-btn';
+    logoutBtn.className = 'nav-item';
+    logoutBtn.style.cssText = 'background: none; border: none; width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 20px; color: var(--text-tertiary); cursor: pointer; border-radius: var(--border-radius-sm); transition: all 0.2s; margin-bottom: 8px; font-family: inherit; font-size: 0.85rem;';
+    logoutBtn.innerHTML = `
+      <i data-lucide="log-out" style="width: 18px; height: 18px;"></i>
+      <span>Admin Logout</span>
+    `;
+    
+    logoutBtn.onmouseover = () => { 
+      logoutBtn.style.color = 'var(--color-error)'; 
+      logoutBtn.style.background = 'rgba(244, 63, 94, 0.05)'; 
+    };
+    logoutBtn.onmouseout = () => { 
+      logoutBtn.style.color = 'var(--text-tertiary)'; 
+      logoutBtn.style.background = 'none'; 
+    };
+    
+    logoutBtn.onclick = window.handleAdminLogout;
+    
+    footer.insertBefore(logoutBtn, footer.firstChild);
+    
+    if (window.lucide) {
+      window.lucide.createIcons();
+    }
+  }
+}
 
 

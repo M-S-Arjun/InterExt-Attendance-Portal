@@ -333,6 +333,30 @@
           </div>
         </div>
 
+        <!-- Admin Access Password Card -->
+        <div class="glass-card" style="margin-top: 25px; padding: 20px;">
+          <div class="card-header flex-header" style="padding: 0 0 15px 0; border-bottom: 1px solid var(--glass-border); margin-bottom: 15px;">
+            <div class="header-left">
+              <h3 style="font-size: 1.1rem; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                <i data-lucide="shield-check" style="color: var(--color-primary);"></i>
+                Admin Access Control
+              </h3>
+              <p>Configure the security password for accessing the Admin Attendance Panel</p>
+            </div>
+          </div>
+          <form id="admin-password-form" onsubmit="handleAdminPasswordSubmit(event)">
+            <div style="display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
+              <div class="form-group" style="flex: 1 1 250px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 0;">
+                <label style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary);">New Admin Password</label>
+                <input type="password" id="admin-password-input" class="form-control" placeholder="Enter new admin password" required style="width: 100%; max-width: 320px;">
+              </div>
+              <button type="submit" class="btn btn-primary btn-icon" style="height: 38px;">
+                <i data-lucide="key"></i> Update Admin Password
+              </button>
+            </div>
+          </form>
+        </div>
+
         <!-- Mobile App download section -->
         <div class="glass-card" style="margin-top: 25px; padding: 20px;">
           <div class="card-header flex-header" style="padding: 0 0 15px 0; border-bottom: 1px solid var(--glass-border); margin-bottom: 15px;">
