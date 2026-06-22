@@ -135,6 +135,7 @@ def train_embeddings():
         images_dir = request.form.get('images_dir')
         force_val = request.form.get('force', 'false').lower()
         force_retrain = force_val in ('true', '1', 'yes')
+        employee_id = request.form.get('employee_id')
         
         if not images_dir:
             return jsonify({'error': 'images_dir parameter required'}), 400
@@ -142,7 +143,13 @@ def train_embeddings():
         if not os.path.exists(images_dir):
             return jsonify({'error': f'Directory not found: {images_dir}'}), 404
         
-        logger.info(f"Training embeddings from {images_dir} (force: {force_retrain})")
+        if employee_id:
+            logger.info(f"Targeted training requested for employee: {employee_id}")
+            if model.embeddings_db:
+                model.embeddings_db.pop(employee_id, None)
+            force_retrain = False
+            
+        logger.info(f"Training embeddings from {images_dir} (force: {force_retrain}, target: {employee_id})")
         
         # Callback to save intermediate embeddings dynamically
         def save_cb():

@@ -239,25 +239,8 @@ class FaceRecognitionModel:
     
     def train_employee_embeddings(self, employee_images_dir: str, force_retrain: bool = False, save_callback=None) -> Dict[str, np.ndarray]:
         """
-        Train/build embeddings database from employee images
-        
-        Directory structure expected:
-        employee_images_dir/
-        employee_id_1/
-        photo1.jpg
-        photo2.jpg
-        employee_id_2/
-        photo1.jpg
-        
-        Args:
-        employee_images_dir: Directory containing employee image folders
-        force_retrain: If True, retrain all employees; otherwise skip existing ones
-        save_callback: Function to call to save intermediate progress
-        
-        Returns:
-        Dictionary mapping employee_id to average embedding vector
+        Train/build embeddings database from employee images with image embeddings cache
         """
-        # Maintain existing loaded database, only adding new ones or overwriting if forced
         embeddings_db = self.embeddings_db.copy()
         
         if not os.path.exists(employee_images_dir):
@@ -268,6 +251,18 @@ class FaceRecognitionModel:
                         if os.path.isdir(os.path.join(employee_images_dir, d))]
         
         logger.info(f"Training embeddings for {len(employee_dirs)} employees (force_retrain={force_retrain})")
+        
+        # Load image embedding cache
+        cache_path = os.path.abspath(os.path.join(os.path.dirname(employee_images_dir), 'data', 'image_embeddings_cache.json')).replace('\\', '/')
+        image_cache = {}
+        cache_updated = False
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r') as f:
+                    image_cache = json.load(f)
+                logger.info(f"Loaded {len(image_cache)} cached image embeddings.")
+            except Exception as cache_err:
+                logger.warning(f"Could not load image embeddings cache: {cache_err}")
         
         for employee_id in employee_dirs:
             # Skip if already trained and not forcing a retrain
@@ -286,13 +281,21 @@ class FaceRecognitionModel:
             employee_embeddings = []
             
             for image_file in image_files:
-                image_path = os.path.join(employee_path, image_file)
-                embedding = self.extract_face_embedding(image_path)
+                cache_key = f"{employee_id}/{image_file}"
+                embedding = None
+                if cache_key in image_cache:
+                    embedding = np.array(image_cache[cache_key], dtype=np.float32)
+                else:
+                    image_path = os.path.join(employee_path, image_file)
+                    embedding = self.extract_face_embedding(image_path)
+                    if embedding is not None:
+                        image_cache[cache_key] = embedding.tolist()
+                        cache_updated = True
                 
                 if embedding is not None:
                     employee_embeddings.append(embedding)
                 else:
-                    logger.warning(f"Failed to extract embedding from {image_path}")
+                    logger.warning(f"Failed to extract embedding from {employee_id}/{image_file}")
             
             # Average embeddings for the employee
             if employee_embeddings:
@@ -311,12 +314,24 @@ class FaceRecognitionModel:
                 logger.warning(f"No valid embeddings for employee {employee_id}")
         
         self.embeddings_db = embeddings_db
+        
+        # Save updated cache to disk
+        if cache_updated:
+            try:
+                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+                with open(cache_path, 'w') as f:
+                    json.dump(image_cache, f)
+                logger.info(f"Saved {len(image_cache)} image embeddings to cache.")
+            except Exception as cache_err:
+                logger.warning(f"Could not save image embeddings cache: {cache_err}")
+                
         logger.info(f"Training complete. {len(embeddings_db)} employees in database")
         return embeddings_db
     
     def save_embeddings(self, save_path: str):
         """Save embeddings database to file"""
         try:
+            save_path = os.path.abspath(save_path).replace('\\', '/')
             # Convert numpy arrays to lists for JSON serialization
             embeddings_json = {
                 emp_id: embedding.tolist() 
@@ -333,6 +348,7 @@ class FaceRecognitionModel:
     def load_embeddings(self, load_path: str):
         """Load embeddings database from file"""
         try:
+            load_path = os.path.abspath(load_path).replace('\\', '/')
             with open(load_path, 'r') as f:
                 embeddings_json = json.load(f)
             
