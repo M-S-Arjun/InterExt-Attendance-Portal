@@ -5194,7 +5194,7 @@ function openSelfieLightbox(imageUrl, metaHtml, videoUrl = '') {
               </div>
               <div style="position: relative; overflow: hidden; border-radius: 8px; border: 1px solid var(--glass-border); background: #0b0c13; aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-lg);">
                 <video id="selfie-modal-video" controls autoplay style="max-width: 100%; max-height: 100%; object-fit: contain;">
-                  <source src="${videoUrl}" type="video/mp4">
+                  <source src="${videoUrl}" type="${videoUrl.toLowerCase().endsWith('.webm') ? 'video/webm' : 'video/mp4'}">
                   Your browser does not support the video tag.
                 </video>
               </div>
@@ -5310,7 +5310,9 @@ async function openDisputeInspector(employeeId, employeeName, date) {
                  title="Watch Capture Video">
                 ▶
               </div>
-              <video id="dispute-video" src="${match.videoUrl}" controls style="display: none; max-width: 100%; max-height: 50vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border); object-fit: contain; margin: 0 auto;"></video>
+              <video id="dispute-video" controls style="display: none; max-width: 100%; max-height: 50vh; border-radius: 8px; box-shadow: var(--shadow-lg); border: 1px solid var(--glass-border); object-fit: contain; margin: 0 auto;">
+                <source src="${match.videoUrl}" type="${match.videoUrl && match.videoUrl.toLowerCase().endsWith('.webm') ? 'video/webm' : 'video/mp4'}">
+              </video>
             ` : ''}
             <div style="position: absolute; bottom: 10px; right: 10px; background: rgba(0, 0, 0, 0.7); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 500; pointer-events: none;">
               ${match.videoUrl ? 'CCTV Video Available' : 'Stored Face Snapshot'}

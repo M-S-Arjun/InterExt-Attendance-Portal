@@ -478,19 +478,22 @@ class CCTVStreamProcessor(threading.Thread):
         crossing_point = None
         crossing_dir = ""
         
+        if track["frames_active"] < 5:
+            return
+
         if is_entry_cam:
             y_line = int(h * 0.6)
             x_left = int(w * 0.35)
             x_right = int(w * 0.70)
             
             # Entry: track ends below/near y_line and overall downward movement (y increases)
-            if y_end > y_line - 50 and (y_end - y_start > 15 or y_end - p_min_y > 15):
+            if y_end > y_line - 50 and (y_end - y_start > 50 or y_end - p_min_y > 50):
                 crossed = True
                 crossing_point = (int(x_end), y_line)
                 crossing_dir = "entry"
                 logger.info(f"[{self.name}] [Fallback Path] Verified entry by downward motion vector: {y_start:.1f} -> {y_end:.1f}")
             # Exit: track ends above/near y_line and overall upward movement (y decreases)
-            elif y_end < y_line + 50 and (y_start - y_end > 15 or p_max_y - y_end > 15):
+            elif y_end < y_line + 50 and (y_start - y_end > 50 or p_max_y - y_end > 50):
                 crossed = True
                 crossing_point = (int(x_end), y_line)
                 crossing_dir = "exit"
@@ -498,24 +501,24 @@ class CCTVStreamProcessor(threading.Thread):
             else:
                 # Check horizontal displacement based on start position relative to door posts
                 if 0.35 * w <= x_start <= 0.70 * w:
-                    if x_start - x_end > 15:
+                    if x_start - x_end > 50:
                         crossed = True
                         crossing_point = (x_left, int(y_end))
                         crossing_dir = "entry"
                         logger.info(f"[{self.name}] [Fallback Path] Verified entry by leftward turn: {x_start:.1f} -> {x_end:.1f}")
-                    elif x_end - x_start > 15:
+                    elif x_end - x_start > 50:
                         crossed = True
                         crossing_point = (x_right, int(y_end))
                         crossing_dir = "entry"
                         logger.info(f"[{self.name}] [Fallback Path] Verified entry by rightward turn: {x_start:.1f} -> {x_end:.1f}")
                 elif x_start < 0.35 * w:
-                    if x_end - x_start > 15:
+                    if x_end - x_start > 50:
                         crossed = True
                         crossing_point = (x_left, int(y_end))
                         crossing_dir = "exit"
                         logger.info(f"[{self.name}] [Fallback Path] Verified exit by rightward movement from left: {x_start:.1f} -> {x_end:.1f}")
                 elif x_start > 0.70 * w:
-                    if x_start - x_end > 15:
+                    if x_start - x_end > 50:
                         crossed = True
                         crossing_point = (x_right, int(y_end))
                         crossing_dir = "exit"
@@ -542,9 +545,9 @@ class CCTVStreamProcessor(threading.Thread):
                 # Check if there is any substantial movement (vertical or horizontal)
                 x_start = track["centroids"][0][0]
                 x_end = track["centroids"][-1][0]
-                moved_horizontally = abs(x_end - x_start) > 15 or x_end < x_left or x_end > x_right
+                moved_horizontally = abs(x_end - x_start) > 60 or x_end < x_left or x_end > x_right
                 
-                if downward_dist > 15 or upward_dist > 15 or moved_horizontally:
+                if downward_dist > 65 or upward_dist > 65 or moved_horizontally:
                     crossed = True
                     crossing_point = (int(x_end), int(y_end))
                     if downward_dist > upward_dist:
@@ -750,7 +753,7 @@ class CCTVStreamProcessor(threading.Thread):
                     downward_dist = max(y_end - y_start, y_end - track_min_y)
                     upward_dist = max(y_start - y_end, track_max_y - y_end)
 
-                    if downward_dist > 15 or upward_dist > 15:
+                    if track["frames_active"] >= 5 and (downward_dist > 65 or upward_dist > 65):
                         has_crossed_boundary = True
                         if crossing_point_candidate is None:
                             crossing_point_candidate = (curr_x, curr_y)
@@ -906,14 +909,16 @@ class CCTVStreamProcessor(threading.Thread):
             try:
                 out_dir = r"D:\Whatsapp Attendance Tracking\public\uploads\camera_videos"
                 os.makedirs(out_dir, exist_ok=True)
-                video_filename = f"video_{int(time.time() * 1000)}_{emp_id}.mp4"
+                video_filename = f"video_{int(time.time() * 1000)}_{emp_id}.webm"
                 video_path = os.path.join(out_dir, video_filename)
                 
                 h_f, w_f = frames_buffer[0].shape[:2]
-                fourcc = cv2.VideoWriter_fourcc(*'avc1')
+                fourcc = cv2.VideoWriter_fourcc(*'VP80')
                 out = cv2.VideoWriter(video_path, fourcc, 15.0, (w_f, h_f))
                 if not out.isOpened():
-                    # Fallback to mp4v if avc1 fails
+                    # Fallback to mp4v if VP80 fails
+                    video_filename = f"video_{int(time.time() * 1000)}_{emp_id}.mp4"
+                    video_path = os.path.join(out_dir, video_filename)
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                     out = cv2.VideoWriter(video_path, fourcc, 15.0, (w_f, h_f))
                 
