@@ -3933,10 +3933,7 @@ app.post('/api/ai/query', (req, res) => {
     }
 
     const cleanQuery = query.toLowerCase().trim();
-    const today = new Date();
-    // Get local date in YYYY-MM-DD format using +05:30 offset
-    const localTime = new Date(today.getTime() + (5.5 * 60 * 60 * 1000));
-    const todayStr = localTime.toISOString().substring(0, 10);
+    const todayStr = getLocalDateString();
     
     // Read current database state
     const db = database.read();
@@ -3945,6 +3942,11 @@ app.post('/api/ai/query', (req, res) => {
     
     let steps = [];
     let responseText = "";
+
+    // Helper functions for statuses
+    const isPresent = (status) => ['checked-in', 'completed', 'late', 'Late Check-in', 'Early Check-out', 'half-day leave'].includes(status);
+    const isLeave = (status) => status === 'leave';
+    const isAbsent = (status) => status === 'absent';
 
     // 1. Intent: Present Count / Present List
     if (cleanQuery.includes("present") || cleanQuery.includes("staff members are present") || cleanQuery.includes("attendance today")) {
@@ -3955,7 +3957,7 @@ app.post('/api/ai/query', (req, res) => {
         "Putting it all together..."
       ];
       
-      const presentLogs = dailyLogs.filter(log => log.status === 'PRESENT' || log.status === 'HALF DAY');
+      const presentLogs = dailyLogs.filter(log => isPresent(log.status));
       const count = presentLogs.length;
       
       if (count === 0) {
@@ -3981,10 +3983,10 @@ app.post('/api/ai/query', (req, res) => {
       ];
       
       // Filter active employees
-      const activeEmployees = employees.filter(emp => emp.status !== 'INACTIVE');
+      const activeEmployees = employees.filter(emp => emp.status === 'active');
       // Find who is absent or not in logs
-      const presentIds = new Set(dailyLogs.filter(log => log.status === 'PRESENT' || log.status === 'HALF DAY').map(log => log.employeeId));
-      const leaveIds = new Set(dailyLogs.filter(log => log.status === 'LEAVE').map(log => log.employeeId));
+      const presentIds = new Set(dailyLogs.filter(log => isPresent(log.status)).map(log => log.employeeId));
+      const leaveIds = new Set(dailyLogs.filter(log => isLeave(log.status)).map(log => log.employeeId));
       
       const absentEmployees = activeEmployees.filter(emp => !presentIds.has(emp.id) && !leaveIds.has(emp.id));
       const count = absentEmployees.length;
@@ -4010,7 +4012,7 @@ app.post('/api/ai/query', (req, res) => {
         "Putting it all together..."
       ];
       
-      const leaveLogs = dailyLogs.filter(log => log.status === 'LEAVE');
+      const leaveLogs = dailyLogs.filter(log => isLeave(log.status));
       const count = leaveLogs.length;
       
       if (count === 0) {
