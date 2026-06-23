@@ -7696,7 +7696,7 @@ window.sendChatMessage = async function() {
         msgs.scrollTop = msgs.scrollHeight;
         
         // Short delay for animation
-        await new Promise(res => setTimeout(res, 400));
+        await new Promise(res => setTimeout(res, 50));
       }
       
       // Complete final step icon
@@ -7705,7 +7705,7 @@ window.sendChatMessage = async function() {
         lastSpin.className = 'step-icon success';
       }
       
-      await new Promise(res => setTimeout(res, 200));
+      await new Promise(res => setTimeout(res, 50));
       
       // Clear steps and render final response
       assistantMsg.innerHTML = `

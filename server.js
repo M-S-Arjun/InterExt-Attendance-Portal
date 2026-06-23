@@ -3950,13 +3950,19 @@ function levenshteinDistance(s1, s2) {
 // Typo-tolerant keyword matching function
 function hasFuzzyKeyword(query, keywords, threshold = 2) {
   const cleanQuery = query.toLowerCase().trim();
+  
+  // 1. Direct substring check on the whole query first (handles missing spaces)
+  for (const keyword of keywords) {
+    if (cleanQuery.includes(keyword)) {
+      return true;
+    }
+  }
+  
+  // 2. Word-by-word edit distance check for spelling typos
   const words = cleanQuery.split(/\s+/).map(w => w.replace(/[^\w]/g, ''));
   for (const word of words) {
     if (word.length < 3) continue;
     for (const keyword of keywords) {
-      if (word.includes(keyword) || keyword.includes(word)) {
-        return true;
-      }
       if (levenshteinDistance(word, keyword) <= threshold) {
         return true;
       }
