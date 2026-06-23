@@ -3796,6 +3796,62 @@ span.flatpickr-weekday {
   background: var(--color-primary-hover, #e05e00);
   box-shadow: 0 6px 20px rgba(255, 107, 0, 0.6);
 }
+
+/* Chatbot speech bubble popup */
+.chatbot-popup-bubble {
+  position: fixed;
+  bottom: 32px;
+  right: 92px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--glass-border);
+  color: var(--text-primary);
+  padding: 10px 16px;
+  border-radius: 12px;
+  box-shadow: var(--shadow-xl, 0 12px 40px rgba(0,0,0,0.15));
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.82rem;
+  font-weight: 500;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+  animation: pop-bounce 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  opacity: 0;
+  transform: scale(0.8) translateY(10px);
+}
+@keyframes pop-bounce {
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.chatbot-popup-bubble::after {
+  content: '';
+  position: absolute;
+  right: -6px;
+  bottom: 18px;
+  width: 10px;
+  height: 10px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--glass-border);
+  border-bottom: 1px solid var(--glass-border);
+  transform: rotate(-45deg);
+}
+.chatbot-popup-close {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  margin-left: 4px;
+}
+.chatbot-popup-close:hover {
+  color: var(--color-primary);
+}
+
 .chatbot-container {
   position: fixed;
   bottom: 96px;
@@ -3803,8 +3859,8 @@ span.flatpickr-weekday {
   width: 360px;
   height: 500px;
   border-radius: 16px;
-  background: var(--bg-card, #121420);
-  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
+  background: var(--bg-secondary);
+  border: 1px solid var(--glass-border);
   box-shadow: var(--shadow-xl, 0 12px 40px rgba(0, 0, 0, 0.25));
   display: flex;
   flex-direction: column;
@@ -3885,7 +3941,7 @@ span.flatpickr-weekday {
   box-shadow: 0 4px 12px rgba(255, 107, 0, 0.2);
 }
 .chat-message.assistant {
-  background: var(--bg-secondary, #1a1d2e);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
   align-self: flex-start;
   border-radius: 12px 12px 12px 0;
@@ -3983,7 +4039,7 @@ span.flatpickr-weekday {
   align-items: center;
   padding: 12px 20px;
   border-top: 1px solid var(--glass-border);
-  background: var(--bg-card);
+  background: var(--bg-tertiary);
   gap: 8px;
 }
 .chatbot-input-container input {

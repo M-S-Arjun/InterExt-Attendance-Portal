@@ -5166,7 +5166,7 @@ function openSelfieLightbox(imageUrl, metaHtml, videoUrl = '') {
   const modalWidth = (imageUrl && videoUrl) ? '800px' : '500px';
   
   modal.innerHTML = `
-    <div class="modal-content" style="max-width: ${modalWidth}; background: var(--bg-card, #121420); border: 1px solid var(--glass-border); border-radius: var(--border-radius-md); box-shadow: var(--shadow-xl); overflow: hidden; display: flex; flex-direction: column; transition: max-width 0.3s ease;">
+    <div class="modal-content" style="max-width: ${modalWidth}; background: var(--bg-secondary); border: 1px solid var(--glass-border); border-radius: var(--border-radius-md); box-shadow: var(--shadow-xl); overflow: hidden; display: flex; flex-direction: column; transition: max-width 0.3s ease;">
       <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--glass-border);">
         <h3 id="selfie-modal-title" style="margin: 0; font-size: 1.1rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
           <i data-lucide="fingerprint" style="color: var(--color-primary); width: 20px; height: 20px;"></i>
@@ -5207,11 +5207,11 @@ function openSelfieLightbox(imageUrl, metaHtml, videoUrl = '') {
         </div>
         
         <!-- Metadata section -->
-        <div id="selfie-modal-meta" style="background: rgba(255,255,255,0.02); border: 1px solid var(--glass-border); border-radius: 8px; padding: 16px; font-size: 0.85rem; line-height: 1.6; color: var(--text-secondary);">
+        <div id="selfie-modal-meta" style="background: var(--bg-tertiary); border: 1px solid var(--glass-border); border-radius: 8px; padding: 16px; font-size: 0.85rem; line-height: 1.6; color: var(--text-secondary);">
           ${metaHtml}
         </div>
       </div>
-      <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--glass-border); display: flex; justify-content: flex-end; background: rgba(0,0,0,0.15);">
+      <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--glass-border); display: flex; justify-content: flex-end; background: var(--bg-tertiary);">
         <button type="button" class="btn btn-secondary" onclick="closeSelfieModal()" style="padding: 8px 16px; font-size: 0.85rem; border-radius: var(--border-radius-sm); border: 1px solid var(--glass-border); background: transparent; color: var(--text-primary); cursor: pointer; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='rgba(255,255,255,0.05)'" onmouseout="this.style.backgroundColor='transparent'">Close</button>
       </div>
     </div>
@@ -7519,14 +7519,39 @@ function injectChatbot() {
   trigger.id = 'chatbot-trigger';
   trigger.className = 'chatbot-trigger';
   trigger.onclick = toggleChatbot;
-  trigger.innerHTML = `<i data-lucide="message-square" style="width: 24px; height: 24px;"></i>`;
+  trigger.innerHTML = `<i data-lucide="bot" style="width: 28px; height: 28px;"></i>`;
   document.body.appendChild(trigger);
+  
+  // Setup popup prompt bubble after 4 seconds
+  setTimeout(() => {
+    const chatContainer = document.getElementById('chatbot-container');
+    if (chatContainer && chatContainer.classList.contains('hidden') && !document.getElementById('chatbot-popup')) {
+      const bubble = document.createElement('div');
+      bubble.id = 'chatbot-popup';
+      bubble.className = 'chatbot-popup-bubble';
+      bubble.innerHTML = `
+        <div style="cursor: pointer; display: flex; align-items: center; gap: 8px;" onclick="window.toggleChatbot()">
+          <span>Need help? Ask Assist.AI! 🤖</span>
+        </div>
+        <button class="chatbot-popup-close" onclick="event.stopPropagation(); window.dismissChatbotPopup()">&times;</button>
+      `;
+      document.body.appendChild(bubble);
+    }
+  }, 4000);
   
   // Refresh icons
   if (window.lucide) window.lucide.createIcons();
 }
 
+window.dismissChatbotPopup = function() {
+  const bubble = document.getElementById('chatbot-popup');
+  if (bubble) bubble.remove();
+};
+
 window.toggleChatbot = function() {
+  // Dismiss popup speech bubble if open
+  window.dismissChatbotPopup();
+  
   const container = document.getElementById('chatbot-container');
   if (container) {
     container.classList.toggle('hidden');
