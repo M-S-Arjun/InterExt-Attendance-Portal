@@ -570,6 +570,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (attCheckout) attCheckout.addEventListener('change', updateCalculatedHoursAndWage);
   if (attIsHospital) attIsHospital.addEventListener('change', updateCalculatedHoursAndWage);
   if (attHospitalHours) attHospitalHours.addEventListener('change', updateCalculatedHoursAndWage);
+
+  // Inject AI chatbot trigger & container
+  injectChatbot();
 });
 
 // Load core static schemas (employees, sites, settings)
@@ -7468,6 +7471,199 @@ function injectAdminLogoutButton() {
     }
   }
 }
+
+// ==========================================================================
+// PagarBook AI CHATBOT IMPLEMENTATION
+// ==========================================================================
+function injectChatbot() {
+  if (document.getElementById('chatbot-container')) return;
+  
+  // Create chatbot container
+  const container = document.createElement('div');
+  container.id = 'chatbot-container';
+  container.className = 'chatbot-container hidden';
+  
+  container.innerHTML = `
+    <div class="chatbot-header">
+      <div class="chatbot-header-title">
+        <i data-lucide="bot" class="chatbot-logo-icon"></i>
+        <span>PagarBook AI</span>
+        <span class="version-tag">v1.0</span>
+      </div>
+      <button class="btn-close-chat" onclick="toggleChatbot()">&times;</button>
+    </div>
+    <div class="chatbot-messages" id="chatbot-messages">
+      <div class="chat-message assistant">
+        <p>Hello! 👋</p>
+        <p>How can I help you today?</p>
+      </div>
+    </div>
+    <div class="chatbot-suggestions" id="chatbot-suggestions">
+      <button class="suggestion-chip" onclick="sendSuggestion('How many staff members are present today?')">Present today?</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Who didn\\'t show up today?')">Who's absent?</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('How many are on leave today?')">On leave?</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('What\\'s payable this month?')">Payable this month?</button>
+    </div>
+    <div class="chatbot-input-container">
+      <input type="text" id="chatbot-input" placeholder="Ask anything about attendance, leaves or payroll..." onkeypress="handleChatKeypress(event)">
+      <button id="btn-send-chat" onclick="sendChatMessage()">
+        <i data-lucide="arrow-up" style="width: 16px; height: 16px;"></i>
+      </button>
+    </div>
+  `;
+  
+  document.body.appendChild(container);
+  
+  // Create chatbot trigger button
+  const trigger = document.createElement('div');
+  trigger.id = 'chatbot-trigger';
+  trigger.className = 'chatbot-trigger';
+  trigger.onclick = toggleChatbot;
+  trigger.innerHTML = `<i data-lucide="message-square" style="width: 24px; height: 24px;"></i>`;
+  document.body.appendChild(trigger);
+  
+  // Refresh icons
+  if (window.lucide) window.lucide.createIcons();
+}
+
+window.toggleChatbot = function() {
+  const container = document.getElementById('chatbot-container');
+  if (container) {
+    container.classList.toggle('hidden');
+    if (!container.classList.contains('hidden')) {
+      const input = document.getElementById('chatbot-input');
+      if (input) input.focus();
+      // Scroll to bottom
+      const msgs = document.getElementById('chatbot-messages');
+      if (msgs) msgs.scrollTop = msgs.scrollHeight;
+    }
+  }
+};
+
+window.sendSuggestion = function(text) {
+  const input = document.getElementById('chatbot-input');
+  if (input) {
+    input.value = text;
+    window.sendChatMessage();
+  }
+};
+
+window.handleChatKeypress = function(e) {
+  if (e.key === 'Enter') {
+    window.sendChatMessage();
+  }
+};
+
+window.sendChatMessage = async function() {
+  const input = document.getElementById('chatbot-input');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  
+  input.value = '';
+  
+  const msgs = document.getElementById('chatbot-messages');
+  if (!msgs) return;
+  
+  // Append user message
+  const userMsg = document.createElement('div');
+  userMsg.className = 'chat-message user';
+  userMsg.textContent = text;
+  msgs.appendChild(userMsg);
+  msgs.scrollTop = msgs.scrollHeight;
+  
+  // Append loading template for assistant
+  const assistantMsg = document.createElement('div');
+  assistantMsg.className = 'chat-message assistant';
+  
+  const stepsContainer = document.createElement('div');
+  stepsContainer.className = 'chat-steps';
+  assistantMsg.appendChild(stepsContainer);
+  
+  msgs.appendChild(assistantMsg);
+  msgs.scrollTop = msgs.scrollHeight;
+  
+  try {
+    const resp = await fetch('/api/ai/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: text })
+    }).then(r => r.json());
+    
+    if (resp && resp.success) {
+      const steps = resp.steps || [];
+      const finalResponse = resp.response || '';
+      
+      // Render steps sequentially to match high-fidelity UX in screenshot
+      for (let i = 0; i < steps.length; i++) {
+        // Clear previous spinner
+        const prevSpin = stepsContainer.querySelector('.step-icon.spinner');
+        if (prevSpin) {
+          prevSpin.className = 'step-icon success';
+        }
+        
+        // Add new step
+        const stepRow = document.createElement('div');
+        stepRow.className = 'chat-step';
+        stepRow.innerHTML = `<span class="step-icon spinner"></span><span class="step-text">${steps[i]}</span>`;
+        stepsContainer.appendChild(stepRow);
+        msgs.scrollTop = msgs.scrollHeight;
+        
+        // Short delay for animation
+        await new Promise(res => setTimeout(res, 400));
+      }
+      
+      // Complete final step icon
+      const lastSpin = stepsContainer.querySelector('.step-icon.spinner');
+      if (lastSpin) {
+        lastSpin.className = 'step-icon success';
+      }
+      
+      await new Promise(res => setTimeout(res, 200));
+      
+      // Clear steps and render final response
+      assistantMsg.innerHTML = `
+        <div style="font-size: 0.9rem; line-height: 1.4;">
+          ${finalResponse.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')}
+        </div>
+        <div class="chat-feedback">
+          <button class="feedback-btn" onclick="copyChatResponse(this)" title="Copy Response">
+            <i data-lucide="copy" style="width: 12px; height: 12px;"></i> Copy
+          </button>
+          <button class="feedback-btn" onclick="this.style.color='#00e676'" title="Thumbs Up">
+            <i data-lucide="thumbs-up" style="width: 12px; height: 12px;"></i>
+          </button>
+          <button class="feedback-btn" onclick="this.style.color='#ff1744'" title="Thumbs Down">
+            <i data-lucide="thumbs-down" style="width: 12px; height: 12px;"></i>
+          </button>
+        </div>
+      `;
+      if (window.lucide) window.lucide.createIcons();
+    } else {
+      assistantMsg.innerHTML = `<p style="color: #ff1744;">Sorry, I encountered an issue querying the database: ${resp.error || 'Unknown error'}</p>`;
+    }
+  } catch (err) {
+    assistantMsg.innerHTML = `<p style="color: #ff1744;">Failed to connect to assistant: ${err.message}</p>`;
+  }
+  msgs.scrollTop = msgs.scrollHeight;
+};
+
+window.copyChatResponse = function(btn) {
+  const container = btn.closest('.chat-message');
+  if (container) {
+    const textNode = container.firstElementChild;
+    if (textNode) {
+      navigator.clipboard.writeText(textNode.innerText);
+      const originalText = btn.innerHTML;
+      btn.innerHTML = `<i data-lucide="check" style="width: 12px; height: 12px; color: #00e676;"></i> Copied!`;
+      if (window.lucide) window.lucide.createIcons();
+      setTimeout(() => {
+        btn.innerHTML = originalText;
+        if (window.lucide) window.lucide.createIcons();
+      }, 1500);
+    }
+  }
+};
 
 
 

@@ -3949,6 +3949,162 @@ const gracefulServerShutdown = async (signal) => {
   } else {
     process.exit(0);
   }
+// AI Query Endpoint
+app.post('/api/ai/query', (req, res) => {
+  try {
+    const { query } = req.body;
+    if (!query) {
+      return res.status(400).json({ error: "Query is required" });
+    }
+
+    const cleanQuery = query.toLowerCase().trim();
+    const today = new Date();
+    // Get local date in YYYY-MM-DD format using +05:30 offset
+    const localTime = new Date(today.getTime() + (5.5 * 60 * 60 * 1000));
+    const todayStr = localTime.toISOString().substring(0, 10);
+    
+    // Read current database state
+    const db = database.read();
+    const employees = db.employees || [];
+    const dailyLogs = database.getDailyLogs(todayStr) || [];
+    
+    let steps = [];
+    let responseText = "";
+
+    // 1. Intent: Present Count / Present List
+    if (cleanQuery.includes("present") || cleanQuery.includes("staff members are present") || cleanQuery.includes("attendance today")) {
+      steps = [
+        "Checking today's attendance records...",
+        "Identifying marked 'Present' entries...",
+        "Counting staff present today...",
+        "Putting it all together..."
+      ];
+      
+      const presentLogs = dailyLogs.filter(log => log.status === 'PRESENT' || log.status === 'HALF DAY');
+      const count = presentLogs.length;
+      
+      if (count === 0) {
+        responseText = `**No staff members are marked present today yet.**`;
+      } else {
+        const names = presentLogs.map(log => log.employeeName);
+        let nameList = "";
+        if (names.length <= 10) {
+          nameList = names.join(", ");
+        } else {
+          nameList = names.slice(0, 10).join(", ") + ` and ${names.length - 10} others`;
+        }
+        responseText = `**${count} staff members are present today.**\n\nPresent: ${nameList}.`;
+      }
+    }
+    // 2. Intent: Absent / Who didn't show up
+    else if (cleanQuery.includes("absent") || cleanQuery.includes("didn't show up") || cleanQuery.includes("did not show up") || cleanQuery.includes("missing") || cleanQuery.includes("who is absent")) {
+      steps = [
+        "Checking today's attendance records...",
+        "Filtering absent employees...",
+        "Compiling absent list...",
+        "Putting it all together..."
+      ];
+      
+      // Filter active employees
+      const activeEmployees = employees.filter(emp => emp.status !== 'INACTIVE');
+      // Find who is absent or not in logs
+      const presentIds = new Set(dailyLogs.filter(log => log.status === 'PRESENT' || log.status === 'HALF DAY').map(log => log.employeeId));
+      const leaveIds = new Set(dailyLogs.filter(log => log.status === 'LEAVE').map(log => log.employeeId));
+      
+      const absentEmployees = activeEmployees.filter(emp => !presentIds.has(emp.id) && !leaveIds.has(emp.id));
+      const count = absentEmployees.length;
+      
+      if (count === 0) {
+        responseText = `**Everyone showed up today! No staff members are absent.**`;
+      } else {
+        const names = absentEmployees.map(emp => emp.name);
+        let nameList = "";
+        if (names.length <= 10) {
+          nameList = names.join(", ");
+        } else {
+          nameList = names.slice(0, 10).join(", ") + ` and ${names.length - 10} others`;
+        }
+        responseText = `**${count} staff members didn't show up today.**\n\nAbsent: ${nameList}.`;
+      }
+    }
+    // 3. Intent: Leave count / Who is on leave
+    else if (cleanQuery.includes("leave") || cleanQuery.includes("on leave")) {
+      steps = [
+        "Checking today's leave records...",
+        "Identifying approved leaves...",
+        "Putting it all together..."
+      ];
+      
+      const leaveLogs = dailyLogs.filter(log => log.status === 'LEAVE');
+      const count = leaveLogs.length;
+      
+      if (count === 0) {
+        responseText = `**No staff members are on leave today.**`;
+      } else {
+        const names = leaveLogs.map(log => log.employeeName);
+        let nameList = "";
+        if (names.length <= 10) {
+          nameList = names.join(", ");
+        } else {
+          nameList = names.slice(0, 10).join(", ") + ` and ${names.length - 10} others`;
+        }
+        responseText = `**${count} staff members are on leave today.**\n\nOn Leave: ${nameList}.`;
+      }
+    }
+    // 4. Intent: Payroll / Payable this month
+    else if (cleanQuery.includes("payable") || cleanQuery.includes("salary") || cleanQuery.includes("payroll") || cleanQuery.includes("money") || cleanQuery.includes("pay")) {
+      const monthStr = today.toISOString().substring(0, 7); // e.g. "2026-06"
+      const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+      const currentMonthName = monthNames[today.getMonth()] + " " + today.getFullYear();
+      
+      steps = [
+        "Fetching monthly payroll records...",
+        "Calculating wage details and deductions...",
+        "Aggregating net payable salary...",
+        "Putting it all together..."
+      ];
+      
+      const payrollData = database.getMonthlySalarySheet(monthStr);
+      const totalPayable = payrollData.summary ? payrollData.summary.totalPayable : 0;
+      const totalAdvances = payrollData.summary ? (payrollData.summary.totalAdvances || 0) : 0;
+      const totalNetPayable = payrollData.summary ? payrollData.summary.totalNetPayable : 0;
+      
+      responseText = `**Total net payable salary for this month (${currentMonthName}) is ₹${totalNetPayable.toLocaleString('en-IN')}.**\n\n**Breakdown:**\n• Gross Wages: ₹${totalPayable.toLocaleString('en-IN')}\n• Deductions/Advances: ₹${totalAdvances.toLocaleString('en-IN')}\n• Net Payable: ₹${totalNetPayable.toLocaleString('en-IN')}`;
+    }
+    // 5. Intent: CCTV camera status
+    else if (cleanQuery.includes("cctv") || cleanQuery.includes("camera") || cleanQuery.includes("stream")) {
+      steps = [
+        "Querying active CCTV stream threads...",
+        "Checking camera connection status...",
+        "Putting it all together..."
+      ];
+      
+      const cameras = db.cctvCameras || [];
+      const activeCount = cameras.filter(c => c.status !== 'inactive').length;
+      
+      responseText = `**CCTV System Status:**\n\nCurrently, there are **${activeCount} active camera feed(s)** configured in the workspace:\n` +
+                     cameras.map(c => `• **${c.name}**: ${c.eventType.toUpperCase()} feed (${c.source})`).join("\n");
+    }
+    // Default help / fallback intent
+    else {
+      steps = [
+        "Analyzing search parameters...",
+        "Putting it all together..."
+      ];
+      responseText = `Hello! I'm PagarBook AI. I can answer questions about your staff's attendance, leaves, and payroll records.\n\nTry asking me:\n• *How many staff members are present today?*\n• *Who didn't show up today?*\n• *How many are on leave today?*\n• *What's payable this month?*\n• *Show CCTV camera status*`;
+    }
+
+    res.json({
+      success: true,
+      steps: steps,
+      response: responseText
+    });
+  } catch (err) {
+    console.error("[AI Chatbot] Error resolving query:", err);
+    res.status(500).json({ error: "Internal server error: " + err.message });
+  }
+});
+
 };
 
 process.once('SIGINT', () => gracefulServerShutdown('SIGINT'));
