@@ -4003,12 +4003,38 @@ app.post('/api/ai/query', (req, res) => {
     const cctvKeywords = ['cctv', 'camera', 'cam', 'cams', 'stream', 'feeds', 'video', 'feed', 'cameras', 'camra'];
     const helpKeywords = ['help', 'guide', 'use', 'check-in', 'clock-in', 'install', 'download', 'website', 'portal', 'features'];
 
+    // Define dynamic date ranges for Excel links
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const startOfMonthStr = `${year}-${month}-01`;
+    const todayStr = getLocalDateString();
+
+    // Find last Friday
+    const lastFriday = new Date(today);
+    const dayOfWeek = today.getDay(); // 0: Sun, 1: Mon, ... 5: Fri, 6: Sat
+    const diffToFriday = (dayOfWeek >= 5) ? (dayOfWeek - 5) : (dayOfWeek + 2);
+    lastFriday.setDate(today.getDate() - diffToFriday);
+    const lastFridayStr = getLocalDateString(lastFriday);
+
+    const excelKeywords = ['excel', 'excl', 'export', 'sheet', 'download', 'xlsx', 'report', 'file', 'spreadsheet'];
+    const isExcelRequested = hasFuzzyKeyword(cleanQuery, excelKeywords);
+    
+    let excelSuffixText = "";
+    if (isExcelRequested) {
+      excelSuffixText = `\n\n📊 **Excel Export Options:**\n` +
+                        `• **[Download Attendance Sheet (Excel)](/api/export/excel?startDate=${startOfMonthStr}&endDate=${todayStr})**\n` +
+                        `• **[Download Payroll Wage Summary (Excel)](/api/export/payroll/excel?startDate=${startOfMonthStr}&endDate=${todayStr})**\n` +
+                        `• **[Download Welders Weekly Report (Excel)](/api/export/welders-weekly/excel?friday=${lastFridayStr})**\n` +
+                        `*(Configured for date range: ${startOfMonthStr} to ${todayStr})*`;
+    }
+
     // 1. Intent: Present Count / Present List
     if (hasFuzzyKeyword(cleanQuery, presentKeywords) && !hasFuzzyKeyword(cleanQuery, absentKeywords)) {
       steps = [
         "Checking today's attendance records...",
         "Identifying marked 'Present' entries...",
-        "Counting staff present today...",
+        "Compiling complete present list...",
         "Putting it all together..."
       ];
       
@@ -4016,16 +4042,10 @@ app.post('/api/ai/query', (req, res) => {
       const count = presentLogs.length;
       
       if (count === 0) {
-        responseText = `**No staff members are marked present today yet.**`;
+        responseText = `**No staff members are marked present today yet.**` + excelSuffixText;
       } else {
-        const names = presentLogs.map(log => log.employeeName);
-        let nameList = "";
-        if (names.length <= 10) {
-          nameList = names.join(", ");
-        } else {
-          nameList = names.slice(0, 10).join(", ") + ` and ${names.length - 10} others`;
-        }
-        responseText = `**${count} staff members are present today.**\n\nPresent: ${nameList}.`;
+        const listItems = presentLogs.map((log, index) => `${index + 1}. **${log.employeeName}** (Status: ${log.status || 'Present'})`);
+        responseText = `**${count} staff members are present today:**\n\n` + listItems.join("\n") + excelSuffixText;
       }
     }
     // 2. Intent: Absent / Who didn't show up
@@ -4033,7 +4053,7 @@ app.post('/api/ai/query', (req, res) => {
       steps = [
         "Checking today's attendance records...",
         "Filtering absent employees...",
-        "Compiling absent list...",
+        "Compiling complete absent list...",
         "Putting it all together..."
       ];
       
@@ -4047,16 +4067,10 @@ app.post('/api/ai/query', (req, res) => {
       const count = absentEmployees.length;
       
       if (count === 0) {
-        responseText = `**Everyone showed up today! No staff members are absent.**`;
+        responseText = `**Everyone showed up today! No staff members are absent.**` + excelSuffixText;
       } else {
-        const names = absentEmployees.map(emp => emp.name);
-        let nameList = "";
-        if (names.length <= 10) {
-          nameList = names.join(", ");
-        } else {
-          nameList = names.slice(0, 10).join(", ") + ` and ${names.length - 10} others`;
-        }
-        responseText = `**${count} staff members didn't show up today.**\n\nAbsent: ${nameList}.`;
+        const listItems = absentEmployees.map((emp, index) => `${index + 1}. **${emp.name}**`);
+        responseText = `**${count} staff members didn't show up today (absent):**\n\n` + listItems.join("\n") + excelSuffixText;
       }
     }
     // 3. Intent: Leave count / Who is on leave
@@ -4064,6 +4078,7 @@ app.post('/api/ai/query', (req, res) => {
       steps = [
         "Checking today's leave records...",
         "Identifying approved leaves...",
+        "Compiling leave list...",
         "Putting it all together..."
       ];
       
@@ -4071,16 +4086,10 @@ app.post('/api/ai/query', (req, res) => {
       const count = leaveLogs.length;
       
       if (count === 0) {
-        responseText = `**No staff members are on leave today.**`;
+        responseText = `**No staff members are on leave today.**` + excelSuffixText;
       } else {
-        const names = leaveLogs.map(log => log.employeeName);
-        let nameList = "";
-        if (names.length <= 10) {
-          nameList = names.join(", ");
-        } else {
-          nameList = names.slice(0, 10).join(", ") + ` and ${names.length - 10} others`;
-        }
-        responseText = `**${count} staff members are on leave today.**\n\nOn Leave: ${nameList}.`;
+        const listItems = leaveLogs.map((log, index) => `${index + 1}. **${log.employeeName}**`);
+        responseText = `**${count} staff members are on leave today:**\n\n` + listItems.join("\n") + excelSuffixText;
       }
     }
     // 4. Intent: Payroll / Payable this month
@@ -4101,9 +4110,23 @@ app.post('/api/ai/query', (req, res) => {
       const totalAdvances = payrollData.summary ? (payrollData.summary.totalAdvances || 0) : 0;
       const totalNetPayable = payrollData.summary ? payrollData.summary.totalNetPayable : 0;
       
-      responseText = `**Total net payable salary for this month (${currentMonthName}) is ₹${totalNetPayable.toLocaleString('en-IN')}.**\n\n**Breakdown:**\n• Gross Wages: ₹${totalPayable.toLocaleString('en-IN')}\n• Deductions/Advances: ₹${totalAdvances.toLocaleString('en-IN')}\n• Net Payable: ₹${totalNetPayable.toLocaleString('en-IN')}`;
+      responseText = `**Total net payable salary for this month (${currentMonthName}) is ₹${totalNetPayable.toLocaleString('en-IN')}.**\n\n**Breakdown:**\n• Gross Wages: ₹${totalPayable.toLocaleString('en-IN')}\n• Deductions/Advances: ₹${totalAdvances.toLocaleString('en-IN')}\n• Net Payable: ₹${totalNetPayable.toLocaleString('en-IN')}` + excelSuffixText;
     }
-    // 5. Intent: CCTV camera status
+    // 5. Intent: Excel Exporter link request
+    else if (isExcelRequested) {
+      steps = [
+        "Generating Excel export endpoints...",
+        "Formatting spreadsheet download paths...",
+        "Putting it all together..."
+      ];
+      
+      responseText = `Here are the Excel download links compiled according to your needs:\n\n` +
+                     `• **[Download Attendance Log (Excel)](/api/export/excel?startDate=${startOfMonthStr}&endDate=${todayStr})**\n` +
+                     `• **[Download Payroll Sheet (Excel)](/api/export/payroll/excel?startDate=${startOfMonthStr}&endDate=${todayStr})**\n` +
+                     `• **[Download Welders Weekly Report (Excel)](/api/export/welders-weekly/excel?friday=${lastFridayStr})**\n\n` +
+                     `*(The date range has been pre-configured for you from ${startOfMonthStr} to ${todayStr})*`;
+    }
+    // 6. Intent: CCTV camera status
     else if (hasFuzzyKeyword(cleanQuery, cctvKeywords)) {
       steps = [
         "Querying active CCTV stream threads...",
