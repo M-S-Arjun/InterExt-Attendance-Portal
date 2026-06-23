@@ -7487,7 +7487,7 @@ function injectChatbot() {
     <div class="chatbot-header">
       <div class="chatbot-header-title">
         <i data-lucide="bot" class="chatbot-logo-icon"></i>
-        <span>PagarBook AI</span>
+        <span>Assist.AI</span>
         <span class="version-tag">v1.0</span>
       </div>
       <button class="btn-close-chat" onclick="toggleChatbot()">&times;</button>

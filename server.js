@@ -3924,31 +3924,6 @@ whatsapp.on('lid_mappings_updated', (mappings) => {
   }
 });
 
-// Catch errors and log to ensure 24/7 unbreakable keep-alive
-process.on('uncaughtException', (err) => {
-  console.error("[CRITICAL] Uncaught exception inside server process:", err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error("[CRITICAL] Unhandled promise rejection at:", promise, "reason:", reason);
-});
-
-let isShuttingDownServer = false;
-const gracefulServerShutdown = async (signal) => {
-  if (isShuttingDownServer) return;
-  isShuttingDownServer = true;
-  console.log(`\n[Process Shutdown] Server received signal: ${signal}. Shutting down services gracefully...`);
-  try {
-    await whatsapp.destroy();
-    console.log("[Process Shutdown] Server graceful shutdown complete.");
-  } catch (err) {
-    console.error("[Process Shutdown] Error during server shutdown:", err.message);
-  }
-  if (signal === 'SIGUSR2') {
-    process.kill(process.pid, 'SIGUSR2');
-  } else {
-    process.exit(0);
-  }
 // AI Query Endpoint
 app.post('/api/ai/query', (req, res) => {
   try {
@@ -3966,7 +3941,7 @@ app.post('/api/ai/query', (req, res) => {
     // Read current database state
     const db = database.read();
     const employees = db.employees || [];
-    const dailyLogs = database.getDailyLogs(todayStr) || [];
+    const dailyLogs = database.getAttendanceForDate(todayStr) || [];
     
     let steps = [];
     let responseText = "";
@@ -4091,7 +4066,7 @@ app.post('/api/ai/query', (req, res) => {
         "Analyzing search parameters...",
         "Putting it all together..."
       ];
-      responseText = `Hello! I'm PagarBook AI. I can answer questions about your staff's attendance, leaves, and payroll records.\n\nTry asking me:\n• *How many staff members are present today?*\n• *Who didn't show up today?*\n• *How many are on leave today?*\n• *What's payable this month?*\n• *Show CCTV camera status*`;
+      responseText = `Hello! I'm Assist.AI. I can answer questions about your staff's attendance, leaves, and payroll records.\n\nTry asking me:\n• *How many staff members are present today?*\n• *Who didn't show up today?*\n• *How many are on leave today?*\n• *What's payable this month?*\n• *Show CCTV camera status*`;
     }
 
     res.json({
@@ -4105,6 +4080,31 @@ app.post('/api/ai/query', (req, res) => {
   }
 });
 
+// Catch errors and log to ensure 24/7 unbreakable keep-alive
+process.on('uncaughtException', (err) => {
+  console.error("[CRITICAL] Uncaught exception inside server process:", err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error("[CRITICAL] Unhandled promise rejection at:", promise, "reason:", reason);
+});
+
+let isShuttingDownServer = false;
+const gracefulServerShutdown = async (signal) => {
+  if (isShuttingDownServer) return;
+  isShuttingDownServer = true;
+  console.log(`\n[Process Shutdown] Server received signal: ${signal}. Shutting down services gracefully...`);
+  try {
+    await whatsapp.destroy();
+    console.log("[Process Shutdown] Server graceful shutdown complete.");
+  } catch (err) {
+    console.error("[Process Shutdown] Error during server shutdown:", err.message);
+  }
+  if (signal === 'SIGUSR2') {
+    process.kill(process.pid, 'SIGUSR2');
+  } else {
+    process.exit(0);
+  }
 };
 
 process.once('SIGINT', () => gracefulServerShutdown('SIGINT'));
