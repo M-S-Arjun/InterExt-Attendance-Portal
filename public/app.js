@@ -7516,18 +7516,23 @@ function injectChatbot() {
   container.className = 'chatbot-container hidden';
   
   container.innerHTML = `
-    <div class="chatbot-header">
-      <div class="chatbot-header-title">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="chatbot-logo-icon" style="color: var(--color-primary);"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
-        <span>Assist.AI</span>
+    <div class="chatbot-header" style="display: flex; justify-content: space-between; align-items: center;">
+      <div class="chatbot-header-title" style="display: flex; align-items: center; gap: 8px;">
+        <img src="/logo.jpg" alt="Logo" style="width: 24px; height: 24px; border-radius: 50%; object-fit: cover; border: 1px solid var(--color-primary);">
+        <span style="font-weight: 700; color: var(--text-primary);">InterExt AI</span>
         <span class="version-tag">v1.0</span>
       </div>
-      <button class="btn-close-chat" onclick="window.toggleChatbot()">&times;</button>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <button class="btn-fullscreen-chat" onclick="window.toggleChatbotFullscreen()" title="Toggle Fullscreen">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="chat-fullscreen-icon"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+        </button>
+        <button class="btn-close-chat" onclick="window.toggleChatbot()">&times;</button>
+      </div>
     </div>
     <div class="chatbot-messages" id="chatbot-messages">
       <div class="chat-message assistant">
         <p>Hello! 👋</p>
-        <p>How can I help you today?</p>
+        <p>Welcome to InterExt. How can I help you today?</p>
       </div>
     </div>
     <div class="chatbot-suggestions" id="chatbot-suggestions">
@@ -7563,7 +7568,7 @@ function injectChatbot() {
       bubble.className = 'chatbot-popup-bubble';
       bubble.innerHTML = `
         <div style="cursor: pointer; display: flex; align-items: center; gap: 8px;" onclick="window.toggleChatbot()">
-          <span>Need help? Ask Assist.AI! 🤖</span>
+          <span>Need help? Ask InterExt AI! 🤖</span>
         </div>
         <button class="chatbot-popup-close" onclick="event.stopPropagation(); window.dismissChatbotPopup()">&times;</button>
       `;
@@ -7580,12 +7585,36 @@ window.dismissChatbotPopup = function() {
   if (bubble) bubble.remove();
 };
 
+window.toggleChatbotFullscreen = function() {
+  const container = document.getElementById('chatbot-container');
+  if (container) {
+    const isFullscreen = container.classList.toggle('fullscreen');
+    const icon = document.getElementById('chat-fullscreen-icon');
+    if (icon) {
+      if (isFullscreen) {
+        icon.innerHTML = `<path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M10 14l-7 7"/>`;
+      } else {
+        icon.innerHTML = `<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/>`;
+      }
+    }
+  }
+};
+
 window.toggleChatbot = function() {
   // Dismiss popup speech bubble if open
   window.dismissChatbotPopup();
   
   const container = document.getElementById('chatbot-container');
   if (container) {
+    // If closing, also exit fullscreen
+    if (!container.classList.contains('hidden')) {
+      container.classList.remove('fullscreen');
+      const icon = document.getElementById('chat-fullscreen-icon');
+      if (icon) {
+        icon.innerHTML = `<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/>`;
+      }
+    }
+    
     container.classList.toggle('hidden');
     if (!container.classList.contains('hidden')) {
       const input = document.getElementById('chatbot-input');

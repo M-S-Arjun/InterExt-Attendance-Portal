@@ -4002,27 +4002,68 @@ span.flatpickr-weekday {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
 }
-/* Suggestions */
+/* Fullscreen mode layout overrides */
+.chatbot-container.fullscreen {
+  bottom: 0 !important;
+  right: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  border-radius: 0 !important;
+  z-index: 100000 !important;
+}
+.chatbot-container.fullscreen .chatbot-messages {
+  max-height: calc(100vh - 280px) !important;
+  height: auto !important;
+  flex-grow: 1 !important;
+}
+
+/* Fullscreen control button */
+.btn-fullscreen-chat {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  transition: all 0.2s ease;
+}
+.btn-fullscreen-chat:hover {
+  color: var(--color-primary);
+  transform: scale(1.1);
+}
+
+/* Suggestions - Vertical Layout */
 .chatbot-suggestions {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   padding: 10px 20px;
-  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 110px;
   border-top: 1px solid var(--glass-border);
   background: rgba(255, 255, 255, 0.01);
-  scrollbar-width: none;
 }
 .chatbot-suggestions::-webkit-scrollbar {
-  display: none;
+  width: 4px;
+}
+.chatbot-suggestions::-webkit-scrollbar-thumb {
+  background: var(--glass-border);
+  border-radius: 4px;
 }
 .suggestion-chip {
-  white-space: nowrap;
-  background: rgba(255, 107, 0, 0.08);
-  border: 1px solid rgba(255, 107, 0, 0.15);
+  text-align: left;
+  white-space: normal;
+  width: 100%;
+  background: rgba(255, 107, 0, 0.06);
+  border: 1px solid rgba(255, 107, 0, 0.12);
   color: var(--color-primary);
-  padding: 6px 12px;
-  border-radius: 20px;
-  font-size: 0.78rem;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 0.8rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -4031,7 +4072,7 @@ span.flatpickr-weekday {
   background: var(--color-primary);
   color: #fff;
   border-color: var(--color-primary);
-  transform: translateY(-1px);
+  transform: translateX(2px);
 }
 /* Input controls */
 .chatbot-input-container {

@@ -3925,6 +3925,47 @@ whatsapp.on('lid_mappings_updated', (mappings) => {
 });
 
 // AI Query Endpoint
+// Levenshtein distance helper for spelling tolerance
+function levenshteinDistance(s1, s2) {
+  const len1 = s1.length;
+  const len2 = s2.length;
+  const matrix = Array.from({ length: len1 + 1 }, () => Array(len2 + 1).fill(0));
+
+  for (let i = 0; i <= len1; i++) matrix[i][0] = i;
+  for (let j = 0; j <= len2; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= len1; i++) {
+    for (let j = 1; j <= len2; j++) {
+      const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1, // deletion
+        matrix[i][j - 1] + 1, // insertion
+        matrix[i - 1][j - 1] + cost // substitution
+      );
+    }
+  }
+  return matrix[len1][len2];
+}
+
+// Typo-tolerant keyword matching function
+function hasFuzzyKeyword(query, keywords, threshold = 2) {
+  const cleanQuery = query.toLowerCase().trim();
+  const words = cleanQuery.split(/\s+/).map(w => w.replace(/[^\w]/g, ''));
+  for (const word of words) {
+    if (word.length < 3) continue;
+    for (const keyword of keywords) {
+      if (word.includes(keyword) || keyword.includes(word)) {
+        return true;
+      }
+      if (levenshteinDistance(word, keyword) <= threshold) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// AI Query Endpoint
 app.post('/api/ai/query', (req, res) => {
   try {
     const { query } = req.body;
@@ -3948,8 +3989,16 @@ app.post('/api/ai/query', (req, res) => {
     const isLeave = (status) => status === 'leave';
     const isAbsent = (status) => status === 'absent';
 
+    // Define semantic keyword maps for intents
+    const presentKeywords = ['present', 'presnt', 'attendance', 'atendance', 'here', 'marked', 'presents'];
+    const absentKeywords = ['absent', 'absnt', 'missing', 'absentees', 'away', 'show', 'turned', 'absents'];
+    const leaveKeywords = ['leave', 'leve', 'leaves', 'vacation', 'holiday', 'holidays', 'off', 'sick'];
+    const payrollKeywords = ['payable', 'payabel', 'payroll', 'salary', 'salry', 'wage', 'wages', 'earnings', 'payout', 'payouts', 'amount', 'pay'];
+    const cctvKeywords = ['cctv', 'camera', 'cam', 'cams', 'stream', 'feeds', 'video', 'feed', 'cameras', 'camra'];
+    const helpKeywords = ['help', 'guide', 'use', 'check-in', 'clock-in', 'install', 'download', 'website', 'portal', 'features'];
+
     // 1. Intent: Present Count / Present List
-    if (cleanQuery.includes("present") || cleanQuery.includes("staff members are present") || cleanQuery.includes("attendance today")) {
+    if (hasFuzzyKeyword(cleanQuery, presentKeywords) && !hasFuzzyKeyword(cleanQuery, absentKeywords)) {
       steps = [
         "Checking today's attendance records...",
         "Identifying marked 'Present' entries...",
@@ -3974,7 +4023,7 @@ app.post('/api/ai/query', (req, res) => {
       }
     }
     // 2. Intent: Absent / Who didn't show up
-    else if (cleanQuery.includes("absent") || cleanQuery.includes("didn't show up") || cleanQuery.includes("did not show up") || cleanQuery.includes("missing") || cleanQuery.includes("who is absent")) {
+    else if (hasFuzzyKeyword(cleanQuery, absentKeywords) || cleanQuery.includes("didn't show up") || cleanQuery.includes("did not show up") || cleanQuery.includes("no show")) {
       steps = [
         "Checking today's attendance records...",
         "Filtering absent employees...",
@@ -4005,7 +4054,7 @@ app.post('/api/ai/query', (req, res) => {
       }
     }
     // 3. Intent: Leave count / Who is on leave
-    else if (cleanQuery.includes("leave") || cleanQuery.includes("on leave")) {
+    else if (hasFuzzyKeyword(cleanQuery, leaveKeywords)) {
       steps = [
         "Checking today's leave records...",
         "Identifying approved leaves...",
@@ -4029,7 +4078,7 @@ app.post('/api/ai/query', (req, res) => {
       }
     }
     // 4. Intent: Payroll / Payable this month
-    else if (cleanQuery.includes("payable") || cleanQuery.includes("salary") || cleanQuery.includes("payroll") || cleanQuery.includes("money") || cleanQuery.includes("pay")) {
+    else if (hasFuzzyKeyword(cleanQuery, payrollKeywords)) {
       const monthStr = today.toISOString().substring(0, 7); // e.g. "2026-06"
       const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
       const currentMonthName = monthNames[today.getMonth()] + " " + today.getFullYear();
@@ -4049,7 +4098,7 @@ app.post('/api/ai/query', (req, res) => {
       responseText = `**Total net payable salary for this month (${currentMonthName}) is ₹${totalNetPayable.toLocaleString('en-IN')}.**\n\n**Breakdown:**\n• Gross Wages: ₹${totalPayable.toLocaleString('en-IN')}\n• Deductions/Advances: ₹${totalAdvances.toLocaleString('en-IN')}\n• Net Payable: ₹${totalNetPayable.toLocaleString('en-IN')}`;
     }
     // 5. Intent: CCTV camera status
-    else if (cleanQuery.includes("cctv") || cleanQuery.includes("camera") || cleanQuery.includes("stream")) {
+    else if (hasFuzzyKeyword(cleanQuery, cctvKeywords)) {
       steps = [
         "Querying active CCTV stream threads...",
         "Checking camera connection status...",
@@ -4062,13 +4111,33 @@ app.post('/api/ai/query', (req, res) => {
       responseText = `**CCTV System Status:**\n\nCurrently, there are **${activeCount} active camera feed(s)** configured in the workspace:\n` +
                      cameras.map(c => `• **${c.name}**: ${c.eventType.toUpperCase()} feed (${c.source})`).join("\n");
     }
-    // Default help / fallback intent
+    // 6. Intent: Help / Website FAQ
+    else if (hasFuzzyKeyword(cleanQuery, helpKeywords) || cleanQuery.includes("how to") || cleanQuery.includes("features")) {
+      steps = [
+        "Searching website user manual...",
+        "Gathering platform guidelines...",
+        "Putting it all together..."
+      ];
+      responseText = `Here is a guide on how to navigate and use the **InterExt Attendance Portal**:\n\n` +
+                     `1. **CCTV Attendance**: Real-time entry/exit logs are automatically marked by the AI streams under the **Camera Attendance** tab. No manual log required!\n` +
+                     `2. **Master Sheet Logs**: Navigate to **Attendance Log** to manually edit shifts, wages, and download comprehensive summaries.\n` +
+                     `3. **Payroll Settings**: View monthly breakdowns of gross salary, salary advances, and net payable payouts under the **Payroll** tab.\n` +
+                     `4. **Android APK Download**: Download the companion Android Face Check-In App from the **Settings** panel link.\n` +
+                     `5. **Chatbot Commands**: You can query me anytime for present lists, absentees, leaves, and payroll breakdown totals!`;
+    }
+    // Default fallback
     else {
       steps = [
         "Analyzing search parameters...",
         "Putting it all together..."
       ];
-      responseText = `Hello! I'm Assist.AI. I can answer questions about your staff's attendance, leaves, and payroll records.\n\nTry asking me:\n• *How many staff members are present today?*\n• *Who didn't show up today?*\n• *How many are on leave today?*\n• *What's payable this month?*\n• *Show CCTV camera status*`;
+      responseText = `Hello! I'm **InterExt AI**, your dedicated virtual assistant. I didn't quite catch that, but I can help you with details about the attendance tracker!\n\nTry asking me:\n` +
+                     `• *How many staff members are present today?* (or "presnt count")\n` +
+                     `• *Who is absent today?* (or "absnt list")\n` +
+                     `• *Are any employees on leave?*\n` +
+                     `• *What is the net payable payroll amount?*\n` +
+                     `• *Show CCTV stream status*\n` +
+                     `• *How to use the website portal?*`;
     }
 
     res.json({
