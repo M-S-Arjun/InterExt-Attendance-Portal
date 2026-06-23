@@ -4008,7 +4008,6 @@ app.post('/api/ai/query', (req, res) => {
     const year = today.getFullYear();
     const month = String(today.getMonth() + 1).padStart(2, '0');
     const startOfMonthStr = `${year}-${month}-01`;
-    const todayStr = getLocalDateString();
 
     // Find last Friday
     const lastFriday = new Date(today);
