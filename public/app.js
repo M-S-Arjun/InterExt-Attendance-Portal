@@ -4331,6 +4331,14 @@ function initCharts() {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      interaction: {
+        intersect: false,
+        mode: 'index',
+      },
+      hover: {
+        intersect: false,
+        mode: 'index'
+      },
       scales: {
         y: {
           min: 0,
@@ -4339,7 +4347,24 @@ function initCharts() {
         }
       },
       plugins: {
-        legend: { display: false }
+        legend: { display: false },
+        tooltip: {
+          enabled: true,
+          mode: 'index',
+          intersect: false,
+          backgroundColor: isLight ? 'rgba(255, 255, 255, 0.95)' : 'rgba(15, 15, 21, 0.95)',
+          titleColor: isLight ? '#09090b' : '#ffffff',
+          bodyColor: isLight ? '#3f3f46' : '#d4d4d8',
+          borderColor: '#ff6b00',
+          borderWidth: 1,
+          padding: 10,
+          displayColors: false,
+          callbacks: {
+            label: function(context) {
+              return `Attendance: ${context.parsed.y}%`;
+            }
+          }
+        }
       }
     }
   });
@@ -4458,6 +4483,13 @@ function updateChartTheme(isLight) {
   state.charts.history.options.scales.y.ticks.color = textColor;
   state.charts.history.options.scales.x.grid.color = gridColor;
   state.charts.history.options.scales.y.grid.color = gridColor;
+  
+  // Update tooltip colors dynamically
+  if (state.charts.history.options.plugins.tooltip) {
+    state.charts.history.options.plugins.tooltip.backgroundColor = isLight ? 'rgba(255, 255, 255, 0.95)' : 'rgba(15, 15, 21, 0.95)';
+    state.charts.history.options.plugins.tooltip.titleColor = isLight ? '#09090b' : '#ffffff';
+    state.charts.history.options.plugins.tooltip.bodyColor = isLight ? '#3f3f46' : '#d4d4d8';
+  }
   
   // Update doughnut labels
   state.charts.site.options.plugins.legend.labels.color = textColor;
