@@ -3948,7 +3948,7 @@ function levenshteinDistance(s1, s2) {
 }
 
 // Typo-tolerant keyword matching function
-function hasFuzzyKeyword(query, keywords, threshold = 2) {
+function hasFuzzyKeyword(query, keywords) {
   const cleanQuery = query.toLowerCase().trim();
   
   // 1. Direct substring check on the whole query first (handles missing spaces)
@@ -3963,7 +3963,13 @@ function hasFuzzyKeyword(query, keywords, threshold = 2) {
   for (const word of words) {
     if (word.length < 3) continue;
     for (const keyword of keywords) {
-      if (levenshteinDistance(word, keyword) <= threshold) {
+      // Calculate max allowed distance based on word/keyword length to prevent false matches
+      const minLen = Math.min(word.length, keyword.length);
+      let allowedDistance = 2;
+      if (minLen <= 3) allowedDistance = 0; // Short words must match exactly
+      else if (minLen === 4) allowedDistance = 1; // 4-letter words can have max 1 typo
+      
+      if (levenshteinDistance(word, keyword) <= allowedDistance) {
         return true;
       }
     }
