@@ -478,7 +478,7 @@ class CCTVStreamProcessor(threading.Thread):
         crossing_point = None
         crossing_dir = ""
         
-        if track["frames_active"] < 5:
+        if track["frames_active"] < 3:
             return
 
         if is_entry_cam:
@@ -487,13 +487,13 @@ class CCTVStreamProcessor(threading.Thread):
             x_right = int(w * 0.70)
             
             # Entry: track ends below/near y_line and overall downward movement (y increases)
-            if y_end > y_line - 50 and (y_end - y_start > 50 or y_end - p_min_y > 50):
+            if y_end > y_line - 50 and (y_end - y_start > 30 or y_end - p_min_y > 30):
                 crossed = True
                 crossing_point = (int(x_end), y_line)
                 crossing_dir = "entry"
                 logger.info(f"[{self.name}] [Fallback Path] Verified entry by downward motion vector: {y_start:.1f} -> {y_end:.1f}")
             # Exit: track ends above/near y_line and overall upward movement (y decreases)
-            elif y_end < y_line + 50 and (y_start - y_end > 50 or p_max_y - y_end > 50):
+            elif y_end < y_line + 50 and (y_start - y_end > 30 or p_max_y - y_end > 30):
                 crossed = True
                 crossing_point = (int(x_end), y_line)
                 crossing_dir = "exit"
@@ -501,24 +501,24 @@ class CCTVStreamProcessor(threading.Thread):
             else:
                 # Check horizontal displacement based on start position relative to door posts
                 if 0.35 * w <= x_start <= 0.70 * w:
-                    if x_start - x_end > 50:
+                    if x_start - x_end > 30:
                         crossed = True
                         crossing_point = (x_left, int(y_end))
                         crossing_dir = "entry"
                         logger.info(f"[{self.name}] [Fallback Path] Verified entry by leftward turn: {x_start:.1f} -> {x_end:.1f}")
-                    elif x_end - x_start > 50:
+                    elif x_end - x_start > 30:
                         crossed = True
                         crossing_point = (x_right, int(y_end))
                         crossing_dir = "entry"
                         logger.info(f"[{self.name}] [Fallback Path] Verified entry by rightward turn: {x_start:.1f} -> {x_end:.1f}")
                 elif x_start < 0.35 * w:
-                    if x_end - x_start > 50:
+                    if x_end - x_start > 30:
                         crossed = True
                         crossing_point = (x_left, int(y_end))
                         crossing_dir = "exit"
                         logger.info(f"[{self.name}] [Fallback Path] Verified exit by rightward movement from left: {x_start:.1f} -> {x_end:.1f}")
                 elif x_start > 0.70 * w:
-                    if x_start - x_end > 50:
+                    if x_start - x_end > 30:
                         crossed = True
                         crossing_point = (x_right, int(y_end))
                         crossing_dir = "exit"
@@ -545,9 +545,9 @@ class CCTVStreamProcessor(threading.Thread):
                 # Check if there is any substantial movement (vertical or horizontal)
                 x_start = track["centroids"][0][0]
                 x_end = track["centroids"][-1][0]
-                moved_horizontally = abs(x_end - x_start) > 60 or x_end < x_left or x_end > x_right
+                moved_horizontally = abs(x_end - x_start) > 30 or x_end < x_left or x_end > x_right
                 
-                if downward_dist > 65 or upward_dist > 65 or moved_horizontally:
+                if downward_dist > 30 or upward_dist > 30 or moved_horizontally:
                     crossed = True
                     crossing_point = (int(x_end), int(y_end))
                     if downward_dist > upward_dist:
@@ -753,7 +753,7 @@ class CCTVStreamProcessor(threading.Thread):
                     downward_dist = max(y_end - y_start, y_end - track_min_y)
                     upward_dist = max(y_start - y_end, track_max_y - y_end)
 
-                    if track["frames_active"] >= 5 and (downward_dist > 65 or upward_dist > 65):
+                    if track["frames_active"] >= 3 and (downward_dist > 30 or upward_dist > 30):
                         has_crossed_boundary = True
                         if crossing_point_candidate is None:
                             crossing_point_candidate = (curr_x, curr_y)
