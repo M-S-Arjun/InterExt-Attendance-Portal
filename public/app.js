@@ -7486,11 +7486,11 @@ function injectChatbot() {
   container.innerHTML = `
     <div class="chatbot-header">
       <div class="chatbot-header-title">
-        <i data-lucide="bot" class="chatbot-logo-icon"></i>
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="chatbot-logo-icon" style="color: var(--color-primary);"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
         <span>Assist.AI</span>
         <span class="version-tag">v1.0</span>
       </div>
-      <button class="btn-close-chat" onclick="toggleChatbot()">&times;</button>
+      <button class="btn-close-chat" onclick="window.toggleChatbot()">&times;</button>
     </div>
     <div class="chatbot-messages" id="chatbot-messages">
       <div class="chat-message assistant">
@@ -7518,8 +7518,8 @@ function injectChatbot() {
   const trigger = document.createElement('div');
   trigger.id = 'chatbot-trigger';
   trigger.className = 'chatbot-trigger';
-  trigger.onclick = toggleChatbot;
-  trigger.innerHTML = `<i data-lucide="bot" style="width: 28px; height: 28px;"></i>`;
+  trigger.onclick = () => window.toggleChatbot();
+  trigger.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-bot"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>`;
   document.body.appendChild(trigger);
   
   // Setup popup prompt bubble after 4 seconds
