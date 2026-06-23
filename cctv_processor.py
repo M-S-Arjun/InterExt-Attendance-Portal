@@ -398,7 +398,15 @@ class CCTVStreamProcessor(threading.Thread):
                     if disappeared_duration >= self.max_disappeared_seconds:
                         del self.tracks[tid]
                 elif disappeared_duration >= self.max_disappeared_seconds:
-                    logger.info(f"[{self.name}] Expiring uncrossed track {tid} without marking attendance.")
+                    best_emp = self.tracks[tid].get("best_emp_id")
+                    frames_active = self.tracks[tid].get("frames_active", 0)
+                    if best_emp and best_emp != 'unknown' and frames_active >= 3:
+                        logger.info(f"[{self.name}] Track {tid} expired without line crossing, but face was recognized as {best_emp} (active frames: {frames_active}). Auto-confirming attendance for 24/7 reliability.")
+                        self.tracks[tid]["crossed"] = True
+                        self.tracks[tid]["confirmed"] = True
+                        self.confirm_attendance_event(tid, self.tracks[tid].get("best_frame", frame))
+                    else:
+                        logger.info(f"[{self.name}] Expiring uncrossed track {tid} without marking attendance.")
                     del self.tracks[tid]
 
 
