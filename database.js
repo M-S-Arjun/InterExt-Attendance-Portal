@@ -66,16 +66,22 @@ class Database {
   }
 
   startTransaction() {
+    this.transactionDepth = (this.transactionDepth || 0) + 1;
+    if (this.isBatching) return;
     this.isBatching = true;
     this.batchDb = this.read();
     console.log("[Database] Started batch update transaction (in-memory caching active).");
   }
 
   commitTransaction() {
-    if (this.isBatching && this.batchDb) {
+    if (this.transactionDepth > 0) {
+      this.transactionDepth--;
+    }
+    if (this.transactionDepth === 0 && this.isBatching && this.batchDb) {
       this.isBatching = false;
-      this.writeAtomic(this.batchDb);
+      const db = this.batchDb;
       this.batchDb = null;
+      this.writeAtomic(db);
       console.log("[Database] Committed batch update transaction (disk write finalized).");
       this.syncToExcelAsync();
     }
@@ -155,42 +161,50 @@ class Database {
   }
 
   // Write DB atomically to prevent corruption
+  // Cache is updated synchronously (instant reads), file write is async (non-blocking).
   writeAtomic(data) {
-    this.dbCache = data; // Keep cache updated
+    this.dbCache = data; // Update in-memory cache immediately — reads are instant
     if (this.isBatching) {
       this.batchDb = data;
       return true;
     }
-    const tempPath = `${DB_PATH}.tmp`;
-    try {
-      fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8');
-      
-      let retries = 5;
-      while (retries > 0) {
-        try {
-          fs.renameSync(tempPath, DB_PATH);
-          break;
-        } catch (renameErr) {
-          retries--;
-          if (retries === 0) throw renameErr;
-          // Synchronous sleep/wait for 50ms
-          const start = Date.now();
-          while (Date.now() - start < 50) {}
+
+    // Serialize to string first (this is the expensive part for a 10MB file)
+    const serialized = JSON.stringify(data, null, 2);
+
+    // Schedule the actual disk write in the background so it doesn't block the event loop
+    setImmediate(() => {
+      const tempPath = `${DB_PATH}.tmp`;
+      try {
+        fs.writeFileSync(tempPath, serialized, 'utf8');
+        
+        let retries = 5;
+        while (retries > 0) {
+          try {
+            fs.renameSync(tempPath, DB_PATH);
+            break;
+          } catch (renameErr) {
+            retries--;
+            if (retries === 0) throw renameErr;
+            // Brief synchronous wait before retry
+            const start = Date.now();
+            while (Date.now() - start < 50) {}
+          }
+        }
+        
+        // Perform automated periodic backup (10% chance on write to avoid bloat)
+        if (Math.random() < 0.1) {
+          this.createBackup(data);
+        }
+      } catch (err) {
+        console.error("Atomic database write failed:", err);
+        if (fs.existsSync(tempPath)) {
+          try { fs.unlinkSync(tempPath); } catch (e) {}
         }
       }
-      
-      // Perform automated periodic backup (10% chance on write to avoid bloat)
-      if (Math.random() < 0.1) {
-        this.createBackup(data);
-      }
-      return true;
-    } catch (err) {
-      console.error("Atomic database write failed:", err);
-      if (fs.existsSync(tempPath)) {
-        try { fs.unlinkSync(tempPath); } catch (e) {}
-      }
-      return false;
-    }
+    });
+
+    return true;
   }
 
   // Create a database backup file
@@ -280,6 +294,72 @@ class Database {
       saved = employee;
     }
     
+    // Recalculate attendance records for the current month to apply any changed shift times/rates
+    const currentMonthLabel = getLocalDateString().substring(0, 7); // "YYYY-MM"
+    db.attendance = (db.attendance || []).map(record => {
+      if (record.employeeId === saved.id && record.date && record.date.startsWith(currentMonthLabel)) {
+        try {
+          const updatedRecord = this.calculateShift(saved, record.checkIn, record.checkOut, record);
+          record.duration = updatedRecord.durationMinutes;
+          record.regularHours = updatedRecord.regularHours;
+          record.otHours = updatedRecord.otHours;
+          record.extraHours = updatedRecord.extraHours;
+          record.isHalfDay = updatedRecord.isHalfDay;
+          record.isFullDay = updatedRecord.isFullDay;
+          record.calculatedWage = updatedRecord.calculatedWage;
+          
+          // Re-evaluate check-in lateness
+          const { shiftStart } = this.getEmployeeShiftForDate(saved, record.date);
+          if (record.checkIn && shiftStart && shiftStart.includes(':')) {
+            const checkInDate = new Date(record.checkIn);
+            const checkInH = checkInDate.getHours();
+            const checkInM = checkInDate.getMinutes();
+            const [startH, startM] = shiftStart.split(':').map(Number);
+            const checkInMinutes = checkInH * 60 + checkInM;
+            const shiftStartMinutes = startH * 60 + startM;
+            
+            if (checkInMinutes > shiftStartMinutes) {
+              record.isLate = true;
+              if (!record.status || record.status === 'completed' || record.status === 'active') {
+                record.status = record.checkOut ? 'Late Check-in' : 'late';
+              }
+            } else {
+              record.isLate = false;
+              if (record.status === 'late' || record.status === 'Late Check-in') {
+                record.status = record.checkOut ? 'completed' : 'active';
+              }
+            }
+          }
+
+          // Re-evaluate early checkout
+          const { shiftEnd } = this.getEmployeeShiftForDate(saved, record.date);
+          if (record.checkOut && shiftEnd && shiftEnd.includes(':')) {
+            const checkOutDate = new Date(record.checkOut);
+            const coHour = checkOutDate.getHours();
+            const coMinute = checkOutDate.getMinutes();
+            const checkOutMinutes = coHour * 60 + coMinute;
+            const [shEndHour, shEndMin] = shiftEnd.split(':').map(Number);
+            const shiftEndMinutes = shEndHour * 60 + shEndMin;
+            
+            if (checkOutMinutes < shiftEndMinutes - 5) {
+              record.isEarlyCheckout = true;
+              if (!record.status || record.status === 'completed' || record.status === 'active') {
+                record.status = 'Early Check-out';
+              }
+            } else {
+              record.isEarlyCheckout = false;
+              if (record.status === 'Early Check-out') {
+                record.status = 'completed';
+              }
+            }
+          }
+        } catch (e) {
+          console.error("[saveEmployee] Recalculation failed for record on", record.date, e);
+        }
+      }
+      return record;
+    });
+
     this.writeAtomic(db);
     this.syncToExcelAsync();
     return saved;
@@ -324,6 +404,33 @@ class Database {
   // --- Settings Table ---
   getSettings() {
     return this.read().settings;
+  }
+
+  getEmployeeShiftForDate(employee, dateStr) {
+    const settings = this.getSettings();
+    let start = employee?.shiftStart || settings?.shiftStartTime || "09:00";
+    let end = employee?.shiftEnd || settings?.shiftEndTime || "17:00";
+
+    if (employee && employee.customShifts && dateStr) {
+      try {
+        let dayName;
+        const dateParts = dateStr.split('-');
+        if (dateParts.length === 3) {
+          const d = new Date(Number(dateParts[0]), Number(dateParts[1]) - 1, Number(dateParts[2]));
+          if (!isNaN(d.getTime())) {
+            const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+            dayName = days[d.getDay()];
+          }
+        }
+        if (dayName && employee.customShifts[dayName] && employee.customShifts[dayName].enabled) {
+          start = employee.customShifts[dayName].shiftStart || start;
+          end = employee.customShifts[dayName].shiftEnd || end;
+        }
+      } catch (e) {
+        console.error("[getEmployeeShiftForDate] Failed to resolve weekday override:", e);
+      }
+    }
+    return { shiftStart: start, shiftEnd: end };
   }
 
   saveSettings(newSettings) {
@@ -470,10 +577,22 @@ class Database {
     
     let overtimeBaseHours = F;
     
-    if (employee.shiftStart && employee.shiftEnd) {
+    let dateStr = record?.date;
+    if (!dateStr && checkInTime) {
       try {
-        const [startH, startM] = employee.shiftStart.split(':').map(Number);
-        const [endH, endM] = employee.shiftEnd.split(':').map(Number);
+        const checkInDate = new Date(checkInTime);
+        if (!isNaN(checkInDate.getTime())) {
+          dateStr = getLocalDateString(checkInDate);
+        }
+      } catch (e) {}
+    }
+
+    const { shiftStart, shiftEnd } = this.getEmployeeShiftForDate(employee, dateStr);
+
+    if (shiftStart && shiftEnd) {
+      try {
+        const [startH, startM] = shiftStart.split(':').map(Number);
+        const [endH, endM] = shiftEnd.split(':').map(Number);
         let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
         if (shiftMinutes < 0) shiftMinutes += 24 * 60;
         const shiftHours = shiftMinutes / 60;
@@ -1104,12 +1223,12 @@ class Database {
           record.messageText = combinedMsgs.join(' | ');
 
           // 5. Merge travelHours
-          record.travelHours = (Number(existing.travelHours) || 0.0) + (Number(record.travelHours) || 0.0);
+          record.travelHours = Math.max(Number(existing.travelHours) || 0.0, Number(record.travelHours) || 0.0);
 
           // 6. Merge hospital cases
           if (existing.isHospitalCase || record.isHospitalCase) {
             record.isHospitalCase = true;
-            record.hospitalHours = (Number(existing.hospitalHours) || 0.0) + (Number(record.hospitalHours) || 0.0);
+            record.hospitalHours = Math.max(Number(existing.hospitalHours) || 0.0, Number(record.hospitalHours) || 0.0);
           }
 
           // Use the existing ID so we overwrite/update the existing entry in db
@@ -1135,10 +1254,7 @@ class Database {
 
     // Unless it's a manual override or leave, ensure checkIn/checkOut are correctly computed from punches
     if (!record.isManualOverride && record.status !== 'leave' && record.punches && record.punches.length > 0) {
-      // Ensure the first punch of the day is always an 'in' punch
-      if (record.punches[0].type === 'out') {
-        record.punches[0].type = 'in';
-      }
+      // Keep punch types intact to preserve physical entry/exit directions (e.g. from CCTV)
       
       const ins = record.punches.filter(p => p.type === 'in');
       if (ins.length > 0) {
@@ -1154,13 +1270,14 @@ class Database {
     }
 
     // Strict Late Check-in Check against registry shift start time
-    if (record.checkIn && employee.shiftStart && employee.shiftStart.includes(':')) {
+    const { shiftStart } = this.getEmployeeShiftForDate(employee, record.date);
+    if (record.checkIn && shiftStart && shiftStart.includes(':')) {
       try {
         const checkInDate = new Date(record.checkIn);
         const checkInH = checkInDate.getHours();
         const checkInM = checkInDate.getMinutes();
-        const [startH, startM] = employee.shiftStart.split(':').map(Number);
-                const checkInMinutes = checkInH * 60 + checkInM;
+        const [startH, startM] = shiftStart.split(':').map(Number);
+        const checkInMinutes = checkInH * 60 + checkInM;
         const shiftStartMinutes = startH * 60 + startM;
         
         if (checkInMinutes > shiftStartMinutes) { // sharp time (no grace period)
@@ -1217,14 +1334,15 @@ class Database {
       
       // Detect early check-out
       let isEarlyOut = false;
-      if (employee.shiftEnd && employee.shiftEnd.includes(':')) {
+      const { shiftEnd } = this.getEmployeeShiftForDate(employee, record.date);
+      if (shiftEnd && shiftEnd.includes(':')) {
         try {
           const checkOutDate = new Date(record.checkOut);
           const coHour = checkOutDate.getHours();
           const coMinute = checkOutDate.getMinutes();
           const checkOutMinutes = coHour * 60 + coMinute;
 
-          const [shEndHour, shEndMin] = employee.shiftEnd.split(':').map(Number);
+          const [shEndHour, shEndMin] = shiftEnd.split(':').map(Number);
           const shiftEndMinutes = shEndHour * 60 + shEndMin;
           if (checkOutMinutes < shiftEndMinutes - 5) {
             isEarlyOut = true;
@@ -1441,10 +1559,12 @@ class Database {
       let checkInISO = null;
       let checkOutISO = null;
 
-      if (employee.shiftStart && employee.shiftEnd) {
+      const { shiftStart, shiftEnd } = this.getEmployeeShiftForDate(employee, targetDate);
+
+      if (shiftStart && shiftEnd) {
         try {
-          const [startH, startM] = employee.shiftStart.split(':').map(Number);
-          const [endH, endM] = employee.shiftEnd.split(':').map(Number);
+          const [startH, startM] = shiftStart.split(':').map(Number);
+          const [endH, endM] = shiftEnd.split(':').map(Number);
           let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
           if (shiftMinutes < 0) shiftMinutes += 24 * 60;
           const shiftHours = shiftMinutes / 60;
@@ -1647,11 +1767,11 @@ class Database {
 
         if (isNewMessageText) {
           if (parsedData.travelHours) {
-            existing.travelHours = (existing.travelHours || 0.0) + parsedData.travelHours;
+            existing.travelHours = Math.max(existing.travelHours || 0.0, parsedData.travelHours);
           }
           if (parsedData.isHospitalCase) {
             existing.isHospitalCase = true;
-            existing.hospitalHours = (existing.hospitalHours || 0.0) + parsedData.hospitalHours;
+            existing.hospitalHours = Math.max(existing.hospitalHours || 0.0, parsedData.hospitalHours);
           }
         }
         return this.saveAttendance(existing);
@@ -2109,10 +2229,11 @@ class Database {
       }
       
       let F = 8.0;
-      if (emp.shiftStart && emp.shiftEnd) {
+      const { shiftStart, shiftEnd } = this.getEmployeeShiftForDate(emp, null);
+      if (shiftStart && shiftEnd) {
         try {
-          const [startH, startM] = emp.shiftStart.split(':').map(Number);
-          const [endH, endM] = emp.shiftEnd.split(':').map(Number);
+          const [startH, startM] = shiftStart.split(':').map(Number);
+          const [endH, endM] = shiftEnd.split(':').map(Number);
           let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
           if (shiftMinutes < 0) shiftMinutes += 24 * 60;
           const shiftHours = shiftMinutes / 60;
@@ -2146,7 +2267,8 @@ class Database {
         }
       });
       const travelTimeHours = adj.travelTimeHours !== undefined ? Number(adj.travelTimeHours) : Number(defaultTravelHours.toFixed(2));
-      const travelTimePayout = Number((travelTimeHours * hourlyRate).toFixed(2));
+      const travelRatio = settings.travelTimePaidRatio !== undefined ? Number(settings.travelTimePaidRatio) : 0.50;
+      const travelTimePayout = Number((travelTimeHours * travelRatio * hourlyRate).toFixed(2));
       
       // Extra Days
       const extraDays = adj.extraDays !== undefined ? Number(adj.extraDays) : 0.0;
@@ -2227,9 +2349,13 @@ class Database {
   // --- Welders Weekly Reports and Payroll Calculations ---
   getWeldersWeeklyReportData(fridayDateStr, db = null) {
     if (!db) db = this.read();
+    const settings = this.getSettings();
     
     const fridayDate = new Date(fridayDateStr);
-    const dayNames = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    const isSat = fridayDate.getUTCDay() === 6;
+    const dayNames = isSat
+      ? ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+      : ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
     const datesOfWeek = [];
     for (let i = -6; i <= 0; i++) {
       const d = new Date(fridayDate.getTime());
@@ -2271,9 +2397,9 @@ class Database {
             hours = log.status === 'absent' || log.status === 'leave' ? 0.0 : Number((log.duration / 60).toFixed(2));
             totalHours += hours;
             
-            const isFriday = (index === 6);
-            // Overtime excluded on Friday
-            const actualOtHours = isFriday ? 0.0 : (Number(log.otHours) || 0.0);
+            const isWeekEndingDay = isSat ? (dayName === "Saturday") : (dayName === "Friday");
+            // Overtime excluded on the week-ending day (Friday or Saturday)
+            const actualOtHours = isWeekEndingDay ? 0.0 : (Number(log.otHours) || 0.0);
             otHours = actualOtHours;
             
             const dailyRate = Number(welder.dailyRate) || 0.0;
@@ -2281,10 +2407,11 @@ class Database {
             
             let F = 8.0;
             let h = 4.0;
-            if (welder.shiftStart && welder.shiftEnd) {
+            const { shiftStart, shiftEnd } = this.getEmployeeShiftForDate(welder, log.date);
+            if (shiftStart && shiftEnd) {
               try {
-                const [startH, startM] = welder.shiftStart.split(':').map(Number);
-                const [endH, endM] = welder.shiftEnd.split(':').map(Number);
+                const [startH, startM] = shiftStart.split(':').map(Number);
+                const [endH, endM] = shiftEnd.split(':').map(Number);
                 let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
                 if (shiftMinutes < 0) shiftMinutes += 24 * 60;
                 const shiftHours = shiftMinutes / 60;
@@ -2298,7 +2425,7 @@ class Database {
             
             if (log.isManualOverride) {
               const manualWage = Number(log.calculatedWage) || 0.0;
-              if (isFriday) {
+              if (isWeekEndingDay) {
                 const manualOt = Number(log.otHours) || 0.0;
                 const otPayout = Number((manualOt * hourlyRate).toFixed(2));
                 dailyWage = Math.max(0, Number((manualWage - otPayout).toFixed(2)));
@@ -2310,7 +2437,7 @@ class Database {
             } else {
               if (hours >= F && !forceHalfDay) {
                 dailyWage = dailyRate;
-                if (!isFriday) {
+                if (!isWeekEndingDay) {
                   const dayOtPay = Number((otHours * hourlyRate).toFixed(2));
                   weeklyOtPay += dayOtPay;
                   dailyWage += dayOtPay;
@@ -2325,7 +2452,8 @@ class Database {
             
             wage = dailyWage;
             travelHours = Number(log.travelHours) || 0.0;
-            weeklyTravelPay += Number((travelHours * hourlyRate).toFixed(2));
+            const travelRatio = settings.travelTimePaidRatio !== undefined ? Number(settings.travelTimePaidRatio) : 0.50;
+            weeklyTravelPay += Number((travelHours * travelRatio * hourlyRate).toFixed(2));
             totalOtHours += otHours;
             totalTravelHours += travelHours;
             
@@ -2371,28 +2499,46 @@ class Database {
 
   compileWeldersWeeklyReport(db) {
     const uniqueDates = Array.from(new Set(db.attendance.map(a => a.date)));
-    const fridays = uniqueDates.filter(d => {
+    const reportDates = [];
+    uniqueDates.forEach(dStr => {
       try {
-        return new Date(d).getDay() === 5;
-      } catch (e) {
-        return false;
-      }
-    }).sort((a, b) => a.localeCompare(b));
+        const d = new Date(dStr);
+        const dayOfWeek = d.getUTCDay();
+        if (dayOfWeek === 6) { // Saturday
+          const dateNum = d.getUTCDate();
+          const satIndex = Math.ceil(dateNum / 7);
+          if (satIndex === 1 || satIndex === 3 || satIndex === 5) {
+            reportDates.push(dStr);
+          }
+        } else if (dayOfWeek === 5) { // Friday
+          const nextSat = new Date(d.getTime());
+          nextSat.setUTCDate(nextSat.getUTCDate() + 1);
+          const dateNum = nextSat.getUTCDate();
+          const satIndex = Math.ceil(dateNum / 7);
+          if (satIndex !== 1 && satIndex !== 3 && satIndex !== 5) {
+            reportDates.push(dStr);
+          }
+        }
+      } catch (e) {}
+    });
+    
+    // De-duplicate and sort
+    const uniqueReportDates = Array.from(new Set(reportDates)).sort((a, b) => a.localeCompare(b));
     
     const rows = [];
-    fridays.forEach(fridayStr => {
+    uniqueReportDates.forEach(fridayStr => {
       const data = this.getWeldersWeeklyReportData(fridayStr, db);
       data.forEach(w => {
-        const sat = w.dailyDetails[0];
-        const sun = w.dailyDetails[1];
-        const mon = w.dailyDetails[2];
-        const tue = w.dailyDetails[3];
-        const wed = w.dailyDetails[4];
-        const thu = w.dailyDetails[5];
-        const fri = w.dailyDetails[6];
+        const sat = w.dailyDetails.find(d => d.dayName === "Saturday") || { hours: 0 };
+        const sun = w.dailyDetails.find(d => d.dayName === "Sunday") || { hours: 0 };
+        const mon = w.dailyDetails.find(d => d.dayName === "Monday") || { hours: 0 };
+        const tue = w.dailyDetails.find(d => d.dayName === "Tuesday") || { hours: 0 };
+        const wed = w.dailyDetails.find(d => d.dayName === "Wednesday") || { hours: 0 };
+        const thu = w.dailyDetails.find(d => d.dayName === "Thursday") || { hours: 0 };
+        const fri = w.dailyDetails.find(d => d.dayName === "Friday") || { hours: 0 };
         
         rows.push({
-          "Week Ending (Friday)": fridayStr,
+          "Week Ending": fridayStr,
           "Welder ID": w.welderId,
           "Welder Name": w.welderName,
           "Daily Rate (₹)": w.dailyRate,
