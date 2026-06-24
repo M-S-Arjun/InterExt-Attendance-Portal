@@ -548,7 +548,7 @@ class AttendanceParser {
 
     // Apply supervisor vs office worker rules for Akhil and Anandhu/Ananthu
     const containsAkhil = /\bakhil\b/i.test(cleanLine);
-    const containsAnandhu = /\b(anandhu|ananthu)\b/i.test(cleanLine);
+    const containsAnandhu = /\b(anandhu|ananthu|anadhu|anathu)\b/i.test(cleanLine);
 
     if (containsAkhil) {
       const cleanSender = rawSender ? rawSender.replace(/\D/g, '') : "";
@@ -563,11 +563,11 @@ class AttendanceParser {
 
     if (containsAnandhu) {
       const cleanSender = rawSender ? rawSender.replace(/\D/g, '') : "";
-      if (cleanSender === '917558835311' && isLeave) {
-        // Office worker Anandhu Sunil reporting leave
+      if (cleanSender === '917558835311') {
+        // Message sent by Anandhu Sunil himself -> map to Anandhu Sunil
         validEmployees = validEmployees.filter(e => e.id !== 'emp_IN064');
       } else {
-        // Supervisor report for Anandhu Raj
+        // Message sent by anyone else (supervisor) -> map to Anandhu Raj
         validEmployees = validEmployees.filter(e => e.id !== 'emp_2029');
       }
     }
@@ -851,7 +851,8 @@ class AttendanceParser {
         const valStr = earlyMatch[1];
         const earlyHours = parseHoursVal(valStr);
         if (!isNaN(earlyHours)) {
-          let shiftEnd = (matchedEmployee && matchedEmployee.shiftEnd) ? matchedEmployee.shiftEnd : "17:00";
+          const { shiftEnd: customShiftEnd } = database.getEmployeeShiftForDate(matchedEmployee, dateStr);
+          let shiftEnd = customShiftEnd || "17:00";
           if (!shiftEnd || !shiftEnd.includes(':')) {
             shiftEnd = "17:00";
           }
@@ -1455,7 +1456,6 @@ class AttendanceParser {
         // A valid group needs at least 1 name AND (timing or site info)
         if (names.length > 0 && (groupTiming || groupSiteWords.length > 0)) {
           multiGroupValid = true;
-          const paidTravel = Number((groupTravel * travelRatio2).toFixed(2));
           // Build a clean site name from site words, stripping duplicates
           const siteName = [...new Set(groupSiteWords)].join(' ').trim();
 
@@ -1468,7 +1468,7 @@ class AttendanceParser {
             const res = this.parseSingleLine(virtualLine.toLowerCase(), groupDate, null, "", messageTimestamp);
             res.rawSender = senderPhone;
             res.originalLineText = virtualLine;
-            res.travelHours = paidTravel;
+            res.travelHours = groupTravel; // Store full STATED hours
             multiGroupResults.push(res);
           }
         }
@@ -1494,7 +1494,7 @@ class AttendanceParser {
     }
 
     // A. Pre-process to extract travel hours and identify explicit site line (supporting both global and per-line travel)
-    let globalPaidTravelHours = 0;
+    let globalReportedTravelHours = 0;
     let explicitSiteLine = null;
     const lineTravelMap = new Map();
 
@@ -1506,13 +1506,10 @@ class AttendanceParser {
       const travelMatch = processedLine.match(/(\d+(?:\.\d+)?)\s*(?:hour|hours|hr|hrs)?\s*trav[a-z]*/i);
       if (travelMatch) {
         const reported = parseFloat(travelMatch[1]);
-        const settings = database.getSettings();
-        const ratio = settings.travelTimePaidRatio !== undefined ? Number(settings.travelTimePaidRatio) : 0.50;
-        const paid = Number((reported * ratio).toFixed(2));
 
         const isWholeLine = line.toLowerCase().replace(travelMatch[0].toLowerCase(), '').replace(/[.,:;]+$/, '').trim().length === 0;
         if (isWholeLine) {
-          globalPaidTravelHours = paid;
+          globalReportedTravelHours = reported; // Store reported hours directly
           if (i > 0) {
             const prevLine = lines[i - 1];
             if (!prevLine.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/)) {
@@ -1523,7 +1520,7 @@ class AttendanceParser {
           const rest = line.replace(travelMatch[0], '').trim();
           if (rest.length > 0) {
             cleanLines.push(rest);
-            lineTravelMap.set(rest.toLowerCase(), paid);
+            lineTravelMap.set(rest.toLowerCase(), reported); // Store reported hours directly
           }
         }
       } else {
@@ -1536,7 +1533,15 @@ class AttendanceParser {
     const getTravelHoursForLine = (lineText) => {
       const clean = lineText.toLowerCase().trim();
       const lineTravel = lineTravelMap.get(clean) || 0;
-      return lineTravel > 0 ? lineTravel : globalPaidTravelHours;
+      if (lineTravel > 0) return lineTravel;
+
+      // Check substring matches (e.g. for bulk list virtual lines)
+      for (const [key, val] of lineTravelMap.entries()) {
+        if (key && (clean.includes(key) || key.includes(clean))) {
+          return val;
+        }
+      }
+      return globalReportedTravelHours;
     };
 
     // 1. Detect Default Site mapping in headers (e.g. "Site: Site A" or first line being site name)
