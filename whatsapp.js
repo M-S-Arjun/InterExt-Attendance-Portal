@@ -84,7 +84,7 @@ function cleanupChromeProcesses() {
         const fullPath = path.join(dir, file);
         if (fs.statSync(fullPath).isDirectory()) {
           deleteLocks(fullPath);
-        } else if (file === 'SingletonLock') {
+        } else if (file === 'SingletonLock' || file === 'lockfile' || file === 'LOCK') {
           try {
             fs.unlinkSync(fullPath);
             console.log(`[Process Cleanup] Deleted stale Puppeteer lockfile: ${fullPath}`);
@@ -229,15 +229,7 @@ class WhatsAppManager extends EventEmitter {
                 ? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
                 : undefined)),
           protocolTimeout: 240000, // Terminate Protocol errors by setting 240s timeout (4 minutes for large accounts)
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-extensions',
-            '--disable-gpu'
-          ]
+          args: []
         }
       });
 
@@ -281,6 +273,41 @@ class WhatsAppManager extends EventEmitter {
       this.status = 'authenticated';
       this.qrCodeDataUrl = null;
       this.emit('status', this.status);
+
+      // Start interval to dismiss any popup modals (like "What's new on WhatsApp Web") blocking ready event
+      if (this.modalDismissInterval) clearInterval(this.modalDismissInterval);
+      this.modalDismissInterval = setInterval(async () => {
+        if (!this.client || !this.client.pupPage || this.status === 'ready') {
+          if (this.status === 'ready' && this.modalDismissInterval) {
+            clearInterval(this.modalDismissInterval);
+            this.modalDismissInterval = null;
+          }
+          return;
+        }
+        try {
+          const page = this.client.pupPage;
+          await page.keyboard.press('Escape');
+          await page.evaluate(() => {
+            const headers = Array.from(document.querySelectorAll('div, h1, h2, h3, h4, span'));
+            const modalHeader = headers.find(h => h.textContent?.includes("What's new on WhatsApp Web"));
+            if (modalHeader) {
+              const modalContainer = modalHeader.closest('div[role="dialog"]') || 
+                                     modalHeader.closest('div[class*="modal"]') || 
+                                     modalHeader.closest('div[class*="popup"]') || 
+                                     modalHeader.parentElement?.parentElement;
+              if (modalContainer) {
+                const buttons = Array.from(modalContainer.querySelectorAll('button, div[role="button"], span[role="button"]'));
+                buttons.forEach(b => {
+                  console.log("[Auto-Dismiss] Clicking modal button:", b.textContent || "close");
+                  b.click();
+                });
+              }
+            }
+          });
+        } catch (e) {
+          // Ignore transient errors
+        }
+      }, 3000);
 
       // Start 5-minute watchdog timer for ready state to prevent hydration hangs (large accounts require more boot time)
       if (this.authReadyTimeout) clearTimeout(this.authReadyTimeout);
@@ -330,6 +357,12 @@ class WhatsAppManager extends EventEmitter {
     this.client.on('ready', async () => {
       console.log("WhatsApp Client is ready!");
       this.clearConnectingTimeout();
+
+      // Clear modal dismiss interval
+      if (this.modalDismissInterval) {
+        clearInterval(this.modalDismissInterval);
+        this.modalDismissInterval = null;
+      }
 
       // Clear watchdog timer
       if (this.authReadyTimeout) {
@@ -509,7 +542,7 @@ class WhatsAppManager extends EventEmitter {
               this.groupIdCache[chatId] = groupId;
             }
           } catch (e) {
-            console.error(`[Message Processor] Failed to resolve group chat for ID ${chatId}:`, e.message);
+            console.error(`[Message Processor] Failed to resolve group chat for ID ${chatId}:`, e);
           }
         } else {
           console.log(`[Message Processor] Resolving group chat for ID: ${chatId}...`);
@@ -526,14 +559,20 @@ class WhatsAppManager extends EventEmitter {
               console.log(`[Message Processor] Cached group name: "${groupName}" -> ID: ${chatId}`);
             }
           } catch (e) {
-            console.error(`[Message Processor] Failed to resolve group chat for ID ${chatId}:`, e.message);
+            console.error(`[Message Processor] Failed to resolve group chat for ID ${chatId}:`, e);
           }
         }
       }
 
-      // Enforce matching strictly the target groups (case-insensitive)
-      if (!groupName || !targetGroupNames.includes(groupName.toLowerCase())) {
-        return;
+      const isGroupMatchedById = targetGroupIds.includes(chatId);
+      if (isGroupMatchedById) {
+        groupName = groupName || targetGroupNames[0] || 'ATTENDANCE';
+        groupId = groupId || chatId;
+      } else {
+        // Enforce matching strictly the target groups (case-insensitive)
+        if (!groupName || !targetGroupNames.includes(groupName.toLowerCase())) {
+          return;
+        }
       }
 
       // Auto-heal group JIDs in settings if missing
@@ -698,6 +737,7 @@ class WhatsAppManager extends EventEmitter {
       const groupInfo = { name: chat.name, id: chat.id._serialized };
 
       database.skipExcelSync = true;
+      database.startTransaction();
       try {
         for (const msg of sortedMessages) {
           const msgId = msg.id._serialized;
@@ -709,6 +749,7 @@ class WhatsAppManager extends EventEmitter {
           }
         }
       } finally {
+        database.commitTransaction();
         database.skipExcelSync = false;
         if (database.pendingExcelSync) {
           database.pendingExcelSync = false;
@@ -747,7 +788,11 @@ class WhatsAppManager extends EventEmitter {
         }
       }
 
-      const uniqueIds = [...new Set(updatedIdsList)];
+      const targetGroupIds = (settings.whatsappGroupId || '')
+        .split(',')
+        .map(id => id.trim())
+        .filter(Boolean);
+      const uniqueIds = [...new Set([...targetGroupIds, ...updatedIdsList])];
       if (uniqueIds.join(', ') !== settings.whatsappGroupId) {
         database.saveSettings({ ...settings, whatsappGroupId: uniqueIds.join(', ') });
       }
@@ -867,6 +912,82 @@ class WhatsAppManager extends EventEmitter {
     }
   }
 
+  async getChatByIdSafe(chatId) {
+    if (!this.client) throw new Error("WhatsApp client not initialized");
+    try {
+      return await this.client.getChatById(chatId);
+    } catch (e) {
+      console.warn(`[getChatByIdSafe] Standard getChatById failed for ${chatId}, attempting raw page evaluation fallback:`, e.message);
+      // Fallback: evaluate window.WWebJS.getChat with getAsModel: false
+      const rawChat = await this.client.pupPage.evaluate(async (jid) => {
+        try {
+          const chat = await window.WWebJS.getChat(jid, { getAsModel: false });
+          return chat ? { id: chat.id._serialized || chat.id, name: chat.name, isGroup: !!chat.groupMetadata || (chat.id._serialized || chat.id || '').endsWith('@g.us') } : null;
+        } catch (err) {
+          return null;
+        }
+      }, chatId);
+      
+      if (rawChat) {
+        console.log(`[getChatByIdSafe] Successfully retrieved raw chat object for ${chatId} ("${rawChat.name}")`);
+        const self = this;
+        return {
+          id: { _serialized: rawChat.id },
+          name: rawChat.name,
+          isGroup: rawChat.isGroup,
+          groupMetadata: {
+            participants: await this.client.pupPage.evaluate(async (jid) => {
+              try {
+                const chat = await window.WWebJS.getChat(jid, { getAsModel: false });
+                if (!chat || !chat.groupMetadata || !chat.groupMetadata.participants) return [];
+                return chat.groupMetadata.participants.map(p => ({
+                  id: { _serialized: p.id._serialized || p.id }
+                }));
+              } catch (err) {
+                return [];
+              }
+            }, chatId)
+          },
+          fetchMessages: async (options) => {
+            const limit = options?.limit || 50;
+            const rawMsgs = await self.client.pupPage.evaluate(async (jid, lim) => {
+              try {
+                const chat = await window.WWebJS.getChat(jid, { getAsModel: false });
+                let msgs = chat.msgs.getModelsArray ? chat.msgs.getModelsArray() : (Array.isArray(chat.msgs) ? chat.msgs : (chat.msgs.toArray ? chat.msgs.toArray() : (chat.msgs._models || [])));
+                
+                while (msgs.length < lim) {
+                  const loadedMessages = await window.require('WAWebChatLoadMessages').loadEarlierMsgs({ chat });
+                  if (!loadedMessages || !loadedMessages.length) break;
+                  msgs = [...loadedMessages, ...msgs];
+                }
+                
+                if (msgs.length > lim) {
+                  msgs.sort((a, b) => (a.t > b.t ? 1 : -1));
+                  msgs = msgs.slice(msgs.length - lim);
+                }
+
+                return msgs.map(m => ({
+                  id: { _serialized: m.id._serialized || m.id },
+                  body: m.body,
+                  timestamp: m.timestamp || m.t,
+                  author: m.author?._serialized || m.author || chat.id._serialized || chat.id,
+                  from: m.from?._serialized || m.from || chat.id._serialized || chat.id,
+                  hasMedia: m.hasMedia || false,
+                  type: m.type || 'chat',
+                  isSystem: m.isSystem || false
+                }));
+              } catch (err) {
+                return [];
+              }
+            }, chatId, limit);
+            return rawMsgs;
+          }
+        };
+      }
+      throw e;
+    }
+  }
+
   // Background startup routines that run asynchronously to avoid blocking the main ready handler
   async runStartupRoutines() {
     console.log("[Startup] Starting WhatsApp background routines...");
@@ -889,19 +1010,15 @@ class WhatsAppManager extends EventEmitter {
     for (const gid of targetGroupIds) {
       try {
         console.log(`[Startup] Attempting to load chat directly by cached ID: ${gid}`);
-        const chat = await this.client.getChatById(gid);
+        const chat = await this.getChatByIdSafe(gid);
         if (chat && chat.isGroup && chat.name) {
-          const nameLower = chat.name.trim().toLowerCase();
-          if (targetGroupNamesLower.includes(nameLower)) {
-            resolvedGroups.push(chat);
-            updatedIdsList.push(gid);
-            console.log(`[Startup] Successfully loaded and verified chat by cached ID: ${gid} ("${chat.name}")`);
-          } else {
-            console.warn(`[Startup] Cached group JID ${gid} name is "${chat.name}", which does not match any target. Skipping...`);
-          }
+          // Since the JID is explicitly configured in settings, we trust and load it directly
+          resolvedGroups.push(chat);
+          updatedIdsList.push(gid);
+          console.log(`[Startup] Successfully loaded chat by cached ID: ${gid} ("${chat.name}")`);
         }
       } catch (e) {
-        console.warn(`[Startup] Cached Group ID ${gid} lookup failed:`, e.message);
+        console.warn(`[Startup] Cached Group ID ${gid} lookup failed:`, e);
       }
     }
 
@@ -929,12 +1046,12 @@ class WhatsAppManager extends EventEmitter {
           }
         }
       } catch (err) {
-        console.error("[Startup] Failed to scan chats directory:", err.message);
+        console.error("[Startup] Failed to scan chats directory:", err);
       }
     }
 
-    // Save all resolved group JIDs back to settings
-    const uniqueIds = [...new Set(updatedIdsList)];
+    // Save all resolved group JIDs back to settings (merging with existing to prevent auto-clear)
+    const uniqueIds = [...new Set([...targetGroupIds, ...updatedIdsList])];
     if (uniqueIds.join(', ') !== settings.whatsappGroupId) {
       database.saveSettings({ ...settings, whatsappGroupId: uniqueIds.join(', ') });
     }
@@ -948,7 +1065,7 @@ class WhatsAppManager extends EventEmitter {
       try {
         await this.buildLidMappingForChat(group);
       } catch (err) {
-        console.error(`[Startup] LID mapping failed for group "${group.name}":`, err.message);
+        console.error(`[Startup] LID mapping failed for group "${group.name}":`, err);
       }
 
       try {
@@ -1059,7 +1176,7 @@ class WhatsAppManager extends EventEmitter {
       const gids = settings.whatsappGroupId.split(',').map(id => id.trim()).filter(Boolean);
       for (const gid of gids) {
         try {
-          const chat = await this.client.getChatById(gid);
+          const chat = await this.getChatByIdSafe(gid);
           await this.buildLidMappingForChat(chat);
         } catch (e) {
           console.warn(`[LID Resolver] Legacy buildLidMapping failed for ${gid}:`, e.message);
@@ -1102,7 +1219,7 @@ class WhatsAppManager extends EventEmitter {
       for (const gid of targetGroupIds) {
         try {
           console.log(`[Refresh Engine] Fetching chat for ID: ${gid}`);
-          const chat = await this.client.getChatById(gid);
+          const chat = await this.getChatByIdSafe(gid);
           if (!chat) {
             console.warn(`[Refresh Engine] Could not load group chat for ID: ${gid}`);
             continue;
@@ -1190,6 +1307,10 @@ class WhatsAppManager extends EventEmitter {
     console.log("[Shutdown] Cleaning up intervals...");
     if (this.healthCheckInterval) clearInterval(this.healthCheckInterval);
     if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
+    if (this.modalDismissInterval) {
+      clearInterval(this.modalDismissInterval);
+      this.modalDismissInterval = null;
+    }
     if (this.client) {
       try {
         console.log("[Shutdown] Gracefully destroying WhatsApp client...");
