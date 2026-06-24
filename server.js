@@ -33,6 +33,109 @@ function getLocalDateString(dateInput = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function parseTargetDateFromQuery(query, referenceDate = new Date()) {
+  const cleanQuery = query.toLowerCase().trim();
+  
+  // Yesterday
+  if (cleanQuery.includes('yesterday') || cleanQuery.includes('yestoday') || cleanQuery.includes('yestrday')) {
+    const yesterday = new Date(referenceDate);
+    yesterday.setDate(referenceDate.getDate() - 1);
+    return { dateStr: getLocalDateString(yesterday), label: 'yesterday' };
+  }
+  
+  // Today
+  if (cleanQuery.includes('today') || cleanQuery.includes('toddy') || cleanQuery.includes('tody')) {
+    return { dateStr: getLocalDateString(referenceDate), label: 'today' };
+  }
+
+  // Day before yesterday
+  if (cleanQuery.includes('day before yesterday')) {
+    const dby = new Date(referenceDate);
+    dby.setDate(referenceDate.getDate() - 2);
+    return { dateStr: getLocalDateString(dby), label: 'day before yesterday' };
+  }
+  
+  // Look for direct date matches in query: YYYY-MM-DD
+  const yyyymmddRegex = /(\d{4})[-/](\d{1,2})[-/](\d{1,2})/;
+  const matchYmd = cleanQuery.match(yyyymmddRegex);
+  if (matchYmd) {
+    const y = parseInt(matchYmd[1], 10);
+    const m = String(matchYmd[2]).padStart(2, '0');
+    const d = String(matchYmd[3]).padStart(2, '0');
+    return { dateStr: `${y}-${m}-${d}`, label: `on ${y}-${m}-${d}` };
+  }
+
+  // Look for DD-MM-YYYY or DD/MM/YYYY or DD-MM-YY
+  const ddmmyyyyRegex = /(\d{1,2})[-/](\d{1,2})[-/](\d{4}|\d{2})/;
+  const matchDmy = cleanQuery.match(ddmmyyyyRegex);
+  if (matchDmy) {
+    const d = String(matchDmy[1]).padStart(2, '0');
+    const m = String(matchDmy[2]).padStart(2, '0');
+    let y = matchDmy[3];
+    if (y.length === 2) {
+      y = '20' + y;
+    }
+    return { dateStr: `${y}-${m}-${d}`, label: `on ${d}-${m}-${y}` };
+  }
+
+  // Look for month names and days, e.g. "june 25", "25th june", "july 1st", "1 july"
+  const monthsList = [
+    { name: 'january', abbr: 'jan', val: 0 },
+    { name: 'february', abbr: 'feb', val: 1 },
+    { name: 'march', abbr: 'mar', val: 2 },
+    { name: 'april', abbr: 'apr', val: 3 },
+    { name: 'may', abbr: 'may', val: 4 },
+    { name: 'june', abbr: 'jun', val: 5 },
+    { name: 'july', abbr: 'jul', val: 6 },
+    { name: 'august', abbr: 'aug', val: 7 },
+    { name: 'september', abbr: 'sep', val: 8 },
+    { name: 'october', abbr: 'oct', val: 9 },
+    { name: 'november', abbr: 'nov', val: 10 },
+    { name: 'december', abbr: 'dec', val: 11 }
+  ];
+
+  for (const mObj of monthsList) {
+    if (cleanQuery.includes(mObj.name) || cleanQuery.includes(mObj.abbr)) {
+      const dayMatches = cleanQuery.match(/\b(\d{1,2})(st|nd|rd|th)?\b/g);
+      if (dayMatches) {
+        for (const dm of dayMatches) {
+          const dayNum = parseInt(dm, 10);
+          if (dayNum >= 1 && dayNum <= 31) {
+            const target = new Date(referenceDate);
+            target.setMonth(mObj.val);
+            target.setDate(dayNum);
+            if (target > referenceDate) {
+              target.setFullYear(referenceDate.getFullYear() - 1);
+            }
+            const monthName = target.toLocaleDateString('en-US', { month: 'long' });
+            return { dateStr: getLocalDateString(target), label: `on ${dayNum} ${monthName}` };
+          }
+        }
+      }
+    }
+  }
+
+  // Weekdays (e.g. "on monday", "last tuesday")
+  const weekdays = {
+    sunday: 0, mon: 1, monday: 1, tue: 2, tuesday: 2, wed: 3, wednesday: 3,
+    thu: 4, thursday: 4, fri: 5, friday: 5, sat: 6, saturday: 6
+  };
+  for (const [dayName, dayVal] of Object.entries(weekdays)) {
+    if (cleanQuery.includes(dayName)) {
+      const target = new Date(referenceDate);
+      const currentDay = referenceDate.getDay();
+      let diff = currentDay - dayVal;
+      if (diff <= 0) {
+        diff += 7;
+      }
+      target.setDate(referenceDate.getDate() - diff);
+      return { dateStr: getLocalDateString(target), label: `last ${dayName}` };
+    }
+  }
+
+  return { dateStr: getLocalDateString(referenceDate), label: 'today' };
+}
+
 // In-memory stack to store resolved/deleted exception actions for the undo function
 const undoStack = [];
 const redoStack = [];
@@ -153,6 +256,14 @@ app.use((req, res, next) => {
   next();
 });
 
+// Disable caching for API endpoints to prevent stale data retrieval on manual/automatic refresh
+app.use('/api', (req, res, next) => {
+  res.header("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.header("Pragma", "no-cache");
+  res.header("Expires", "0");
+  next();
+});
+
 // Memory-based cache for active admin sessions (zero-dependency session security)
 const activeSessions = new Set();
 
@@ -194,7 +305,9 @@ function requireAdminAuth(req, res, next) {
     reqPath.startsWith('/checkin') ||
     reqPath.startsWith('/api/checkin') ||
     reqPath.startsWith('/api/employee') ||
-    reqPath === '/api/face/cctv-event'
+    reqPath.startsWith('/uploads') ||
+    reqPath === '/api/face/cctv-event' ||
+    reqPath.startsWith('/api/debug')
   ) {
     return next();
   }
@@ -263,7 +376,44 @@ app.post('/api/admin/logout', (req, res) => {
   res.json({ success: true });
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+// Serve static files with long cache for immutable assets (JS libs, icons, images)
+// These files don't change between requests so browsers should cache them aggressively.
+app.use(express.static(path.join(__dirname, 'public'), {
+  maxAge: '7d',              // Cache static assets for 7 days
+  etag: true,               // Enable ETag for validation
+  lastModified: true,
+  setHeaders: (res, filePath) => {
+    // HTML files must not be cached so refreshed UI is always served
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }
+    // Large immutable JS/CSS/image bundles: cache for 7 days
+    else if (
+      filePath.endsWith('.js') ||
+      filePath.endsWith('.css') ||
+      filePath.endsWith('.png') ||
+      filePath.endsWith('.jpg') ||
+      filePath.endsWith('.ico') ||
+      filePath.endsWith('.woff2') ||
+      filePath.endsWith('.woff')
+    ) {
+      res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+    }
+  }
+}));
+
+// --- Server-side in-memory response cache for expensive read-only endpoints ---
+const _responseCache = new Map(); // key -> { data, ts }
+function getCached(key, ttlMs, producer) {
+  const hit = _responseCache.get(key);
+  if (hit && (Date.now() - hit.ts) < ttlMs) return hit.data;
+  const data = producer();
+  _responseCache.set(key, { data, ts: Date.now() });
+  return data;
+}
+function invalidateCache(...keys) {
+  keys.forEach(k => _responseCache.delete(k));
+}
 
 // Serve Employee Mobile Self-Service Portal at /mobile
 app.use('/mobile', express.static(path.join(__dirname, 'mobile_dist')));
@@ -743,7 +893,8 @@ app.post('/api/employee/checkin', requireEmployeeAuth, (req, res) => {
     const isLunchHour = (localHour === 13);
     
     // Calculate if late check-in
-    const [sh, sm] = (employee.shiftStart || "09:00").split(':').map(Number);
+    const { shiftStart } = database.getEmployeeShiftForDate(employee, eventDate);
+    const [sh, sm] = (shiftStart || "09:00").split(':').map(Number);
     const nowMinutes = now.getHours() * 60 + now.getMinutes();
     const shiftStartMinutes = sh * 60 + sm;
     const isScanLateTime = nowMinutes > shiftStartMinutes;
@@ -918,31 +1069,522 @@ app.get('/api/debug/whatsapp-screenshot', async (req, res) => {
   }
 });
 
+// Debug endpoint to list all available group chats and names
+app.get('/api/debug/chats', async (req, res) => {
+  try {
+    if (!whatsapp.client) return res.status(400).send("WhatsApp client is not initialized.");
+    console.log("[Debug API] Fetching all chats...");
+    const chats = await whatsapp.client.getChats();
+    const groupChats = chats.filter(c => c.isGroup).map(c => ({
+      id: c.id._serialized,
+      name: c.name,
+      unreadCount: c.unreadCount
+    }));
+    res.json({ success: true, count: groupChats.length, groups: groupChats });
+  } catch (err) {
+    console.error("[Debug API] Failed to fetch chats:", err);
+    res.json({ success: false, message: err.message, stack: err.stack });
+  }
+});
+
+// Debug endpoint to find chats by typing in UI and extracting results
+app.get('/api/debug/search-ui', async (req, res) => {
+  const query = req.query.q;
+  if (!query) return res.status(400).send("Missing q query parameter.");
+  try {
+    if (!whatsapp.client || !whatsapp.client.pupPage) {
+      return res.status(400).send("Puppeteer page not available.");
+    }
+    const page = whatsapp.client.pupPage;
+    console.log(`[Debug API] Searching UI for: "${query}"`);
+    
+    // Find and click the search box natively to trigger event handlers
+    const searchSelector = 'input.html-input';
+    await page.waitForSelector(searchSelector, { timeout: 5000 });
+    await page.click(searchSelector);
+    
+    // Select all and delete (ensure it's clean)
+    await page.keyboard.down('Control');
+    await page.keyboard.press('a');
+    await page.keyboard.up('Control');
+    await page.keyboard.press('Backspace');
+    
+    // Type query
+    await page.keyboard.type(query);
+    
+    // Wait for search results
+    await new Promise(r => setTimeout(r, 6000));
+    
+    // Take screenshot
+    const screenshotPath = path.join(__dirname, 'whatsapp_search_results.png');
+    await page.screenshot({ path: screenshotPath });
+    console.log(`[Debug API] Search UI screenshot saved to: ${screenshotPath}`);
+    
+    // Extract titles and JIDs from DOM
+    const DOMResults = await page.evaluate(() => {
+      const spans = Array.from(document.querySelectorAll('span[title]'));
+      const items = [];
+      spans.forEach(span => {
+        const title = span.getAttribute('title');
+        let parent = span.parentElement;
+        let jid = null;
+        while (parent && parent !== document.body) {
+          if (parent.hasAttribute('data-jid')) {
+            jid = parent.getAttribute('data-jid');
+            break;
+          }
+          // Search all attributes of parent for JID
+          for (let i = 0; i < parent.attributes.length; i++) {
+            const attr = parent.attributes[i];
+            const val = attr.value || '';
+            const match = val.match(/(\d+[-@\w.]+g\.us|\d+@c\.us)/);
+            if (match) {
+              jid = match[0];
+              break;
+            }
+          }
+          if (jid) break;
+          
+          const html = parent.outerHTML || '';
+          const match = html.match(/(\d+[-@\w.]+g\.us|\d+@c\.us)/);
+          if (match) {
+            jid = match[0];
+            break;
+          }
+          parent = parent.parentElement;
+        }
+        if (title) {
+          items.push({ title, jid });
+        }
+      });
+      return items;
+    });
+
+    res.json({ success: true, count: DOMResults.length, results: DOMResults, screenshot: screenshotPath });
+  } catch (err) {
+    console.error("[Debug API] Search UI failed:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Debug endpoint to open a chat and extract its active JID from message DOM containers
+app.get('/api/debug/select-chat', async (req, res) => {
+  try {
+    if (!whatsapp.client || !whatsapp.client.pupPage) {
+      return res.status(400).send("Puppeteer page not available.");
+    }
+    const page = whatsapp.client.pupPage;
+    console.log(`[Debug API] Selecting ATTENDANCE chat...`);
+    
+    // Find and click the search box natively to trigger event handlers
+    const searchSelector = 'input.html-input';
+    await page.waitForSelector(searchSelector, { timeout: 5000 });
+    await page.click(searchSelector);
+    
+    // Select all and delete (ensure it's clean)
+    await page.keyboard.down('Control');
+    await page.keyboard.press('a');
+    await page.keyboard.up('Control');
+    await page.keyboard.press('Backspace');
+    
+    // Type query
+    await page.keyboard.type("ATTENDANCE");
+    
+    // Wait for search results
+    await new Promise(r => setTimeout(r, 6000));
+    
+    // Click the result titled "ATTENDANCE"
+    // Click the result titled "ATTENDANCE"
+    const clickedInfo = await page.evaluate(() => {
+      const span = Array.from(document.querySelectorAll('span[title]')).find(s => s.getAttribute('title') === 'ATTENDANCE');
+      if (span) {
+        let parent = span.parentElement;
+        while (parent && parent !== document.body) {
+          if (parent.getAttribute('role') === 'row' || parent.getAttribute('role') === 'listitem' || parent.classList.contains('_ak72')) {
+            parent.setAttribute('data-target-click-debug', 'true');
+            return { success: true };
+          }
+          parent = parent.parentElement;
+        }
+        span.setAttribute('data-target-click-debug', 'true');
+        return { success: true };
+      }
+      return { success: false, error: 'Span not found' };
+    });
+    
+    if (!clickedInfo.success) {
+      return res.json({ success: false, message: clickedInfo.error });
+    }
+    
+    // Simulate real native click on the marked element
+    await page.click('[data-target-click-debug="true"]');
+    
+    // Wait for chat to open
+    await new Promise(r => setTimeout(r, 6000));
+    
+    // Capture screenshot
+    const screenshotPath = path.join(__dirname, 'whatsapp_active_chat.png');
+    await page.screenshot({ path: screenshotPath });
+    console.log(`[Debug API] Active chat screenshot saved to: ${screenshotPath}`);
+    
+    // Try to extract JID of active chat
+    let activeChatJID = await page.evaluate(() => {
+      const msgContainers = Array.from(document.querySelectorAll('div[data-id]'));
+      for (let container of msgContainers) {
+        const dataId = container.getAttribute('data-id');
+        if (dataId) {
+          const match = dataId.match(/(\d+[-@\w.]+g\.us|\d+@c\.us)/);
+          if (match) {
+            return match[0];
+          }
+        }
+      }
+      const mainHeader = document.querySelector('header');
+      if (mainHeader) {
+        const html = mainHeader.outerHTML || '';
+        const match = html.match(/(\d+[-@\w.]+g\.us|\d+@c\.us)/);
+        if (match) return match[0];
+      }
+      return null;
+    });
+
+    if (!activeChatJID) {
+      console.log("[Debug API] Normal JID extraction failed. Attempting ReactProps scan...");
+      activeChatJID = await page.evaluate(() => {
+        function searchObj(obj, depth = 0) {
+          if (depth > 6 || !obj) return null;
+          if (typeof obj === 'string') {
+            if ((obj.endsWith('@g.us') || obj.includes('@g.us')) && !obj.includes('status')) {
+              const m = obj.match(/(\d+@g\.us)/);
+              if (m) return m[1];
+            }
+            return null;
+          }
+          if (typeof obj === 'object') {
+            for (const key in obj) {
+              try {
+                const res = searchObj(obj[key], depth + 1);
+                if (res) return res;
+              } catch (e) {}
+            }
+          }
+          return null;
+        }
+
+        const elements = Array.from(document.querySelectorAll('*'));
+        for (const el of elements) {
+          const text = el.textContent || '';
+          if (text === 'ATTENDANCE' || el.getAttribute('title') === 'ATTENDANCE') {
+            for (const key of Object.keys(el)) {
+              if (key.startsWith('__react')) {
+                const jid = searchObj(el[key]);
+                if (jid) return jid;
+              }
+            }
+            let parent = el.parentElement;
+            for (let i = 0; i < 4 && parent; i++) {
+              for (const key of Object.keys(parent)) {
+                if (key.startsWith('__react')) {
+                  const jid = searchObj(parent[key]);
+                  if (jid) return jid;
+                }
+              }
+              parent = parent.parentElement;
+            }
+          }
+        }
+        return null;
+      });
+    }
+
+    res.json({ success: true, activeChatJID, screenshot: screenshotPath });
+  } catch (err) {
+    console.error("[Debug API] Select chat failed:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Debug endpoint to dump React props of ATTENDANCE elements
+app.get('/api/debug/dump-react-props', async (req, res) => {
+  try {
+    if (!whatsapp.client || !whatsapp.client.pupPage) {
+      return res.status(400).send("Puppeteer page not available.");
+    }
+    const page = whatsapp.client.pupPage;
+    const dump = await page.evaluate(() => {
+      const results = [];
+      const span = Array.from(document.querySelectorAll('*')).find(el => el.textContent === 'ATTENDANCE' || (el.getAttribute && el.getAttribute('title') === 'ATTENDANCE'));
+      if (span) {
+        let parent = span;
+        let depth = 0;
+        while (parent && depth < 20) {
+          const keys = Object.keys(parent).filter(k => k.startsWith('__react'));
+          for (const key of keys) {
+            const fiber = parent[key];
+            const foundJids = [];
+            const seen = new Set();
+            function scan(obj, path = '', scanDepth = 0) {
+              if (scanDepth > 12 || !obj || seen.has(obj)) return;
+              seen.add(obj);
+              if (typeof obj === 'object') {
+                if (obj.id && typeof obj.id === 'string' && (obj.id.endsWith('@g.us') || obj.id.endsWith('@c.us'))) {
+                  foundJids.push({ path: path + '.id', jid: obj.id });
+                } else if (obj.id && typeof obj.id === 'object' && obj.id._serialized) {
+                  foundJids.push({ path: path + '.id._serialized', jid: obj.id._serialized });
+                }
+                for (const k in obj) {
+                  try {
+                    scan(obj[k], path + '.' + k, scanDepth + 1);
+                  } catch (e) {}
+                }
+              }
+            }
+            scan(fiber, key, 0);
+            if (foundJids.length > 0) {
+              results.push({ depth, key, foundJids });
+            }
+          }
+          parent = parent.parentElement;
+          depth++;
+        }
+      }
+      return results;
+    });
+    res.json(dump);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Debug endpoint to list all chats from the client API
+app.get('/api/debug/list-all-chats', async (req, res) => {
+  try {
+    if (!whatsapp.client) {
+      return res.status(400).send("WhatsApp client not available.");
+    }
+    const chats = await whatsapp.client.getChats();
+    const filtered = chats.filter(c => c.name && c.name.toUpperCase().includes('ATTENDANCE'));
+    res.json({
+      success: true,
+      count: filtered.length,
+      chats: filtered.map(c => ({
+        id: c.id._serialized,
+        name: c.name,
+        isGroup: c.isGroup
+      }))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
+app.get('/api/debug/dump-messages', async (req, res) => {
+  try {
+    if (!whatsapp.client) return res.status(400).send("WhatsApp client is not initialized.");
+    const chat = await whatsapp.client.getChatById('120363419060820327@g.us');
+    if (!chat) return res.status(404).send("Chat not found.");
+    const messages = await chat.fetchMessages({ limit: 50 });
+    res.json({
+      success: true,
+      name: chat.name,
+      messages: messages.map(m => ({
+        id: m.id._serialized,
+        timestamp: m.timestamp,
+        author: m.author,
+        body: m.body,
+        isSystem: m.isSystem,
+        type: m.type
+      }))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
+app.get('/api/debug/inspect-chat', async (req, res) => {
+  try {
+    if (!whatsapp.client || !whatsapp.client.pupPage) {
+      return res.status(400).send("Page not available.");
+    }
+    const result = await whatsapp.client.pupPage.evaluate(async () => {
+      try {
+        const jid = '120363428399550159@g.us';
+        if (!window.WWebJS || !window.WWebJS.getChat) {
+          return { error: 'window.WWebJS or window.WWebJS.getChat not loaded yet.' };
+        }
+        const chat = await window.WWebJS.getChat(jid);
+        if (!chat) return { found: false, error: 'Chat not found' };
+        return {
+          found: true,
+          name: chat.name,
+          id: chat.id._serialized || chat.id,
+          isGroup: chat.isGroup
+        };
+      } catch (e) {
+        return { error: e.message, stack: e.stack };
+      }
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/debug/reload', async (req, res) => {
+  try {
+    if (!whatsapp.client || !whatsapp.client.pupPage) {
+      return res.status(400).send("Puppeteer page not available.");
+    }
+    console.log("[Debug API] Reloading WhatsApp Web page...");
+    await whatsapp.client.pupPage.reload({ waitUntil: 'networkidle2' });
+    res.send("Page successfully reloaded.");
+  } catch (err) {
+    res.status(500).send(`Failed to reload page: ${err.message}`);
+  }
+});
+
+app.get('/api/debug/my-info', (req, res) => {
+  try {
+    if (!whatsapp.client || !whatsapp.client.info) {
+      return res.status(400).send("Client info not available yet.");
+    }
+    res.json({
+      pushname: whatsapp.client.info.pushname,
+      wid: whatsapp.client.info.wid
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/debug/close-modal', async (req, res) => {
+  try {
+    if (!whatsapp.client || !whatsapp.client.pupPage) {
+      return res.status(400).send("Puppeteer page not available.");
+    }
+    const page = whatsapp.client.pupPage;
+    console.log("[Debug API] Attempting to close modals...");
+    
+    // Press Escape key multiple times
+    await page.keyboard.press('Escape');
+    await new Promise(r => setTimeout(r, 500));
+    await page.keyboard.press('Escape');
+    await new Promise(r => setTimeout(r, 1000));
+    
+    // Try to find and click any close buttons or "Continue" buttons
+    await page.evaluate(() => {
+      // Find buttons containing X or Continue or Close
+      const buttons = Array.from(document.querySelectorAll('button, div[role="button"]'));
+      for (const btn of buttons) {
+        const text = (btn.textContent || '').trim();
+        const ariaLabel = btn.getAttribute('aria-label') || '';
+        if (
+          text.toLowerCase().includes('continue') ||
+          text.toLowerCase().includes('close') ||
+          text.toLowerCase().includes('dismiss') ||
+          ariaLabel.toLowerCase().includes('close') ||
+          ariaLabel.toLowerCase().includes('dismiss')
+        ) {
+          btn.click();
+          console.log("Clicked button:", text, ariaLabel);
+        }
+      }
+    });
+
+    await new Promise(r => setTimeout(r, 2000));
+    await page.screenshot({ path: 'whatsapp_screenshot.png' });
+    res.send("Attempted to close modals. Check screenshot.");
+  } catch (err) {
+    res.status(500).send(`Error closing modal: ${err.message}`);
+  }
+});
+
+app.post('/api/debug/eval-page', async (req, res) => {
+  try {
+    if (!whatsapp.client || !whatsapp.client.pupPage) {
+      return res.status(400).json({ error: "Page not available." });
+    }
+    const { js } = req.body;
+    console.log("[Debug API] Evaluating JS on page:", js);
+    const result = await whatsapp.client.pupPage.evaluate(async (code) => {
+      try {
+        const fn = new Function('return (' + code + ')');
+        const res = await fn();
+        return { success: true, result: res };
+      } catch (e) {
+        return { success: false, error: e.message, stack: e.stack };
+      }
+    }, js);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
+// Debug endpoint to find the search box selectors in WhatsApp Web
+app.get('/api/debug/find-search-box', async (req, res) => {
+  try {
+    if (!whatsapp.client || !whatsapp.client.pupPage) {
+      return res.status(400).send("Puppeteer page not available.");
+    }
+    const page = whatsapp.client.pupPage;
+    const elements = await page.evaluate(() => {
+      const contentEditables = Array.from(document.querySelectorAll('div[contenteditable="true"]')).map((el, i) => ({
+        index: i,
+        tagName: el.tagName,
+        className: el.className,
+        id: el.id,
+        placeholder: el.getAttribute('placeholder'),
+        ariaLabel: el.getAttribute('aria-label'),
+        innerHTML: el.innerHTML.slice(0, 100)
+      }));
+      const placeholderSearches = Array.from(document.querySelectorAll('*')).filter(el => {
+        const ph = el.getAttribute && el.getAttribute('placeholder');
+        return ph && ph.toLowerCase().includes('search');
+      }).map(el => ({
+        tagName: el.tagName,
+        className: el.className,
+        placeholder: el.getAttribute('placeholder'),
+        ariaLabel: el.getAttribute('aria-label')
+      }));
+      return { contentEditables, placeholderSearches };
+    });
+    res.json(elements);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // System General Analytics
 app.get('/api/stats', (req, res) => {
-  const todayStr = getLocalDateString();
-  const employees = database.getEmployees();
-  const activeEmpCount = employees.filter(e => e.status === 'active').length;
-  const attendanceToday = database.getAttendanceForDate(todayStr);
-  
-  const presentCount = attendanceToday.filter(a => ['checked-in', 'completed', 'Late Check-in', 'Early Check-out', 'half-day leave'].includes(a.status) || (a.status === 'late' && a.checkIn)).length;
-  const halfDayCount = attendanceToday.filter(a => a.isHalfDay === true || a.isHalfDay === 'true' || a.status === 'half-day leave').length;
-  const lateCount = attendanceToday.filter(a => a.status === 'Late Check-in' || a.status === 'late' || a.isLate === true || a.isLate === 'true').length;
-  const earlyCount = attendanceToday.filter(a => a.status === 'Early Check-out' || a.isEarlyCheckout === true || a.isEarlyCheckout === 'true').length;
-  const leaveCount = attendanceToday.filter(a => a.status === 'leave').length;
-  const absentCount = attendanceToday.filter(a => a.status === 'absent').length;
-  const pendingCount = database.getPendingMessages().length;
+  // Cache stats for 8 seconds — fast enough for near-real-time updates, avoids hammering DB on every poll
+  const stats = getCached('stats', 8000, () => {
+    const todayStr = getLocalDateString();
+    const employees = database.getEmployees();
+    const activeEmpCount = employees.filter(e => e.status === 'active').length;
+    const attendanceToday = database.getAttendanceForDate(todayStr);
 
-  res.json({
-    totalEmployees: activeEmpCount,
-    presentToday: presentCount,
-    halfDayToday: halfDayCount,
-    lateCheckInToday: lateCount,
-    earlyCheckOutToday: earlyCount,
-    leaveToday: leaveCount,
-    absentToday: absentCount,
-    pendingExceptions: pendingCount
+    const presentCount = attendanceToday.filter(a => ['checked-in', 'completed', 'Late Check-in', 'Early Check-out', 'half-day leave'].includes(a.status) || (a.status === 'late' && a.checkIn)).length;
+    const halfDayCount = attendanceToday.filter(a => a.isHalfDay === true || a.isHalfDay === 'true' || a.status === 'half-day leave').length;
+    const lateCount = attendanceToday.filter(a => a.status === 'Late Check-in' || a.status === 'late' || a.isLate === true || a.isLate === 'true').length;
+    const earlyCount = attendanceToday.filter(a => a.status === 'Early Check-out' || a.isEarlyCheckout === true || a.isEarlyCheckout === 'true').length;
+    const leaveCount = attendanceToday.filter(a => a.status === 'leave').length;
+    const absentCount = attendanceToday.filter(a => a.status === 'absent').length;
+    const pendingCount = database.getPendingMessages().length;
+
+    return {
+      totalEmployees: activeEmpCount,
+      presentToday: presentCount,
+      halfDayToday: halfDayCount,
+      lateCheckInToday: lateCount,
+      earlyCheckOutToday: earlyCount,
+      leaveToday: leaveCount,
+      absentToday: absentCount,
+      pendingExceptions: pendingCount
+    };
   });
+  res.json(stats);
 });
 
 // Force Refresh Active Groups
@@ -1193,11 +1835,48 @@ app.delete('/api/holidays/:date', (req, res) => {
   }
 });
 
+// ==========================================================================
+// TRAVEL TIME LOG API — Returns all attendance records with travelHours > 0
+// Supports optional ?month=YYYY-MM filter
+// ==========================================================================
+app.get('/api/travel', (req, res) => {
+  try {
+    const { month } = req.query;
+    const db = database.read();
+    let logs = (db.attendance || []).filter(log =>
+      log && log.date && log.travelHours && Number(log.travelHours) > 0
+    );
+    if (month) {
+      logs = logs.filter(log => log.date.startsWith(month));
+    }
+    // Sort by date ascending
+    logs.sort((a, b) => a.date.localeCompare(b.date));
+    return res.json(logs);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Attendance Management
 app.get('/api/attendance', (req, res) => {
-  const { date, startDate, endDate } = req.query;
+  const { date, startDate, endDate, onlyTravel } = req.query;
   
   if (startDate && endDate) {
+    if (onlyTravel === 'true') {
+      try {
+        const db = database.read();
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const filtered = (db.attendance || []).filter(log => {
+          if (!log || !log.date || !log.travelHours || Number(log.travelHours) <= 0) return false;
+          const d = new Date(log.date);
+          return d >= start && d <= end;
+        });
+        return res.json(filtered);
+      } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+    }
     return res.json(database.getAttendanceForRange(startDate, endDate));
   }
   
@@ -1574,6 +2253,146 @@ app.post('/api/attendance/camera', (req, res) => {
   }
 });
 
+app.post('/api/attendance/camera/edit', (req, res) => {
+  try {
+    const { id, employeeId } = req.body;
+    if (!id || !employeeId) {
+      return res.status(400).json({ error: 'id and employeeId are required.' });
+    }
+
+    const db = database.read();
+    
+    // Find the camera event
+    const eventIndex = (db.cameraEvents || []).findIndex(e => e.id === id);
+    if (eventIndex === -1) {
+      return res.status(404).json({ error: 'Camera event not found.' });
+    }
+
+    const event = db.cameraEvents[eventIndex];
+    const oldEmpId = event.employeeId;
+    const oldEmpName = event.employeeName;
+    const eventTime = event.timestamp;
+    const eventDate = event.date;
+    const eventType = event.eventType;
+    const siteName = event.siteName || 'Office';
+
+    // Find the new employee
+    const newEmployee = (db.employees || []).find(emp => emp.id === employeeId);
+    if (!newEmployee) {
+      return res.status(404).json({ error: 'New employee not found.' });
+    }
+
+    // 1. Update the camera event record
+    event.employeeId = employeeId;
+    event.employeeName = newEmployee.name;
+    event.status = 'corrected';
+    database.saveCameraEvent(event);
+
+    // 2. Remove the punch from the old employee's attendance record
+    const oldAttendance = (db.attendance || []).find(a => a.employeeId === oldEmpId && a.date === eventDate);
+    if (oldAttendance) {
+      // Filter out this camera punch
+      const targetTimeStr = new Date(eventTime).getTime();
+      oldAttendance.punches = (oldAttendance.punches || []).filter(p => {
+        // Keep punch if it's not a CCTV punch around the same timestamp
+        const pTimeStr = new Date(p.time).getTime();
+        const timeDiff = Math.abs(pTimeStr - targetTimeStr);
+        return !(p.source === 'CCTV' && timeDiff < 5000); // 5 seconds margin
+      });
+
+      // Recalculate checkIn / checkOut / status / hours for the old employee
+      if (oldAttendance.punches.length === 0) {
+        // No punches left, delete the attendance record
+        db.attendance = db.attendance.filter(a => a.id !== oldAttendance.id);
+        database.writeAtomic(db);
+        io.emit('attendance_updated', { id: oldAttendance.id, status: 'deleted', employeeId: oldEmpId, date: eventDate });
+      } else {
+        // Recalculate checkIn / checkOut from remaining punches
+        const inPunches = oldAttendance.punches.filter(p => p.type === 'in');
+        const outPunches = oldAttendance.punches.filter(p => p.type === 'out');
+        
+        if (inPunches.length > 0) {
+          inPunches.sort((a,b) => new Date(a.time) - new Date(b.time));
+          oldAttendance.checkIn = inPunches[0].time;
+        } else {
+          const sorted = [...oldAttendance.punches].sort((a,b) => new Date(a.time) - new Date(b.time));
+          oldAttendance.checkIn = sorted[0].time;
+        }
+
+        if (outPunches.length > 0) {
+          outPunches.sort((a,b) => new Date(b.time) - new Date(a.time));
+          oldAttendance.checkOut = outPunches[0].time;
+        } else {
+          oldAttendance.checkOut = null;
+        }
+
+        database.saveAttendance(oldAttendance);
+        io.emit('attendance_updated', oldAttendance);
+      }
+    }
+
+    // 3. Add the punch to the new employee's attendance record
+    const attendanceEntry = {
+      employeeId,
+      employeeName: newEmployee.name,
+      date: eventDate,
+      siteName: siteName,
+      messageText: `Camera ${eventType} event (corrected)`,
+      punches: [{
+        time: eventTime,
+        type: eventType === 'exit' ? 'out' : 'in',
+        siteName: siteName,
+        messageText: `Camera ${eventType} event`,
+        source: 'CCTV'
+      }]
+    };
+
+    const existingAttendance = (db.attendance || []).find(a => a.employeeId === employeeId && a.date === eventDate);
+    if (eventType === 'entry') {
+      attendanceEntry.checkIn = eventTime;
+      if (existingAttendance) {
+        attendanceEntry.id = existingAttendance.id;
+        attendanceEntry.checkOut = existingAttendance.checkOut;
+        
+        // Merge punches
+        const punches = existingAttendance.punches || [];
+        const targetTimeStr = new Date(eventTime).getTime();
+        const hasDuplicate = punches.some(p => p.source === 'CCTV' && Math.abs(new Date(p.time).getTime() - targetTimeStr) < 5000);
+        if (!hasDuplicate) {
+          punches.push(attendanceEntry.punches[0]);
+        }
+        attendanceEntry.punches = punches;
+      }
+    } else {
+      // exit event
+      if (existingAttendance) {
+        attendanceEntry.id = existingAttendance.id;
+        attendanceEntry.checkIn = existingAttendance.checkIn;
+        
+        // Merge punches
+        const punches = existingAttendance.punches || [];
+        const targetTimeStr = new Date(eventTime).getTime();
+        const hasDuplicate = punches.some(p => p.source === 'CCTV' && Math.abs(new Date(p.time).getTime() - targetTimeStr) < 5000);
+        if (!hasDuplicate) {
+          punches.push(attendanceEntry.punches[0]);
+        }
+        attendanceEntry.punches = punches;
+      } else {
+        attendanceEntry.checkIn = eventTime;
+      }
+      attendanceEntry.checkOut = eventTime;
+    }
+
+    const savedAttendance = database.saveAttendance(attendanceEntry);
+    io.emit('attendance_updated', savedAttendance);
+
+    res.json({ success: true, cameraEvent: event, attendance: savedAttendance });
+  } catch (err) {
+    console.error('[CameraEdit] Failed to edit camera event:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Face Recognition Integration (via Python service)
 const FACE_RECOGNITION_SERVICE = process.env.FACE_RECOGNITION_URL || 'http://localhost:5000';
 
@@ -1797,8 +2616,9 @@ app.post('/api/face/recognize', async (req, res) => {
       const isLateCheckInPendingScan = existingAttendance && existingAttendance.status === 'late' && !existingAttendance.scannedCheckIn;
 
       const isScanLateTime = (() => {
-        if (!employee.shiftStart) return false;
-        const [sh, sm] = employee.shiftStart.split(':').map(Number);
+        const { shiftStart } = database.getEmployeeShiftForDate(employee, eventDate);
+        if (!shiftStart) return false;
+        const [sh, sm] = shiftStart.split(':').map(Number);
         const nowMinutes = now.getHours() * 60 + now.getMinutes();
         const shiftStartMinutes = sh * 60 + sm;
         return nowMinutes > shiftStartMinutes; // sharp time
@@ -2125,11 +2945,29 @@ app.post('/api/face/load-embeddings', async (req, res) => {
   }
 });
 
-// GET Unknown Detections
+// GET Unknown Detections - with optional date filter and pagination
 app.get('/api/unknown-detections', (req, res) => {
   try {
-    const detections = database.getUnknownDetections();
-    res.json(detections);
+    const { date, page, limit } = req.query;
+    let detections = database.getUnknownDetections();
+
+    // Filter by date if provided (format: YYYY-MM-DD)
+    if (date) {
+      detections = detections.filter(d => d.date === date);
+    }
+
+    // Sort newest first
+    detections = detections.slice().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    // Pagination
+    const pageNum = parseInt(page, 10) || 1;
+    const pageSize = parseInt(limit, 10) || 100;
+    const totalCount = detections.length;
+    const totalPages = Math.ceil(totalCount / pageSize);
+    const offset = (pageNum - 1) * pageSize;
+    const paginated = detections.slice(offset, offset + pageSize);
+
+    res.json({ detections: paginated, totalCount, totalPages, page: pageNum, pageSize });
   } catch (err) {
     console.error('[API] Get unknown detections failed:', err);
     res.status(500).json({ error: err.message });
@@ -2224,8 +3062,9 @@ app.post('/api/unknown-detections/assign', async (req, res) => {
       
       const now = new Date(timestamp);
       const isScanLateTime = (() => {
-        if (!employee.shiftStart) return false;
-        const [sh, sm] = employee.shiftStart.split(':').map(Number);
+        const { shiftStart } = database.getEmployeeShiftForDate(employee, eventDate);
+        if (!shiftStart) return false;
+        const [sh, sm] = shiftStart.split(':').map(Number);
         const nowMinutes = now.getHours() * 60 + now.getMinutes();
         const shiftStartMinutes = sh * 60 + sm;
         return nowMinutes > shiftStartMinutes;
@@ -2393,36 +3232,32 @@ app.post('/api/unknown-detections/assign', async (req, res) => {
     fs.copyFileSync(rawFacePath, targetPath);
     console.log(`[API] Assigned CCTV face crop to employee "${employee.name}" at: ${targetPath}`);
 
-    // Trigger face retraining
-    const imagesDir = path.join(__dirname, 'uploads', 'face_training');
-    const formData = new URLSearchParams();
-    formData.append('images_dir', imagesDir);
-    formData.append('force', 'false'); // Don't force retrain everyone
-    formData.append('employee_id', cleanName); // Only retrain this employee
-
-    // Call Python face training service
-    let retrainSuccess = false;
-    try {
-      const response = await fetch(`${FACE_RECOGNITION_SERVICE}/api/face/train`, {
-        method: 'POST',
-        body: formData,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-      });
-      const retrainResult = await response.json();
-      retrainSuccess = retrainResult.success;
-      console.log('[API] Retraining results:', retrainResult);
-    } catch (trainErr) {
-      console.error('[API] Retraining trigger failed:', trainErr.message);
-    }
-
-    // Delete the unknown detection record now that it is resolved
+    // Delete the unknown detection record immediately so UI updates instantly
     database.deleteUnknownDetection(detectionId);
     io.emit('unknown_detection_deleted', detectionId);
 
+    // Respond immediately before retraining (retraining can take 10-30s)
     res.json({
       success: true,
-      message: `Successfully assigned face to ${employee.name} and triggered model retraining.`,
-      retrainSuccess
+      message: `Successfully assigned face to ${employee.name}. Model retraining started in background.`,
+      retrainSuccess: true
+    });
+
+    // Trigger face retraining asynchronously (fire-and-forget)
+    const imagesDir = path.join(__dirname, 'uploads', 'face_training');
+    const formData = new URLSearchParams();
+    formData.append('images_dir', imagesDir);
+    formData.append('force', 'false');
+    formData.append('employee_id', cleanName);
+
+    fetch(`${FACE_RECOGNITION_SERVICE}/api/face/train`, {
+      method: 'POST',
+      body: formData,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    }).then(r => r.json()).then(retrainResult => {
+      console.log('[API] Async retraining complete:', retrainResult);
+    }).catch(trainErr => {
+      console.error('[API] Async retraining failed:', trainErr.message);
     });
 
   } catch (err) {
@@ -2488,7 +3323,7 @@ app.post('/api/cctv', async (req, res) => {
             source: savedCamera.source,
             site_name: siteName,
             event_type: savedCamera.eventType,
-            threshold: 0.51
+            threshold: savedCamera.threshold || 0.38
           })
         });
       } catch (err) {
@@ -2556,6 +3391,29 @@ app.get('/api/cctv/stream/:id', (req, res) => {
     console.error(`[Proxy Error] Failed to stream from face recognition api: ${err.message}`);
     if (!res.headersSent) {
       res.status(500).send('Streaming error');
+    }
+  });
+
+  req.on('close', () => {
+    proxyReq.destroy();
+  });
+});
+
+
+// GET CCTV Static Frame Snapshot proxy (resolves browser HTTP/1.1 connection exhaustion)
+app.get('/api/cctv/snapshot/:id', (req, res) => {
+  const camera_id = req.params.id;
+  const targetUrl = `${FACE_RECOGNITION_SERVICE}/api/cctv/snapshot/${camera_id}`;
+  
+  const proxyReq = http.get(targetUrl, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    proxyRes.pipe(res);
+  });
+  
+  proxyReq.on('error', (err) => {
+    console.error(`[Proxy Error] Failed to get snapshot from face recognition api: ${err.message}`);
+    if (!res.headersSent) {
+      res.status(500).send('Snapshot error');
     }
   });
 
@@ -2663,8 +3521,9 @@ app.post('/api/face/cctv-event', async (req, res) => {
     const isLateCheckInPendingScan = existingAttendance && existingAttendance.status === 'late' && !existingAttendance.scannedCheckIn;
 
     const isScanLateTime = (() => {
-      if (!employee.shiftStart) return false;
-      const [sh, sm] = employee.shiftStart.split(':').map(Number);
+      const { shiftStart } = database.getEmployeeShiftForDate(employee, eventDate);
+      if (!shiftStart) return false;
+      const [sh, sm] = shiftStart.split(':').map(Number);
       const nowMinutes = now.getHours() * 60 + now.getMinutes();
       const shiftStartMinutes = sh * 60 + sm;
       return nowMinutes > shiftStartMinutes; // sharp time
@@ -2846,7 +3705,15 @@ app.post('/api/face/cctv-event', async (req, res) => {
 
 // Resolve Exception Board (Unparsed Message)
 app.get('/api/pending', (req, res) => {
-  res.json(database.getPendingMessages());
+  // Support pagination: ?page=1&limit=50 (default first 50, newest first)
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200); // cap at 200
+  const all = database.getPendingMessages();
+  // Newest first
+  const sorted = [...all].sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+  const start = (page - 1) * limit;
+  const items = sorted.slice(start, start + limit);
+  res.json({ items, total: all.length, page, limit, pages: Math.ceil(all.length / limit) });
 });
 
 app.post('/api/pending/resolve', (req, res) => {
@@ -3800,17 +4667,32 @@ app.get('/api/payroll', (req, res) => {
 app.get('/api/welders-weekly', (req, res) => {
   const { friday } = req.query;
   if (!friday) {
-    // Return all available unique Fridays in logs (sorted latest first)
     const db = database.read();
     const uniqueDates = Array.from(new Set(db.attendance.map(a => a.date)));
-    const fridays = uniqueDates.filter(d => {
+    const reportDates = [];
+    uniqueDates.forEach(dStr => {
       try {
-        return new Date(d).getDay() === 5; // Friday is 5
-      } catch (e) {
-        return false;
-      }
-    }).sort((a, b) => b.localeCompare(a));
-    return res.json({ fridays });
+        const d = new Date(dStr);
+        const dayOfWeek = d.getUTCDay();
+        if (dayOfWeek === 6) { // Saturday
+          const dateNum = d.getUTCDate();
+          const satIndex = Math.ceil(dateNum / 7);
+          if (satIndex === 1 || satIndex === 3 || satIndex === 5) {
+            reportDates.push(dStr);
+          }
+        } else if (dayOfWeek === 5) { // Friday
+          const nextSat = new Date(d.getTime());
+          nextSat.setUTCDate(nextSat.getUTCDate() + 1);
+          const dateNum = nextSat.getUTCDate();
+          const satIndex = Math.ceil(dateNum / 7);
+          if (satIndex !== 1 && satIndex !== 3 && satIndex !== 5) {
+            reportDates.push(dStr);
+          }
+        }
+      } catch (e) {}
+    });
+    const uniqueReportDates = Array.from(new Set(reportDates)).sort((a, b) => b.localeCompare(a));
+    return res.json({ fridays: uniqueReportDates });
   }
   
   try {
@@ -3841,7 +4723,11 @@ app.get('/api/export/welders-weekly/excel', async (req, res) => {
     // 1. Build Attendance Sheet
     const wsAtt = workbook.addWorksheet("Weekly Attendance");
     
-    const dayNames = ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"];
+    const reportDate = new Date(friday);
+    const isSat = reportDate.getUTCDay() === 6;
+    const dayNames = isSat
+      ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+      : ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"];
     // Build headers for attendance
     const attHeaders = ["Welder ID", "Welder Name"];
     reportData[0].dailyDetails.forEach((d, idx) => {
@@ -4246,6 +5132,184 @@ app.get('/api/export', (req, res) => {
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="Attendance_Payroll_Export_${startDate}_to_${endDate}_generated_${fileDateStr}.csv"`);
     res.status(200).send(csvContent);
+  } catch (err) {
+    res.status(500).send(`Export failed: ${err.message}`);
+  }
+});
+
+// Premium Travel Logs Export (Excel .xlsx Generator)
+app.get('/api/export/travel/excel', (req, res) => {
+  const { month, search } = req.query;
+
+  try {
+    const db = database.read();
+    let logs = (db.attendance || []).filter(log =>
+      log && log.date && log.travelHours && Number(log.travelHours) > 0
+    );
+
+    // Apply active month filter matching frontend live view
+    if (month) {
+      logs = logs.filter(log => log.date.startsWith(month));
+    }
+
+    // Apply active search filter matching frontend live view
+    if (search) {
+      const q = search.toLowerCase();
+      logs = logs.filter(log =>
+        log.employeeName.toLowerCase().includes(q) ||
+        (log.siteName || '').toLowerCase().includes(q) ||
+        (log.messageText || '').toLowerCase().includes(q)
+      );
+    }
+
+    const employees = db.employees || [];
+    const travelRatio = db.settings && db.settings.travelTimePaidRatio !== undefined
+      ? Number(db.settings.travelTimePaidRatio)
+      : 0.50;
+
+    const getEmployeeShiftHours = (emp, dateStr = null) => {
+      let F = 8.0;
+      const { shiftStart, shiftEnd } = database.getEmployeeShiftForDate(emp, dateStr);
+      if (shiftStart && shiftEnd) {
+        try {
+          const [startH, startM] = shiftStart.split(':').map(Number);
+          const [endH, endM] = shiftEnd.split(':').map(Number);
+          let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+          if (shiftMinutes < 0) shiftMinutes += 24 * 60;
+          const shiftHours = shiftMinutes / 60;
+          F = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
+        } catch (err) {}
+      }
+      return F;
+    };
+
+    const getHourlyRate = (emp) => {
+      if (!emp) return 0;
+      if (emp.hourlyRate) return Number(emp.hourlyRate);
+      const shiftF = getEmployeeShiftHours(emp);
+      if (emp.dailyRate) return Number((Number(emp.dailyRate) / shiftF).toFixed(2));
+      const actualSalary = Number(emp.monthlyWage) || 0.0;
+      const stdWorkingDays = Number(emp.stdWorkingDays) || 30;
+      return Number((actualSalary / stdWorkingDays / shiftF).toFixed(2));
+    };
+
+    // 1. Generate Daily Logs sheet rows
+    const dailyRows = [];
+    logs.forEach(log => {
+      const emp = employees.find(e => e.id === log.employeeId);
+      const stated = Number(log.travelHours);
+      const paid = Number((stated * travelRatio).toFixed(2));
+      const rate = getHourlyRate(emp);
+      const payout = Number((paid * rate).toFixed(2));
+
+      dailyRows.push({
+        "Date": log.date,
+        "Employee Name": log.employeeName,
+        "Designation": emp ? (emp.designation || 'Worker') : '—',
+        "Work Site": log.siteName || '—',
+        "Stated Hours": stated,
+        "Paid Hours": paid,
+        "Hourly Rate (₹/hr)": rate,
+        "Travel Payout (₹)": payout,
+        "WhatsApp Message Source": log.messageText || '—'
+      });
+    });
+
+    // 2. Generate Monthly Summary sheet rows
+    const summaryMap = {};
+    logs.forEach(log => {
+      const emp = employees.find(e => e.id === log.employeeId);
+      const logMonth = log.date.substring(0, 7);
+      const key = `${log.employeeId}__${logMonth}`;
+      
+      const stated = Number(log.travelHours);
+      const paid = Number((stated * travelRatio).toFixed(2));
+      const rate = getHourlyRate(emp);
+      const payout = Number((paid * rate).toFixed(2));
+
+      if (!summaryMap[key]) {
+        summaryMap[key] = {
+          employeeName: log.employeeName,
+          designation: emp ? (emp.designation || 'Worker') : '—',
+          month: logMonth,
+          totalStated: 0,
+          totalPaid: 0,
+          hourlyRate: rate,
+          totalPayout: 0,
+          sites: new Set()
+        };
+      }
+      const item = summaryMap[key];
+      item.totalStated += stated;
+      item.totalPaid += paid;
+      item.totalPayout += payout;
+      if (log.siteName && log.siteName !== '—' && log.siteName !== '-') {
+        log.siteName.split('/').map(s => s.trim()).filter(Boolean).forEach(s => item.sites.add(s));
+      }
+    });
+
+    const summaryRows = Object.values(summaryMap).map(row => {
+      const [y, mo] = row.month.split('-').map(Number);
+      const monthLabel = new Date(y, mo - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
+      const sitesArr = Array.from(row.sites);
+      const sitesStr = sitesArr.length > 0 ? sitesArr.join(', ') : '—';
+
+      return {
+        "Employee Name": row.employeeName,
+        "Designation": row.designation,
+        "Month": monthLabel,
+        "Visited Work Sites": sitesStr,
+        "Total Stated Hours": Number(row.totalStated.toFixed(2)),
+        "Total Paid Hours": Number(row.totalPaid.toFixed(2)),
+        "Hourly Rate (₹/hr)": Number(row.hourlyRate.toFixed(2)),
+        "Total Travel Payout (₹)": Number(row.totalPayout.toFixed(2))
+      };
+    });
+
+    // Sort summary chronologically (descending month) and alphabetically (ascending employee)
+    summaryRows.sort((a, b) => {
+      const mc = b.Month.localeCompare(a.Month);
+      return mc !== 0 ? mc : a["Employee Name"].localeCompare(b["Employee Name"]);
+    });
+
+    // Sort daily chronologically (descending date) and alphabetically (ascending employee)
+    dailyRows.sort((a, b) => b.Date.localeCompare(a.Date) || a["Employee Name"].localeCompare(b["Employee Name"]));
+
+    const wb = XLSX.utils.book_new();
+    const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+    const wsDaily = XLSX.utils.json_to_sheet(dailyRows);
+
+    // Auto-fit column widths
+    const autofitColumns = (ws, rows) => {
+      if (rows.length > 0) {
+        const columns = Object.keys(rows[0]);
+        ws['!cols'] = columns.map(col => {
+          const maxCharLen = Math.max(
+            col.length,
+            ...rows.map(row => String(row[col] || '').length)
+          );
+          return { wch: Math.max(12, maxCharLen + 2) };
+        });
+      }
+    };
+
+    autofitColumns(wsSummary, summaryRows);
+    autofitColumns(wsDaily, dailyRows);
+
+    XLSX.utils.book_append_sheet(wb, wsSummary, "Monthly Travel Summary");
+    XLSX.utils.book_append_sheet(wb, wsDaily, "Daily Travel Logs");
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const fileDateStr = getLocalDateString();
+    
+    let filename = `Travel_Time_Logs_Export_${fileDateStr}.xlsx`;
+    if (month) {
+      filename = `Travel_Time_Logs_Export_${month}_generated_${fileDateStr}.xlsx`;
+    }
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
   } catch (err) {
     res.status(500).send(`Export failed: ${err.message}`);
   }
@@ -4868,24 +5932,33 @@ function hasFuzzyKeyword(query, keywords) {
 // AI Query Endpoint
 app.post('/api/ai/query', async (req, res) => {
   try {
-    const { query } = req.body;
+    const { query, history } = req.body;
     if (!query) {
       return res.status(400).json({ error: "Query is required" });
     }
 
     const cleanQuery = query.toLowerCase().trim();
-    const todayStr = getLocalDateString();
+    const today = new Date();
+    const todayStr = getLocalDateString(today);
+    
+    // Parse target date and its label
+    const targetDateObj = parseTargetDateFromQuery(cleanQuery, today);
+    const targetDateStr = targetDateObj.dateStr;
+    const dateLabel = targetDateObj.label; // e.g. "today", "yesterday", "last monday", "on 25-06-2026"
+
     const db = database.read();
     const employees = db.employees || [];
-    const dailyLogs = database.getAttendanceForDate(todayStr) || [];
-    const today = new Date();
+    
+    // Load attendance logs for the target date
+    const dailyLogs = database.getAttendanceForDate(targetDateStr) || [];
 
-    // Check for Gemini API key
-    const apiKey = process.env.GEMINI_API_KEY;
+    // Check for Gemini API key (from process env or settings)
+    const apiKey = process.env.GEMINI_API_KEY || (db.settings && db.settings.geminiApiKey);
     if (apiKey) {
       try {
-        const parts = todayStr.split('-');
-        const startOfMonth = `${parts[0]}-${parts[1]}-01`;
+        const todayObj = new Date(today);
+        const prevMonthObj = new Date(todayObj.getFullYear(), todayObj.getMonth() - 1, 1);
+        const startOfPrevMonth = getLocalDateString(prevMonthObj);
         
         // 1. Clean employees (active only)
         const cleanEmployees = (db.employees || [])
@@ -4897,11 +5970,12 @@ app.post('/api/ai/query', async (req, res) => {
             modeOfWork: e.modeOfWork || '—',
             dailyRate: e.dailyRate || 0,
             shiftStart: e.shiftStart || '09:00',
-            shiftEnd: e.shiftEnd || '18:00'
+            shiftEnd: e.shiftEnd || '18:00',
+            customShifts: e.customShifts || null
           }));
 
-        // 2. Fetch current month's attendance records (strip base64 images for token efficiency)
-        const rawLogs = database.getAttendanceForRange(startOfMonth, todayStr) || [];
+        // 2. Fetch logs for range (strip base64 images for token efficiency)
+        const rawLogs = database.getAttendanceForRange(startOfPrevMonth, todayStr) || [];
         const cleanLogs = rawLogs.map(log => ({
           employeeId: log.employeeId,
           employeeName: log.employeeName,
@@ -4924,6 +5998,9 @@ app.post('/api/ai/query', async (req, res) => {
         // 4. Construct lightweight context
         const context = {
           currentDate: todayStr,
+          currentDayOfWeek: today.toLocaleDateString('en-US', { weekday: 'long' }),
+          targetDateQuery: targetDateStr,
+          targetDateLabel: dateLabel,
           employees: cleanEmployees,
           attendanceLogs: cleanLogs,
           holidays: cleanHolidays
@@ -4932,15 +6009,18 @@ app.post('/api/ai/query', async (req, res) => {
         const systemInstruction = `You are InterExt AI v1.0, the virtual assistant for the InterExt Attendance & Payroll Portal.
 Your task is to analyze the user's query and the provided database context to answer their question correctly.
 The user may make typos or grammatical errors (e.g. "presnt count", "salry summary", "who worked most hours"). Understand their intent and answer correctly.
+If the user asks about "yesterday", "today", "tomorrow", a specific date, or a weekday, resolve it accurately relative to Today's date and Today's day of week.
 
 Context:
 - Today's date: ${context.currentDate}
+- Today's day of week: ${context.currentDayOfWeek}
+- Date queried by user (pre-parsed target date): ${context.targetDateQuery} (${context.targetDateLabel})
 - Employee Directory: ${JSON.stringify(context.employees)}
-- Attendance Logs for the current month: ${JSON.stringify(context.attendanceLogs)}
+- Attendance Logs (from ${startOfPrevMonth} to ${todayStr}): ${JSON.stringify(context.attendanceLogs)}
 - Company Holidays: ${JSON.stringify(context.holidays)}
 
 Instructions:
-1. Think step-by-step to compute the answer (e.g., if asked for present count today, filter logs for today where status is completed/checked-in/Late Check-in/etc. If asked for payroll summary, sum calculated wages/advances for all employees in the month. If asked for top performers, aggregate working hours per employee and rank them).
+1. Think step-by-step to compute the answer (e.g., if asked for present count yesterday or on a specific day, filter logs for that day where status is completed/checked-in/Late Check-in/etc. If asked for payroll summary, sum calculated wages/advances for all employees in the month. If asked for top performers, aggregate working hours per employee and rank them).
 2. Format your response in clean Markdown.
 3. Be professional, friendly, and concise.
 4. Output a JSON object containing:
@@ -4953,16 +6033,24 @@ JSON Schema:
   "response": "Your markdown answer"
 }`;
 
+        // Build chat history contents for Gemini API (memory retention)
+        const contents = [];
+        if (history && Array.isArray(history) && history.length > 0) {
+          history.forEach(h => {
+            contents.push({
+              role: h.role === 'model' ? 'model' : 'user',
+              parts: [{ text: h.text }]
+            });
+          });
+        } else {
+          contents.push({
+            role: 'user',
+            parts: [{ text: `User Query: "${query}"` }]
+          });
+        }
+
         const requestBody = {
-          contents: [
-            {
-              parts: [
-                {
-                  text: `User Query: "${query}"`
-                }
-              ]
-            }
-          ],
+          contents: contents,
           systemInstruction: {
             parts: [
               {
@@ -5024,12 +6112,34 @@ JSON Schema:
     const month = String(today.getMonth() + 1).padStart(2, '0');
     const startOfMonthStr = `${year}-${month}-01`;
 
-    // Find last Friday
-    const lastFriday = new Date(today);
-    const dayOfWeek = today.getDay(); // 0: Sun, 1: Mon, ... 5: Fri, 6: Sat
-    const diffToFriday = (dayOfWeek >= 5) ? (dayOfWeek - 5) : (dayOfWeek + 2);
-    lastFriday.setDate(today.getDate() - diffToFriday);
-    const lastFridayStr = getLocalDateString(lastFriday);
+    // Find last report ending date (Friday or Saturday depending on week of the month)
+    let lastReportDate = new Date(today);
+    let foundReportDate = false;
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(today.getTime());
+      d.setDate(today.getDate() - i);
+      const dayOfWeek = d.getUTCDay();
+      if (dayOfWeek === 6) { // Saturday
+        const dateNum = d.getUTCDate();
+        const satIndex = Math.ceil(dateNum / 7);
+        if (satIndex === 1 || satIndex === 3 || satIndex === 5) {
+          lastReportDate = d;
+          foundReportDate = true;
+          break;
+        }
+      } else if (dayOfWeek === 5) { // Friday
+        const nextSat = new Date(d.getTime());
+        nextSat.setUTCDate(nextSat.getUTCDate() + 1);
+        const dateNum = nextSat.getUTCDate();
+        const satIndex = Math.ceil(dateNum / 7);
+        if (satIndex !== 1 && satIndex !== 3 && satIndex !== 5) {
+          lastReportDate = d;
+          foundReportDate = true;
+          break;
+        }
+      }
+    }
+    const lastFridayStr = getLocalDateString(lastReportDate);
 
     const isExcelRequested = hasFuzzyKeyword(cleanQuery, excelKeywords);
     
@@ -5084,48 +6194,48 @@ JSON Schema:
       const payrollData = database.getMonthlySalarySheet(monthStr) || [];
       const payrollRow = payrollData.find(r => r.employeeId === matchedEmp.id) || {};
 
-      const todayLog = dailyLogs.find(log => log.employeeId === matchedEmp.id);
-      let todayStatus = "Absent / Not Checked In";
-      if (todayLog) {
-        if (todayLog.status === 'leave') todayStatus = "On Leave";
-        else if (todayLog.status === 'late') todayStatus = "Late (Informed)";
-        else if (todayLog.status === 'Late Check-in') todayStatus = `Late Check-in (Arrived at ${todayLog.checkIn ? new Date(todayLog.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
-        else if (todayLog.status === 'checked-in') todayStatus = `Checked In (Arrived at ${todayLog.checkIn ? new Date(todayLog.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
-        else if (todayLog.status === 'completed') todayStatus = `Completed Shift (Checked out at ${todayLog.checkOut ? new Date(todayLog.checkOut).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
-        else if (todayLog.status === 'Early Check-out') todayStatus = `Early Check-out (Checked out at ${todayLog.checkOut ? new Date(todayLog.checkOut).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
+      const targetDateLog = dailyLogs.find(log => log.employeeId === matchedEmp.id);
+      let targetDateStatus = "Absent / Not Checked In";
+      if (targetDateLog) {
+        if (targetDateLog.status === 'leave') targetDateStatus = "On Leave";
+        else if (targetDateLog.status === 'late') targetDateStatus = "Late (Informed)";
+        else if (targetDateLog.status === 'Late Check-in') targetDateStatus = `Late Check-in (Arrived at ${targetDateLog.checkIn ? new Date(targetDateLog.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
+        else if (targetDateLog.status === 'checked-in') targetDateStatus = `Checked In (Arrived at ${targetDateLog.checkIn ? new Date(targetDateLog.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
+        else if (targetDateLog.status === 'completed') targetDateStatus = `Completed Shift (Checked out at ${targetDateLog.checkOut ? new Date(targetDateLog.checkOut).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
+        else if (targetDateLog.status === 'Early Check-out') targetDateStatus = `Early Check-out (Checked out at ${targetDateLog.checkOut ? new Date(targetDateLog.checkOut).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
       }
       
       // Direct Answer Helper based on query context
       let directAnswer = "";
       if (cleanQuery.includes("present") || cleanQuery.includes("here") || cleanQuery.includes("attend") || cleanQuery.includes("check")) {
-        const isPresentToday = ['Checked In', 'Late Check-in', 'Completed Shift', 'Early Check-out'].some(s => todayStatus.startsWith(s));
-        if (isPresentToday) {
-          directAnswer = `✅ **Yes**, **${matchedEmp.name}** is **present** today. (Current status: *${todayStatus}*)`;
-        } else if (todayStatus === 'Late (Informed)') {
-          directAnswer = `⏳ **No**, **${matchedEmp.name}** has not checked in yet today. They are currently marked as **Late (Informed)** (sent a notice but hasn't scanned in).`;
-        } else if (todayStatus === 'On Leave') {
-          directAnswer = `🌴 **No**, **${matchedEmp.name}** is not present today. They are **On Leave**.`;
+        const isPresentOnDate = ['Checked In', 'Late Check-in', 'Completed Shift', 'Early Check-out'].some(s => targetDateStatus.startsWith(s));
+        if (isPresentOnDate) {
+          directAnswer = `✅ **Yes**, **${matchedEmp.name}** was **present** ${dateLabel}. (Status: *${targetDateStatus}*)`;
+        } else if (targetDateStatus === 'Late (Informed)') {
+          directAnswer = `⏳ **No**, **${matchedEmp.name}** did not check in ${dateLabel}. They were marked as **Late (Informed)**.`;
+        } else if (targetDateStatus === 'On Leave') {
+          directAnswer = `🌴 **No**, **${matchedEmp.name}** was not present ${dateLabel}. They were **On Leave**.`;
         } else {
-          directAnswer = `❌ **No**, **${matchedEmp.name}** is not present today. (Current status: *${todayStatus}*)`;
+          directAnswer = `❌ **No**, **${matchedEmp.name}** was not present ${dateLabel}. (Status: *${targetDateStatus}*)`;
         }
       } else if (cleanQuery.includes("absent") || cleanQuery.includes("missing") || cleanQuery.includes("not in") || cleanQuery.includes("not here")) {
-        const isPresentToday = ['Checked In', 'Late Check-in', 'Completed Shift', 'Early Check-out'].some(s => todayStatus.startsWith(s));
-        if (isPresentToday) {
-          directAnswer = `❌ **No**, **${matchedEmp.name}** is not absent today. They are **present** (Current status: *${todayStatus}*).`;
+        const isPresentOnDate = ['Checked In', 'Late Check-in', 'Completed Shift', 'Early Check-out'].some(s => targetDateStatus.startsWith(s));
+        if (isPresentOnDate) {
+          directAnswer = `❌ **No**, **${matchedEmp.name}** was not absent ${dateLabel}. They were **present** (Status: *${targetDateStatus}*).`;
         } else {
-          directAnswer = `✅ **Yes**, **${matchedEmp.name}** is **absent/not in** today. (Current status: *${todayStatus}*)`;
+          directAnswer = `✅ **Yes**, **${matchedEmp.name}** was **absent/not in** ${dateLabel}. (Status: *${targetDateStatus}*)`;
         }
       } else if (cleanQuery.includes("leave") || cleanQuery.includes("off") || cleanQuery.includes("vacation")) {
-        if (todayStatus === 'On Leave') {
-          directAnswer = `🌴 **Yes**, **${matchedEmp.name}** is **on leave** today.`;
+        if (targetDateStatus === 'On Leave') {
+          directAnswer = `🌴 **Yes**, **${matchedEmp.name}** was **on leave** ${dateLabel}.`;
         } else {
-          directAnswer = `❌ **No**, **${matchedEmp.name}** is not on leave today. (Current status: *${todayStatus}*)`;
+          directAnswer = `❌ **No**, **${matchedEmp.name}** was not on leave ${dateLabel}. (Status: *${targetDateStatus}*)`;
         }
       } else if (cleanQuery.includes("late")) {
-        if (todayStatus.startsWith('Late Check-in') || todayStatus === 'Late (Informed)') {
-          directAnswer = `⏰ **Yes**, **${matchedEmp.name}** is marked as **late** today. (Current status: *${todayStatus}*)`;
+        if (targetDateStatus.startsWith('Late Check-in') || targetDateStatus === 'Late (Informed)') {
+          directAnswer = `⏰ **Yes**, **${matchedEmp.name}** was marked as **late** ${dateLabel}. (Status: *${targetDateStatus}*)`;
         } else {
-          directAnswer = `✅ **No**, **${matchedEmp.name}** is not marked late today. (Current status: *${todayStatus}*)`;
+          directAnswer = `✅ **No**, **${matchedEmp.name}** was not marked late ${dateLabel}. (Status: *${targetDateStatus}*)`;
         }
       } else if (cleanQuery.includes("phone") || cleanQuery.includes("contact") || cleanQuery.includes("mobile") || cleanQuery.includes("number")) {
         if (matchedEmp.phone) {
@@ -5146,9 +6256,9 @@ JSON Schema:
                        `• **Designation**: ${matchedEmp.designation || 'Staff'} (${matchedEmp.modeOfWork || 'Office Staff'})\n` +
                        `• **Phone Number**: ${matchedEmp.phone ? '+' + matchedEmp.phone : 'Not Available'}\n` +
                        `• **Wages**: ₹${(matchedEmp.dailyRate || 0).toFixed(2)}/day (or ₹${(matchedEmp.monthlyWage || 0).toLocaleString('en-IN')}/month)\n` +
-                       `• **Standard Shift**: ${matchedEmp.shiftStart || '09:00'} to ${matchedEmp.shiftEnd || '18:00'}\n` +
+                       `• **Standard Shift**: ${matchedEmp.shiftStart || '09:00'} to ${matchedEmp.shiftEnd || '18:00'}${matchedEmp.customShifts ? ' (Has Day Customizations)' : ''}\n` +
                        `• **Status**: ${matchedEmp.status.toUpperCase()}\n` +
-                       `• **Today's Attendance**: ${todayStatus}\n\n` +
+                       `• **Attendance ${dateLabel}**: ${targetDateStatus}\n\n` +
                        `📊 **Monthly Stats (${today.toLocaleString('default', { month: 'long', year: 'numeric' })}):**\n` +
                        `• **Days Present**: ${presentCount} days\n` +
                        `• **Hours Worked**: ${totalHours.toFixed(2)} hours\n` +
@@ -5159,7 +6269,7 @@ JSON Schema:
     // 1. Intent: Present Count / Present List
     else if (hasFuzzyKeyword(cleanQuery, presentKeywords) && !hasFuzzyKeyword(cleanQuery, absentKeywords) && !cleanQuery.includes("late") && !cleanQuery.includes("summary")) {
       steps = [
-        "Checking today's attendance records...",
+        `Checking attendance records for ${dateLabel}...`,
         "Identifying marked 'Present' entries...",
         "Compiling complete present list...",
         "Putting it all together..."
@@ -5169,16 +6279,16 @@ JSON Schema:
       const count = presentLogs.length;
       
       if (count === 0) {
-        responseText = `**No staff members are marked present today yet.**` + excelSuffixText;
+        responseText = `**No staff members were marked present ${dateLabel}.**` + excelSuffixText;
       } else {
         const listItems = presentLogs.map((log, index) => `${index + 1}. **${log.employeeName}** (Status: ${log.status || 'Present'})`);
-        responseText = `**${count} staff members are present today:**\n\n` + listItems.join("\n") + excelSuffixText;
+        responseText = `**${count} staff members were present ${dateLabel}:**\n\n` + listItems.join("\n") + excelSuffixText;
       }
     }
     // 2. Intent: Absent / Who didn't show up
     else if (hasFuzzyKeyword(cleanQuery, absentKeywords) || cleanQuery.includes("didn't show up") || cleanQuery.includes("did not show up") || cleanQuery.includes("no show")) {
       steps = [
-        "Checking today's attendance records...",
+        `Checking attendance records for ${dateLabel}...`,
         "Filtering absent employees...",
         "Compiling complete absent list...",
         "Putting it all together..."
@@ -5192,16 +6302,16 @@ JSON Schema:
       const count = absentEmployees.length;
       
       if (count === 0) {
-        responseText = `**Everyone showed up today! No staff members are absent.**` + excelSuffixText;
+        responseText = `**Everyone showed up ${dateLabel}! No staff members were absent.**` + excelSuffixText;
       } else {
         const listItems = absentEmployees.map((emp, index) => `${index + 1}. **${emp.name}**`);
-        responseText = `**${count} staff members didn't show up today (absent):**\n\n` + listItems.join("\n") + excelSuffixText;
+        responseText = `**${count} staff members didn't show up ${dateLabel} (absent):**\n\n` + listItems.join("\n") + excelSuffixText;
       }
     }
     // 3. Intent: Leave count / Who is on leave
     else if (hasFuzzyKeyword(cleanQuery, leaveKeywords)) {
       steps = [
-        "Checking today's leave records...",
+        `Checking leave records for ${dateLabel}...`,
         "Identifying approved leaves...",
         "Compiling leave list...",
         "Putting it all together..."
@@ -5211,16 +6321,16 @@ JSON Schema:
       const count = leaveLogs.length;
       
       if (count === 0) {
-        responseText = `**No staff members are on leave today.**` + excelSuffixText;
+        responseText = `**No staff members were on leave ${dateLabel}.**` + excelSuffixText;
       } else {
         const listItems = leaveLogs.map((log, index) => `${index + 1}. **${log.employeeName}**`);
-        responseText = `**${count} staff members are on leave today:**\n\n` + listItems.join("\n") + excelSuffixText;
+        responseText = `**${count} staff members were on leave ${dateLabel}:**\n\n` + listItems.join("\n") + excelSuffixText;
       }
     }
-    // 4. Intent: Late arrivals today
-    else if (cleanQuery.includes("late today") || cleanQuery.includes("who is late") || cleanQuery.includes("came late today")) {
+    // 4. Intent: Late arrivals on target date
+    else if (cleanQuery.includes("late") && !cleanQuery.includes("month") && !cleanQuery.includes("rank")) {
       steps = [
-        "Checking today's attendance records...",
+        `Checking attendance records for ${dateLabel}...`,
         "Identifying late entries...",
         "Compiling late list...",
         "Putting it all together..."
@@ -5228,10 +6338,10 @@ JSON Schema:
       const lateLogs = dailyLogs.filter(log => log.isLate || log.status === 'late' || log.status === 'Late Check-in');
       const count = lateLogs.length;
       if (count === 0) {
-        responseText = `**No staff members are marked late today.**` + excelSuffixText;
+        responseText = `**No staff members were marked late ${dateLabel}.**` + excelSuffixText;
       } else {
         const listItems = lateLogs.map((log, index) => `${index + 1}. **${log.employeeName}** (${log.checkIn ? 'scanned at ' + new Date(log.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'informed late'})`);
-        responseText = `**${count} staff members arrived late today:**\n\n` + listItems.join("\n") + excelSuffixText;
+        responseText = `**${count} staff members arrived late ${dateLabel}:**\n\n` + listItems.join("\n") + excelSuffixText;
       }
     }
     // 5. Intent: Payroll / Payable this month
@@ -5351,10 +6461,10 @@ JSON Schema:
         responseText = `⏰ **Late Arrival Rankings (Current Month):**\n\n` + listItems.join("\n");
       }
     }
-    // 9. Intent: Today's Summary
-    else if (cleanQuery.includes("summary today") || cleanQuery.includes("today's summary") || cleanQuery.includes("attendance summary today") || cleanQuery.includes("stats today")) {
+    // 9. Intent: Target Date Summary
+    else if (cleanQuery.includes("summary") || cleanQuery.includes("stats") || cleanQuery.includes("headcount")) {
       steps = [
-        "Analyzing today's attendance logs...",
+        `Analyzing attendance logs for ${dateLabel}...`,
         "Aggregating headcount metrics...",
         "Putting it all together..."
       ];
@@ -5364,7 +6474,7 @@ JSON Schema:
       const lateLogs = dailyLogs.filter(log => log.isLate || log.status === 'late' || log.status === 'Late Check-in');
       const absentCount = activeEmployees.length - presentLogs.length - leaveLogs.length;
 
-      responseText = `📋 **Today's Attendance Summary (${todayStr}):**\n\n` +
+      responseText = `📋 **Attendance Summary for ${dateLabel} (${targetDateStr}):**\n\n` +
                      `• **Total Active Staff**: ${activeEmployees.length}\n` +
                      `• **Present**: ${presentLogs.length} workers\n` +
                      `• **Absent**: ${Math.max(0, absentCount)} workers\n` +
@@ -5535,7 +6645,7 @@ server.listen(PORT, () => {
             source: cam.source,
             site_name: siteName,
             event_type: cam.eventType,
-            threshold: 0.51
+            threshold: cam.threshold || 0.38
           })
         });
       } catch (err) {
@@ -5607,7 +6717,7 @@ server.listen(PORT, () => {
                 source: cam.source,
                 site_name: siteName,
                 event_type: cam.eventType,
-                threshold: 0.51
+                threshold: cam.threshold || 0.38
               }),
               signal: AbortSignal.timeout(5000)
             });
