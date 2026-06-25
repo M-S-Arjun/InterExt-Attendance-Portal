@@ -5,104 +5,244 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#ff6b00">
   <meta name="color-scheme" content="dark light">
-  <title>WhatsApp Attendance & Payroll Tracker</title>
+  <title>Travel Time Log — WhatsApp Attendance Tracker</title>
   <link rel="manifest" href="/manifest.json">
   <link rel="apple-touch-icon" href="/icon-192.png">
-  <!-- Google Fonts - Outfit -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <!-- Lucide Icons (Local/Offline) -->
   <script src="/lucide.min.js"></script>
-  <!-- Chart.js CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <!-- Socket.io -->
   <script src="/socket.io/socket.io.js"></script>
-  <!-- Custom Stylesheet -->
   <link rel="stylesheet" href="style.css">
-  <!-- Sidebar Collapse State Restorer (Prevents Layout Flash on Load) -->
   <script>
     if (localStorage.getItem('sidebar-collapsed') === 'true') {
       document.documentElement.classList.add('sidebar-collapsed');
     }
   </script>
+  <style>
+    /* ── Section header bar ── */
+    .t-section-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 14px;
+      padding: 18px 24px 16px;
+      border-bottom: 1px solid var(--glass-border);
+    }
+    .t-section-head h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-primary);
+      margin: 0 0 3px;
+    }
+    .t-section-head h3 i, .t-section-head h3 svg {
+      color: var(--color-primary);
+      width: 16px; height: 16px;
+    }
+    .t-section-head p {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      margin: 0;
+    }
+
+    /* ── Filter row ── */
+    .t-filter-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .t-filter-row .tg {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .t-filter-row .tg label {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-tertiary);
+    }
+    /* Month selects: wide enough for "September 2026" */
+    .t-filter-row select {
+      height: 38px;
+      padding: 8px 12px;
+      font-size: 0.82rem;
+      min-width: 165px;
+      width: 165px;
+    }
+    .t-filter-row input[type="text"] {
+      height: 38px;
+      padding: 8px 12px;
+      font-size: 0.82rem;
+      min-width: 160px;
+    }
+    .t-filter-row .btn {
+      height: 38px;
+      padding: 0 16px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* ── Stat Cards Grid ── */
+    .t-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      padding: 18px 24px 20px;
+    }
+    @media (max-width: 1100px) { .t-stat-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 600px)  { .t-stat-grid { grid-template-columns: 1fr; } }
+
+    .t-stat-card {
+      background: var(--glass-bg);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--border-radius-md);
+      padding: 16px 18px;
+    }
+    .t-stat-card .ts-label {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-tertiary);
+      margin-bottom: 7px;
+    }
+    .t-stat-card .ts-val {
+      font-size: 1.55rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      line-height: 1.15;
+    }
+    .t-stat-card .ts-val.g { color: #2ed573; }
+    .t-stat-card .ts-hint {
+      font-size: 0.7rem;
+      color: var(--text-tertiary);
+      margin-top: 4px;
+    }
+
+    /* ── Table container vertical & horizontal scrollbar area ── */
+    #tab-travel .overflow-x {
+      max-height: 400px !important;
+      overflow-y: auto !important;
+      overflow-x: auto !important;
+      border-top: 1px solid var(--glass-border);
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 107, 0, 0.3) transparent;
+    }
+    #tab-travel .overflow-x::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    #tab-travel .overflow-x::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    #tab-travel .overflow-x::-webkit-scrollbar-thumb {
+      background: rgba(255, 107, 0, 0.3);
+      border-radius: 4px;
+    }
+    #tab-travel .overflow-x::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 107, 0, 0.55);
+    }
+
+    /* ── Card spacing: each card takes its own natural height, no flex stretching ── */
+    #tab-travel .glass-card {
+      margin-bottom: 20px;
+      flex-shrink: 0;
+      flex-grow: 0;
+      height: auto;
+    }
+
+    /* ── Tables: fixed layout so columns never overflow ── */
+    #travel-summary-table,
+    #travel-daily-table {
+      table-layout: fixed;
+      width: 100%;
+    }
+    #travel-summary-table { min-width: 980px; }
+    #travel-daily-table  { min-width: 1060px; }
+
+    /* Summary columns — Month col 155px fits "September 2026" */
+    #travel-summary-table colgroup col:nth-child(1) { width: 150px; }
+    #travel-summary-table colgroup col:nth-child(2) { width: 110px; }
+    #travel-summary-table colgroup col:nth-child(3) { width: 155px; }
+    #travel-summary-table colgroup col:nth-child(4) { width: 175px; }
+    #travel-summary-table colgroup col:nth-child(5) { width: 100px; }
+    #travel-summary-table colgroup col:nth-child(6) { width: 115px; }
+    #travel-summary-table colgroup col:nth-child(7) { width: 100px; }
+    #travel-summary-table colgroup col:nth-child(8) { width: 125px; }
+
+    /* Daily columns */
+    #travel-daily-table colgroup col:nth-child(1) { width: 96px; }
+    #travel-daily-table colgroup col:nth-child(2) { width: 148px; }
+    #travel-daily-table colgroup col:nth-child(3) { width: 138px; }
+    #travel-daily-table colgroup col:nth-child(4) { width: 94px; }
+    #travel-daily-table colgroup col:nth-child(5) { width: 96px; }
+    #travel-daily-table colgroup col:nth-child(6) { width: 96px; }
+    #travel-daily-table colgroup col:nth-child(7) { width: 112px; }
+    #travel-daily-table colgroup col:nth-child(8) { width: 215px; }
+    #travel-daily-table colgroup col:nth-child(9) { width: 65px; }
+
+    /* Cell truncation for fixed-layout tables */
+    #travel-summary-table td,
+    #travel-daily-table td {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 0; /* required for ellipsis on table-layout:fixed */
+    }
+    /* Month badge column: nowrap so full name shows */
+    #travel-summary-table td:nth-child(3) {
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    /* Employee name columns: wrap freely */
+    #travel-summary-table td:nth-child(1),
+    #travel-daily-table td:nth-child(2) {
+      white-space: normal;
+      overflow: visible;
+      max-width: none;
+    }
+    /* Actions column: no truncate */
+    #travel-daily-table td:nth-child(9) {
+      overflow: visible;
+      max-width: none;
+      white-space: nowrap;
+    }
+  </style>
 </head>
 <body>
-
-  <!-- Main Container -->
   <div class="app-layout">
-    
-    <!-- Sidebar Navigation -->
-    <aside class="sidebar">
-      <div class="sidebar-brand" onclick="switchTab('dashboard')" style="cursor: pointer;">
-        <div class="brand-logo">
-          <img src="/logo.jpg" class="brand-logo-img" alt="Logo">
-        </div>
-        <div class="brand-text">
-          <h2>INTEREXT</h2>
-          <span>Attendance Panel</span>
-        </div>
-      </div>
-      
-      <nav class="sidebar-nav">
-        <button class="nav-item active" onclick="switchTab('dashboard')">
-          <i data-lucide="layout-dashboard"></i>
-          <span>Dashboard</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('logs')">
-          <i data-lucide="calendar-range"></i>
-          <span>Attendance Log</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('punches')">
-          <i data-lucide="fingerprint"></i>
-          <span>Punches Log</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('travel')">
-          <i data-lucide="navigation"></i>
-          <span>Travel Time Log</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('profiles')">
-          <i data-lucide="user-circle"></i>
-          <span>Employee Profiles</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('employees')">
-          <i data-lucide="users"></i>
-          <span>Workers Registry</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('payroll')">
-          <i data-lucide="wallet"></i>
-          <span>Monthly Payroll</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('welders')">
-          <i data-lucide="file-spreadsheet"></i>
-          <span>Welders Weekly</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('selfies')">
-          <i data-lucide="camera"></i>
-          <span>Selfie Verifications</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('camera')">
-          <i data-lucide="video"></i>
-          <span>Camera Attendance</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('unknown')">
-          <i data-lucide="shield-alert"></i>
-          <span>Unknown Visitors</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('sites')">
-          <i data-lucide="map-pin"></i>
-          <span>Work Sites</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('holidays')">
-          <i data-lucide="calendar"></i>
-          <span>Holiday Calendar</span>
-        </button>
-        <button class="nav-item" onclick="switchTab('settings')">
-          <i data-lucide="sliders"></i>
-          <span>Settings</span>
-        </button>
-      </nav>
 
+    <!-- ── Sidebar ── -->
+    <aside class="sidebar">
+      <div class="sidebar-brand" onclick="switchTab('dashboard')" style="cursor:pointer;">
+        <div class="brand-logo"><img src="/logo.jpg" class="brand-logo-img" alt="Logo"></div>
+        <div class="brand-text"><h2>INTEXT</h2><span>Attendance Panel</span></div>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="nav-item active" onclick="switchTab('dashboard')"><i data-lucide="layout-dashboard"></i><span>Dashboard</span></button>
+        <button class="nav-item" onclick="switchTab('logs')"><i data-lucide="calendar-range"></i><span>Attendance Log</span></button>
+        <button class="nav-item" onclick="switchTab('punches')"><i data-lucide="fingerprint"></i><span>Punches Log</span></button>
+        <button class="nav-item" onclick="switchTab('travel')"><i data-lucide="navigation"></i><span>Travel Time Log</span></button>
+        <button class="nav-item" onclick="switchTab('profiles')"><i data-lucide="user-circle"></i><span>Employee Profiles</span></button>
+        <button class="nav-item" onclick="switchTab('employees')"><i data-lucide="users"></i><span>Workers Registry</span></button>
+        <button class="nav-item" onclick="switchTab('payroll')"><i data-lucide="wallet"></i><span>Monthly Payroll</span></button>
+        <button class="nav-item" onclick="switchTab('welders')"><i data-lucide="file-spreadsheet"></i><span>Welders Weekly</span></button>
+        <button class="nav-item" onclick="switchTab('selfies')"><i data-lucide="camera"></i><span>Selfie Verifications</span></button>
+        <button class="nav-item" onclick="switchTab('camera')"><i data-lucide="video"></i><span>Camera Attendance</span></button>
+        <button class="nav-item" onclick="switchTab('unknown')"><i data-lucide="shield-alert"></i><span>Unknown Visitors</span></button>
+        <button class="nav-item" onclick="switchTab('sites')"><i data-lucide="map-pin"></i><span>Work Sites</span></button>
+        <button class="nav-item" onclick="switchTab('holidays')"><i data-lucide="calendar"></i><span>Holiday Calendar</span></button>
+        <button class="nav-item" onclick="switchTab('settings')"><i data-lucide="sliders"></i><span>Settings</span></button>
+      </nav>
       <div class="sidebar-footer">
         <div class="connection-pill status-disconnected" id="sidebar-status-pill">
           <div class="status-indicator-ping"></div>
@@ -111,10 +251,9 @@
       </div>
     </aside>
 
-    <!-- Main Workspace Content -->
+    <!-- ── Main ── -->
     <main class="main-content">
-      
-      <!-- Top Header -->
+
       <header class="top-header">
         <div class="header-left-group">
           <div class="header-welcome">
@@ -123,7 +262,7 @@
           </div>
         </div>
         <div class="header-actions">
-          <div class="active-group-badge" id="active-group-badge" style="display: none;">
+          <div class="active-group-badge" id="active-group-badge" style="display:none;">
             <i data-lucide="message-square"></i>
             <span>Monitoring: <strong id="header-group-name">—</strong></span>
           </div>
@@ -132,95 +271,154 @@
             <span id="header-datetime">Loading...</span>
           </div>
           <button class="btn-theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Light/Dark Theme">
-            <i data-lucide="sun" id="theme-icon-sun" style="display: none;"></i>
+            <i data-lucide="sun" id="theme-icon-sun" style="display:none;"></i>
             <i data-lucide="moon" id="theme-icon-moon"></i>
           </button>
         </div>
       </header>
 
-      
-      <!-- TAB 2.5: TRAVEL TIME LOG VIEW -->
+      <!-- ══════════════════════════════════════════════
+           TRAVEL TIME LOG TAB
+           Scrolls as a whole page — #tab-travel has
+           overflow-y:auto (set in style.css global rules)
+      ══════════════════════════════════════════════ -->
       <div id="tab-travel" class="tab-view active">
+
+        <!-- ── Section 1: Stat Cards + Global Filter ── -->
         <div class="glass-card log-panel">
-          <div class="card-header flex-header">
-            <div class="header-left">
-              <h3><i data-lucide="navigation"></i> Travel Time Tracking Log</h3>
-              <p>Review daily worker travel times, 50% paid halving rule calculations, and payout amounts</p>
+          <div class="t-section-head">
+            <div>
+              <h3><i data-lucide="navigation"></i> Travel Time Log</h3>
+              <p>All travel time records parsed from WhatsApp messages</p>
             </div>
-            <div class="header-right flex-filters">
-              <div class="filter-group">
+            <div class="t-filter-row">
+              <div class="tg">
                 <label>Month</label>
-                <input type="month" id="travel-filter-month" class="form-control" onchange="applyFiltersTravel()">
+                <select id="travel-filter-month" class="form-control" onchange="applyFiltersTravel()">
+                  <option value="">All Months</option>
+                </select>
               </div>
-              <div class="filter-buttons">
-                <button class="btn btn-secondary btn-icon" onclick="resetTravelFilters()"><i data-lucide="refresh-cw"></i> Reset</button>
+              <div class="tg">
+                <label>Search</label>
+                <input type="text" id="travel-search-input" class="form-control" placeholder="Employee or site..." oninput="applyFiltersTravel()" autocomplete="off">
+              </div>
+              <button class="btn btn-secondary btn-icon" onclick="resetTravelFilters()">
+                <i data-lucide="refresh-cw"></i> Reset
+              </button>
+              <button class="btn btn-primary btn-icon" onclick="exportTravelExcel()">
+                <i data-lucide="download"></i> Download Excel
+              </button>
+            </div>
+          </div>
+
+          <div class="t-stat-grid">
+            <div class="t-stat-card">
+              <div class="ts-label">Reported Hours</div>
+              <div class="ts-val" id="travel-stat-reported">0.00 hrs</div>
+              <div class="ts-hint">Total stated travel time</div>
+            </div>
+            <div class="t-stat-card">
+              <div class="ts-label">Paid Hours (50%)</div>
+              <div class="ts-val g" id="travel-stat-paid">0.00 hrs</div>
+              <div class="ts-hint">50% policy — paid credit</div>
+            </div>
+            <div class="t-stat-card">
+              <div class="ts-label">Total Payout</div>
+              <div class="ts-val g" id="travel-stat-payout">₹0.00</div>
+              <div class="ts-hint">Travel compensation amount</div>
+            </div>
+            <div class="t-stat-card">
+              <div class="ts-label">Employees</div>
+              <div class="ts-val" id="travel-stat-employees">0</div>
+              <div class="ts-hint">With travel records</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Section 2: Monthly Summary ── -->
+        <div class="glass-card log-panel">
+          <div class="t-section-head">
+            <div>
+              <h3><i data-lucide="users"></i> Monthly Travel Summary per Employee</h3>
+              <p>Cumulative stated hours, paid hours &amp; payout per employee per month</p>
+            </div>
+            <div class="t-filter-row">
+              <div class="tg">
+                <label>Employee</label>
+                <input type="text" id="summary-search-input" class="form-control" placeholder="Search..." oninput="applyFiltersTravel()" autocomplete="off">
               </div>
             </div>
           </div>
 
-          <!-- Metrics summary for travel time -->
-          <div class="metrics-grid" style="margin-bottom: 20px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
-            <div class="metric-card bg-slate-card">
-              <div class="metric-title">Total Travel Hours (Reported)</div>
-              <div class="metric-value" id="travel-stat-reported">0.00 hrs</div>
-              <div class="metric-desc">Total travel time reported by supervisors</div>
-            </div>
-            <div class="metric-card bg-slate-card">
-              <div class="metric-title">Total Paid Hours (50%)</div>
-              <div class="metric-value text-green" id="travel-stat-paid">0.00 hrs</div>
-              <div class="metric-desc">Company policy 50% paid travel credit</div>
-            </div>
-            <div class="metric-card bg-slate-card">
-              <div class="metric-title">Total Travel Payout</div>
-              <div class="metric-value text-green" id="travel-stat-payout">₹0.00</div>
-              <div class="metric-desc">Calculated travel time payout amount</div>
-            </div>
-          </div>
-          
-          <!-- Master Log Excel-style Filters & Search Bar -->
-          <div class="table-control-bar">
-            <div class="table-control-left">
-              <div class="search-wrapper">
-                <i data-lucide="search"></i>
-                <input type="text" id="travel-search-input" class="form-control" placeholder="Search by name, site, or source..." oninput="applyFiltersTravel()" autocomplete="off">
-              </div>
-            </div>
-          </div>
-          
           <div class="overflow-x">
-            <table class="data-table" id="travel-table">
+            <table class="data-table" id="travel-summary-table">
+              <colgroup>
+                <col><col><col><col><col><col><col><col>
+              </colgroup>
               <thead>
                 <tr>
-                  <th>Date</th>
-                  <th>Employee Name</th>
-                  <th>Work Site</th>
-                  <th>Stated Travel Hours</th>
-                  <th>Paid Travel Hours</th>
-                  <th>Hourly Rate</th>
-                  <th>Travel Payout Amount</th>
-                  <th>WhatsApp Text Source</th>
-                  <th style="width: 100px;">Actions</th>
+                  <th>Employee</th>
+                  <th>Designation</th>
+                  <th>Month</th>
+                  <th>Work Sites</th>
+                  <th>Stated Hrs</th>
+                  <th>Paid Hrs (50%)</th>
+                  <th>Rate/hr</th>
+                  <th>Payout</th>
                 </tr>
               </thead>
-              <tbody id="travel-table-body">
-                <!-- Generated Dynamically -->
+              <tbody id="travel-summary-table-body">
+                <tr><td colspan="8" style="text-align:center;color:var(--text-tertiary);padding:24px;">Loading travel data...</td></tr>
               </tbody>
             </table>
           </div>
         </div>
-      </div>
 
-      
+        <!-- ── Section 3: Daily Logs ── -->
+        <div class="glass-card log-panel">
+          <div class="t-section-head">
+            <div>
+              <h3><i data-lucide="calendar"></i> Daily Travel Logs</h3>
+              <p>Day-by-day records with WhatsApp source text</p>
+            </div>
+            <div class="t-filter-row">
+              <div class="tg">
+                <label>Search</label>
+                <input type="text" id="daily-search-input" class="form-control" placeholder="Employee or site..." oninput="applyFiltersTravel()" autocomplete="off">
+              </div>
+            </div>
+          </div>
+
+          <div class="overflow-x">
+            <table class="data-table" id="travel-daily-table">
+              <colgroup>
+                <col><col><col><col><col><col><col><col><col>
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Employee</th>
+                  <th>Work Site</th>
+                  <th>Stated Hrs</th>
+                  <th>Paid Hrs</th>
+                  <th>Rate/hr</th>
+                  <th>Payout</th>
+                  <th>WhatsApp Source</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="travel-daily-table-body">
+                <tr><td colspan="9" style="text-align:center;color:var(--text-tertiary);padding:24px;">Loading travel data...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div><!-- end #tab-travel -->
     </main>
   </div>
 
-  
-
-  <!-- Lucide Script Boot -->
-  <script>
-    lucide.createIcons();
-  </script>
-  <!-- Frontend Controller Script -->
+  <script>lucide.createIcons();</script>
   <script src="app.js"></script>
 </body>
 </html>
