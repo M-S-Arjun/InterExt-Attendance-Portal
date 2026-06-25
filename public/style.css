@@ -2639,7 +2639,8 @@ select.payroll-col-filter {
 .tab-view#tab-sites,
 .tab-view#tab-welders,
 .tab-view#tab-unknown,
-.tab-view#tab-profiles {
+.tab-view#tab-profiles,
+.tab-view#tab-travel {
   overflow-y: auto !important;
   flex-grow: 1;
   flex-shrink: 1;
@@ -2652,8 +2653,7 @@ select.payroll-col-filter {
 .tab-view#tab-employees,
 .tab-view#tab-logs,
 .tab-view#tab-punches,
-.tab-view#tab-selfies,
-.tab-view#tab-travel {
+.tab-view#tab-selfies {
   display: none;
   flex-grow: 1;
   flex-shrink: 1;
@@ -2667,8 +2667,7 @@ select.payroll-col-filter {
 .tab-view#tab-employees.active,
 .tab-view#tab-logs.active,
 .tab-view#tab-punches.active,
-.tab-view#tab-selfies.active,
-.tab-view#tab-travel.active {
+.tab-view#tab-selfies.active {
   display: flex;
   flex-direction: column;
 }
@@ -2677,8 +2676,7 @@ select.payroll-col-filter {
 .tab-view#tab-employees .glass-card,
 .tab-view#tab-logs .glass-card,
 .tab-view#tab-punches .glass-card,
-.tab-view#tab-selfies .glass-card,
-.tab-view#tab-travel .glass-card {
+.tab-view#tab-selfies .glass-card {
   display: flex;
   flex-direction: column;
   flex-grow: 1;
@@ -2708,7 +2706,8 @@ select.payroll-col-filter {
 /* Ensure multi-section tab tables do not clip vertically, but allow horizontal scrolling */
 .tab-view#tab-camera .overflow-x,
 .tab-view#tab-sites .overflow-x,
-.tab-view#tab-welders .overflow-x {
+.tab-view#tab-welders .overflow-x,
+.tab-view#tab-travel .overflow-x {
   overflow-x: auto !important;
   overflow-y: visible !important;
   height: auto !important;
@@ -4207,4 +4206,11 @@ span.flatpickr-weekday {
 
 
 
+
+
+/* Skeleton loader pulse animation */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
 
