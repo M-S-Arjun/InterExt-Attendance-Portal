@@ -392,19 +392,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Detect active page/tab from pathname
   let currentPage = 'dashboard';
   const path = window.location.pathname.replace(/\/$/, ''); // strip trailing slash
-  if (path === '/logs') currentPage = 'logs';
-  else if (path === '/punches') currentPage = 'punches';
-  else if (path === '/travel') currentPage = 'travel';
-  else if (path === '/profiles') currentPage = 'profiles';
-  else if (path === '/employees') currentPage = 'employees';
-  else if (path === '/payroll') currentPage = 'payroll';
-  else if (path === '/welders') currentPage = 'welders';
-  else if (path === '/selfies') currentPage = 'selfies';
-  else if (path === '/camera') currentPage = 'camera';
-  else if (path === '/unknown') currentPage = 'unknown';
-  else if (path === '/sites') currentPage = 'sites';
-  else if (path === '/holidays') currentPage = 'holidays';
-  else if (path === '/settings') currentPage = 'settings';
+  if (path === '/logs' || path.endsWith('/logs.html')) currentPage = 'logs';
+  else if (path === '/punches' || path.endsWith('/punches.html')) currentPage = 'punches';
+  else if (path === '/travel' || path.endsWith('/travel.html')) currentPage = 'travel';
+  else if (path === '/profiles' || path.endsWith('/profiles.html')) currentPage = 'profiles';
+  else if (path === '/employees' || path.endsWith('/employees.html')) currentPage = 'employees';
+  else if (path === '/payroll' || path.endsWith('/payroll.html')) currentPage = 'payroll';
+  else if (path === '/welders' || path.endsWith('/welders.html')) currentPage = 'welders';
+  else if (path === '/selfies' || path.endsWith('/selfies.html')) currentPage = 'selfies';
+  else if (path === '/camera' || path.endsWith('/camera.html')) currentPage = 'camera';
+  else if (path === '/unknown' || path.endsWith('/unknown.html')) currentPage = 'unknown';
+  else if (path === '/sites' || path.endsWith('/sites.html')) currentPage = 'sites';
+  else if (path === '/holidays' || path.endsWith('/holidays.html')) currentPage = 'holidays';
+  else if (path === '/settings' || path.endsWith('/settings.html')) currentPage = 'settings';
   
   state.activeTab = currentPage;
 
@@ -434,7 +434,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       sites: ["Work Sites Registry", "Add and manage geographical site divisions"],
       holidays: ["Company Public Holidays", "Manage official paid company holidays and visual calendars"],
       settings: ["Shift Settings", "Set shift start/end benchmarks and wage credits thresholds"],
-      welders: ["Welders Weekly Report", "Weekly attendance and payroll summary ending on Fridays (Saturday to Friday)"]
+      welders: ["Welders Weekly Report", "Weekly attendance and payroll summary (ends Saturday/Friday depending on week of the month)"]
     };
     const info = titleMap[currentPage] || titleMap.dashboard;
     titleEl.textContent = info[0];
@@ -552,8 +552,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ── Auto-Refresh: silently reload attendance & dashboard data every 30 seconds ──
-  // This ensures new WhatsApp check-ins appear without requiring a manual Refresh click.
+  // Pauses automatically when the browser tab is hidden to save CPU and network.
   setInterval(async () => {
+    // Skip refresh entirely if the tab is not visible (Page Visibility API)
+    if (document.hidden) return;
     try {
       if (state.activeTab === 'dashboard') {
         await refreshDashboardData();
@@ -578,7 +580,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
       // Silent fail — auto-refresh should never break the UI
     }
-  }, 30000); // every 30 secondsevery 30 seconds
+  }, 30000);
+
+  // ── CCTV Preview Snapshot Auto-Refresh: update camera card preview pictures every 1.2 seconds ──
+  // This updates static snapshots without opening persistent MJPEG HTTP connections, preventing browser HTTP/1.1 connection exhaustion.
+  setInterval(() => {
+    try {
+      const previewImgs = document.querySelectorAll('.cctv-preview-img');
+      previewImgs.forEach(img => {
+        const camId = img.getAttribute('data-camera-id');
+        if (camId) {
+          img.src = `/api/cctv/snapshot/${camId}?t=${Date.now()}`;
+        }
+      });
+      // Also update HUD timestamps
+      const timeEls = document.querySelectorAll('.cctv-hud-timestamp');
+      const timeString = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + new Date().toLocaleTimeString('en-US', { hour12: false });
+      timeEls.forEach(el => { el.textContent = timeString; });
+    } catch (e) {
+      // Passive check fails silently
+    }
+  }, 1200);
 
 
   // Register Service Worker for PWA Standalone App Install on Dashboard
@@ -801,7 +823,7 @@ function registerSocketEvents() {
   socket.on('stats_updated', () => refreshDashboardData());
   socket.on('attendance_updated', () => {
     refreshDashboardData();
-    if (state.activeTab === 'camera') {
+    if (state.activeTab === 'camera' || document.getElementById('camera-events-table-body')) {
       refreshCameraEvents();
     }
   });
@@ -809,7 +831,7 @@ function registerSocketEvents() {
   socket.on('whatsapp_chats', (chats) => populateGroupChatsDropdown(chats));
   
   socket.on('camera_event_recorded', (event) => {
-    if (state.activeTab === 'camera') {
+    if (state.activeTab === 'camera' || document.getElementById('camera-events-table-body')) {
       refreshCameraEvents();
     }
     // Render visual floating toast for background CCTV matches
@@ -831,6 +853,7 @@ function registerSocketEvents() {
   });
 
   socket.on('unknown_detection_updated', () => {
+    // Only refresh if already on the unknown tab and only silently
     if (state.activeTab === 'unknown') {
       refreshUnknownDetections();
     }
@@ -838,9 +861,7 @@ function registerSocketEvents() {
   });
 
   socket.on('unknown_detection_deleted', () => {
-    if (state.activeTab === 'unknown') {
-      refreshUnknownDetections();
-    }
+    // No-op: UI already updated optimistically on delete/assign
   });
 }
 
@@ -1018,9 +1039,11 @@ async function fetchStats() {
 
 async function fetchPendingMessages() {
   try {
-    const r = await fetch('/api/pending').then(r => r.json());
-    // Sort exceptions by timestamp descending (latest first)
-    r.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    // API now returns paginated response: { items, total, page, limit, pages }
+    const resp = await fetch('/api/pending?limit=50').then(r => r.json());
+    // Support both old flat array and new paginated format
+    const r = Array.isArray(resp) ? resp : (resp.items || []);
+    const total = Array.isArray(resp) ? r.length : (resp.total || r.length);
     state.pendingMessages = r;
     
     const list = document.getElementById('pending-messages-list');
@@ -1029,6 +1052,14 @@ async function fetchPendingMessages() {
     if (r.length === 0) {
       list.innerHTML = `<p class="help-text">No pending exceptions.</p>`;
       return;
+    }
+
+    // Show count banner if there are more items than loaded
+    if (total > r.length) {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'background:rgba(255,165,0,0.1);border:1px solid rgba(255,165,0,0.3);border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:0.8rem;color:var(--color-warning);';
+      banner.textContent = `Showing ${r.length} of ${total} exceptions (newest first)`;
+      list.appendChild(banner);
     }
 
     r.forEach(msg => {
@@ -1717,77 +1748,117 @@ async function refreshCameraEvents() {
 }
 
 // Unknown Detections Loaders
-async function refreshUnknownDetections() {
+// State for unknown detections pagination
+window._unknownPage = 1;
+window._unknownDate = new Date().toISOString().split('T')[0]; // default: today
+window._unknownTotalPages = 1;
+window._unknownTotalCount = 0;
+
+async function refreshUnknownDetections(resetPage) {
+  if (resetPage) window._unknownPage = 1;
+  const container = document.getElementById('unknown-detections-container');
+  if (!container) return;
+
+  // Show skeleton immediately
+  container.innerHTML = Array(6).fill(0).map(() => `
+    <div style="border-radius:10px;border:1px solid var(--glass-border);background:rgba(255,255,255,0.03);padding:16px;display:flex;flex-direction:column;gap:12px;">
+      <div style="width:100%;height:140px;border-radius:8px;background:rgba(255,255,255,0.06);animation:pulse 1.4s ease-in-out infinite;"></div>
+      <div style="height:12px;width:60%;border-radius:6px;background:rgba(255,255,255,0.06);animation:pulse 1.4s ease-in-out infinite;"></div>
+      <div style="height:10px;width:80%;border-radius:6px;background:rgba(255,255,255,0.04);animation:pulse 1.4s ease-in-out infinite;"></div>
+    </div>`).join('');
+
   try {
-    const resp = await fetch('/api/unknown-detections');
+    const dateParam = window._unknownDate ? `&date=${window._unknownDate}` : '';
+    const resp = await fetch(`/api/unknown-detections?page=${window._unknownPage}&limit=24${dateParam}`);
     if (!resp.ok) throw new Error(`Unknown detections load failed (${resp.status})`);
-    const detections = await resp.json();
+    const data = await resp.json();
+    const detections = data.detections || [];
     window.loadedUnknownDetections = detections;
+    window._unknownTotalPages = data.totalPages || 1;
+    window._unknownTotalCount = data.totalCount || 0;
     renderUnknownDetections(detections);
   } catch (err) {
     console.error("Failed to refresh unknown detections:", err);
+    if (container) container.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--text-tertiary);padding:20px;">Failed to load visitor log. Please refresh.</div>`;
   }
 }
 
 function renderUnknownDetections(detections) {
   const container = document.getElementById('unknown-detections-container');
   if (!container) return;
-  container.innerHTML = "";
+
+  // Rebuild toolbar (date filter + pagination controls) above grid
+  let toolbar = document.getElementById('unknown-toolbar');
+  if (!toolbar) {
+    toolbar = document.createElement('div');
+    toolbar.id = 'unknown-toolbar';
+    toolbar.style.cssText = 'grid-column:1/-1;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px;';
+    container.parentElement.insertBefore(toolbar, container);
+  }
+  toolbar.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;flex:1;flex-wrap:wrap;">
+      <label style="font-size:0.8rem;color:var(--text-secondary);font-weight:600;">Date:</label>
+      <input type="date" id="unknown-date-filter" value="${window._unknownDate || ''}" max="${new Date().toISOString().split('T')[0]}"
+        style="padding:6px 10px;border-radius:6px;border:1px solid var(--glass-border);background:rgba(0,0,0,0.2);color:var(--text-primary);font-size:0.8rem;cursor:pointer;"
+        onchange="window._unknownDate=this.value;refreshUnknownDetections(true);">
+      <button onclick="window._unknownDate='';document.getElementById('unknown-date-filter').value='';refreshUnknownDetections(true);"
+        style="padding:5px 10px;border-radius:6px;border:1px solid var(--glass-border);background:transparent;color:var(--text-secondary);font-size:0.75rem;cursor:pointer;">All Dates</button>
+      <span style="font-size:0.75rem;color:var(--text-tertiary);margin-left:4px;">${window._unknownTotalCount} visitor logs</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <button id="unknown-prev-btn" onclick="if(window._unknownPage>1){window._unknownPage--;refreshUnknownDetections();}" 
+        style="padding:5px 10px;border-radius:6px;border:1px solid var(--glass-border);background:transparent;color:var(--text-primary);font-size:0.8rem;cursor:pointer;${window._unknownPage<=1?'opacity:0.35;pointer-events:none;':''}">← Prev</button>
+      <span style="font-size:0.78rem;color:var(--text-secondary);white-space:nowrap;">Page ${window._unknownPage} / ${window._unknownTotalPages}</span>
+      <button id="unknown-next-btn" onclick="if(window._unknownPage<window._unknownTotalPages){window._unknownPage++;refreshUnknownDetections();}" 
+        style="padding:5px 10px;border-radius:6px;border:1px solid var(--glass-border);background:transparent;color:var(--text-primary);font-size:0.8rem;cursor:pointer;${window._unknownPage>=window._unknownTotalPages?'opacity:0.35;pointer-events:none;':''}">Next →</button>
+    </div>
+  `;
+
+  container.innerHTML = '';
 
   if (!detections || detections.length === 0) {
-    container.innerHTML = `<div class="loading-state" style="grid-column: 1 / -1; text-align: center; padding: 20px; color: var(--text-tertiary);"><p style="margin: 0; font-size: 0.85rem;">No unknown visitor logs recorded today.</p></div>`;
+    container.innerHTML = `<div class="loading-state" style="grid-column: 1 / -1; text-align: center; padding: 20px; color: var(--text-tertiary);"><p style="margin: 0; font-size: 0.85rem;">No unknown visitor logs for this filter.</p></div>`;
     return;
   }
-
-  // Sort by timestamp descending
-  detections.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
   detections.forEach(det => {
     const card = document.createElement('div');
     card.className = "glass-card";
-    card.style.padding = "16px";
-    card.style.display = "flex";
-    card.style.flexDirection = "column";
-    card.style.gap = "12px";
-    card.style.position = "relative";
-    card.style.border = "1px solid var(--glass-border)";
-    card.style.borderRadius = "var(--border-radius-md)";
-    card.style.background = "rgba(255, 107, 0, 0.03)";
+    card.dataset.detId = det.id;
+    card.style.cssText = "padding:16px;display:flex;flex-direction:column;gap:12px;position:relative;border:1px solid var(--glass-border);border-radius:var(--border-radius-md);background:rgba(255,107,0,0.03);";
 
     const dateStr = new Date(det.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
     const timeStr = new Date(det.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    const imgHTML = det.imageUrl 
-      ? `<div style="width: 100%; height: 140px; border-radius: 8px; overflow: hidden; border: 1px solid var(--glass-border); cursor: pointer;" onclick="openImageModal('${det.imageUrl}')" title="Click to view full image">
-           <img src="${det.imageUrl}" style="width: 100%; height: 100%; object-fit: cover;">
+    const imgHTML = det.imageUrl
+      ? `<div style="width:100%;height:140px;border-radius:8px;overflow:hidden;border:1px solid var(--glass-border);cursor:pointer;" onclick="openImageModal('${det.imageUrl}')" title="Click to view full image">
+           <img src="${det.imageUrl}" style="width:100%;height:100%;object-fit:cover;" loading="lazy">
          </div>`
-      : `<div style="width: 100%; height: 140px; border-radius: 8px; background: rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; color: var(--text-tertiary);">
-           <i data-lucide="image" style="width: 32px; height: 32px;"></i>
+      : `<div style="width:100%;height:140px;border-radius:8px;background:rgba(0,0,0,0.2);display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);">
+           <i data-lucide="image" style="width:32px;height:32px;"></i>
          </div>`;
 
     card.innerHTML = `
       ${imgHTML}
-      <div style="display: flex; flex-direction: column; gap: 4px;">
-        <div style="font-size: 0.85rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 6px;">
-          <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-primary);"></span>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <div style="font-size:0.85rem;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:6px;">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--color-primary);"></span>
           Unknown Visitor
         </div>
-        <div style="font-size: 0.72rem; color: var(--text-secondary); display: flex; justify-content: space-between;">
+        <div style="font-size:0.72rem;color:var(--text-secondary);display:flex;justify-content:space-between;">
           <span>Date: ${dateStr}</span>
           <span>Time: ${timeStr}</span>
         </div>
-        <div style="font-size: 0.72rem; color: var(--text-tertiary);">
-          Location: ${det.siteName || 'Office'} (${det.cameraName || 'CCTV'})
-        </div>
+        <div style="font-size:0.72rem;color:var(--text-tertiary);">Location: ${det.siteName || 'Office'} (${det.cameraName || 'CCTV'})</div>
       </div>
-      <div style="margin-top: auto; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; gap: 8px;">
-        <span style="font-size: 0.7rem; color: var(--text-tertiary);">Conf: ${(det.confidence * 100).toFixed(0)}%</span>
-        <div style="display: flex; gap: 6px;">
-          <button class="btn btn-primary btn-sm" onclick="openAssignModal('${det.id}')" style="padding: 4px 8px; font-size: 0.75rem; height: 26px; display: inline-flex; align-items: center; gap: 4px; background: var(--color-primary); border-color: var(--color-primary);" title="Assign to Trained Employee">
-            <i data-lucide="user-plus" style="width: 12px; height: 12px;"></i> Assign
+      <div style="margin-top:auto;padding-top:8px;border-top:1px solid rgba(255,255,255,0.05);display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <span style="font-size:0.7rem;color:var(--text-tertiary);">Conf: ${(det.confidence * 100).toFixed(0)}%</span>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-primary btn-sm" onclick="openAssignModal('${det.id}')" style="padding:4px 8px;font-size:0.75rem;height:26px;display:inline-flex;align-items:center;gap:4px;background:var(--color-primary);border-color:var(--color-primary);" title="Assign to Trained Employee">
+            <i data-lucide="user-plus" style="width:12px;height:12px;"></i> Assign
           </button>
-          <button class="btn btn-secondary btn-sm" onclick="handleDeleteUnknown('${det.id}')" style="padding: 4px 8px; font-size: 0.75rem; height: 26px; color: var(--color-red); border-color: rgba(239, 68, 68, 0.2); display: inline-flex; align-items: center; gap: 4px;" title="Clear Log">
-            <i data-lucide="trash-2" style="width: 12px; height: 12px;"></i> Clear
+          <button class="btn btn-secondary btn-sm" onclick="handleDeleteUnknown('${det.id}')" style="padding:4px 8px;font-size:0.75rem;height:26px;color:var(--color-red);border-color:rgba(239,68,68,0.2);display:inline-flex;align-items:center;gap:4px;" title="Clear Log">
+            <i data-lucide="trash-2" style="width:12px;height:12px;"></i> Clear
           </button>
         </div>
       </div>
@@ -1806,10 +1877,15 @@ async function handleDeleteUnknown(id) {
   if (!detection) return;
   if (!confirm("Are you sure you want to clear this visitor log?")) return;
 
+  // Instantly remove card from DOM for snappy feel
+  const card = document.querySelector(`[data-det-id="${id}"]`);
+  if (card) card.remove();
+  window.loadedUnknownDetections = (window.loadedUnknownDetections || []).filter(d => d.id !== id);
+  window._unknownTotalCount = Math.max(0, (window._unknownTotalCount || 1) - 1);
+
   const deleteFn = async (data) => {
     const resp = await fetch(`/api/unknown-detections/${data.id}`, { method: 'DELETE' });
     if (!resp.ok) throw new Error(`Failed to delete detection (${resp.status})`);
-    await refreshUnknownDetections();
   };
 
   const restoreFn = async (data) => {
@@ -1828,6 +1904,7 @@ async function handleDeleteUnknown(id) {
   } catch (err) {
     console.error("Error deleting detection:", err);
     TransactionManager.showStatusToast("Failed to clear visitor log.", true);
+    await refreshUnknownDetections(); // reload on failure
   }
 }
 
@@ -1945,18 +2022,13 @@ window.submitAssignFace = async function() {
   }
 
   submitBtn.disabled = true;
-  submitBtn.textContent = 'Retraining Model...';
+  submitBtn.textContent = 'Saving...';
 
   try {
     const resp = await fetch('/api/unknown-detections/assign', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        detectionId, 
-        employeeId, 
-        registerAttendance, 
-        eventType 
-      })
+      body: JSON.stringify({ detectionId, employeeId, registerAttendance, eventType })
     });
 
     if (!resp.ok) {
@@ -1964,13 +2036,21 @@ window.submitAssignFace = async function() {
       throw new Error(errData.error || `Server error (${resp.status})`);
     }
 
-    const result = await resp.json();
+    // Close modal instantly
     closeAssignModal();
-    
-    // Show toast notification
-    TransactionManager.showStatusToast("Face assigned successfully! Model retrained.");
-    
-    await refreshUnknownDetections();
+
+    // Instantly remove the card from DOM
+    const card = document.querySelector(`[data-det-id="${detectionId}"]`);
+    if (card) card.remove();
+    window.loadedUnknownDetections = (window.loadedUnknownDetections || []).filter(d => d.id !== detectionId);
+    window._unknownTotalCount = Math.max(0, (window._unknownTotalCount || 1) - 1);
+
+    // Update toolbar count
+    const countEl = document.querySelector('#unknown-toolbar span[style*="text-tertiary"]');
+    if (countEl) countEl.textContent = `${window._unknownTotalCount} visitor logs`;
+
+    TransactionManager.showStatusToast("Face assigned! Model retraining in background...");
+
   } catch (err) {
     console.error('Failed to assign face:', err);
     TransactionManager.showStatusToast(`Error: ${err.message}`, true);
@@ -2045,12 +2125,103 @@ function renderCameraEventsTable(events) {
       <td>${timestampText}</td>
       <td>${imageCell}</td>
       <td>${statusBadgeHtml}</td>
+      <td>
+        <div class="btn-actions-grid" style="display: flex; gap: 4px; justify-content: center;">
+          <button class="btn-table-action" onclick="openCameraEventEditor('${event.id}', '${event.employeeId}')" title="Correct Employee Identification">
+            <i data-lucide="edit-3" style="width: 14px; height: 14px;"></i>
+          </button>
+        </div>
+      </td>
     `;
     tbody.appendChild(row);
   });
 
   if (window.lucide) {
     window.lucide.createIcons();
+  }
+}
+
+function openCameraEventEditor(eventId, currentEmpId) {
+  const modal = document.getElementById('camera-event-edit-modal');
+  if (!modal) return;
+  
+  document.getElementById('edit-event-id').value = eventId;
+  
+  const select = document.getElementById('edit-event-emp-select');
+  if (select) {
+    select.innerHTML = '';
+    const sortedEmployees = [...(state.employees || [])].sort((a, b) => a.name.localeCompare(b.name));
+    sortedEmployees.forEach(emp => {
+      const option = document.createElement('option');
+      option.value = emp.id;
+      option.textContent = emp.name;
+      if (emp.id === currentEmpId) option.selected = true;
+      select.appendChild(option);
+    });
+  }
+  
+  modal.classList.add('active');
+}
+
+function closeCameraEventEditorModal() {
+  const modal = document.getElementById('camera-event-edit-modal');
+  if (modal) modal.classList.remove('active');
+}
+
+async function handleCameraEventEditSubmit(e) {
+  e.preventDefault();
+  const id = document.getElementById('edit-event-id').value;
+  const employeeId = document.getElementById('edit-event-emp-select').value;
+  
+  if (!id || !employeeId) {
+    alert('Please select an employee.');
+    return;
+  }
+  
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving...';
+  }
+  
+  try {
+    const resp = await fetch('/api/attendance/camera/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, employeeId })
+    });
+    
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || `Server error (${resp.status})`);
+    }
+    
+    closeCameraEventEditorModal();
+    
+    // Refresh events from database
+    if (typeof refreshCameraEvents === 'function') {
+      await refreshCameraEvents();
+    } else {
+      location.reload();
+    }
+    
+    if (window.TransactionManager && typeof window.TransactionManager.showStatusToast === 'function') {
+      window.TransactionManager.showStatusToast("Employee identification corrected successfully!");
+    } else {
+      alert("Employee identification corrected successfully!");
+    }
+  } catch (err) {
+    console.error('Failed to update camera event:', err);
+    if (window.TransactionManager && typeof window.TransactionManager.showStatusToast === 'function') {
+      window.TransactionManager.showStatusToast(`Error: ${err.message}`, true);
+    } else {
+      alert(`Error: ${err.message}`);
+    }
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Save Correction';
+    }
   }
 }
 
@@ -2208,18 +2379,38 @@ async function getFaceRecognitionStatus() {
   }
 }
 
-function getEmployeeShiftHours(emp) {
+function getEmployeeShiftHours(emp, dateStr = null) {
   let F = 8.0;
-  if (emp && emp.shiftStart && emp.shiftEnd) {
+  let start = emp?.shiftStart;
+  let end = emp?.shiftEnd;
+
+  if (emp && emp.customShifts && dateStr) {
     try {
-      const [startH, startM] = emp.shiftStart.split(':').map(Number);
-      const [endH, endM] = emp.shiftEnd.split(':').map(Number);
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        if (!isNaN(d.getTime())) {
+          const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+          const dayName = days[d.getDay()];
+          if (emp.customShifts[dayName] && emp.customShifts[dayName].enabled) {
+            start = emp.customShifts[dayName].shiftStart || start;
+            end = emp.customShifts[dayName].shiftEnd || end;
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  if (start && end) {
+    try {
+      const [startH, startM] = start.split(':').map(Number);
+      const [endH, endM] = end.split(':').map(Number);
       let shiftMinutes = (endH * 60 + endM) - (startH * 60 + startM);
       if (shiftMinutes < 0) shiftMinutes += 24 * 60;
       const shiftHours = shiftMinutes / 60;
       F = shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours;
     } catch (err) {
-      console.warn("Failed to parse shift times for", emp.name, err);
+      console.warn("Failed to parse shift times for", emp?.name, err);
     }
   }
   return F;
@@ -2306,7 +2497,21 @@ function renderEmployeesTableBody(employees) {
     const hourlyDisplay = emp.hourlyRate ? `<strong>₹${emp.hourlyRate.toFixed(2)}</strong>` : "—";
     const phoneDisplay = emp.phone ? `<code style="font-size: 0.85rem; font-weight: 500;">+${emp.phone}</code>` : "—";
     let shiftDisplay = "—";
-    if (emp.shiftStart && emp.shiftEnd) {
+    if (emp.customShifts) {
+      const activeDays = Object.keys(emp.customShifts).filter(day => emp.customShifts[day].enabled);
+      if (activeDays.length > 0) {
+        shiftDisplay = `
+          <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
+            <span class="badge badge-orange" style="font-size: 0.75rem; text-transform: none; letter-spacing: normal;">Custom Days</span>
+            <span style="font-size: 0.72rem; color: var(--text-secondary); white-space: normal; max-width: 145px; display: block; line-height: 1.25;">
+              ${activeDays.map(d => `${d.substring(0,3).toUpperCase()}: ${emp.customShifts[d].shiftStart}-${emp.customShifts[d].shiftEnd}`).join(', ')}
+            </span>
+          </div>
+        `;
+      }
+    }
+    
+    if (shiftDisplay === "—" && emp.shiftStart && emp.shiftEnd) {
       const durStr = getShiftDurationStr(emp.shiftStart, emp.shiftEnd);
       shiftDisplay = `
         <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
@@ -2399,6 +2604,22 @@ function openEmployeeModal() {
   document.getElementById('emp-shift-start').value = "";
   document.getElementById('emp-shift-end').value = "";
   document.getElementById('emp-status').value = "active";
+  
+  // Reset Custom shifts inputs
+  const customToggle = document.getElementById('emp-custom-shifts-toggle');
+  if (customToggle) customToggle.checked = false;
+  const customPanel = document.getElementById('emp-custom-shifts-panel');
+  if (customPanel) customPanel.style.display = 'none';
+  const stdWrapper = document.getElementById('emp-standard-shift-wrapper');
+  if (stdWrapper) stdWrapper.style.display = 'block';
+  document.querySelectorAll('#emp-custom-shifts-panel .custom-shift-day-row').forEach(row => {
+    const chk = row.querySelector('.day-enabled-chk');
+    const start = row.querySelector('.day-shift-start');
+    const end = row.querySelector('.day-shift-end');
+    if (chk) chk.checked = false;
+    if (start) { start.value = ""; start.disabled = true; }
+    if (end) { end.value = ""; end.disabled = true; }
+  });
   
   document.getElementById('emp-std-days').value = "30";
   document.getElementById('emp-pf-enabled').checked = true;
@@ -2605,6 +2826,39 @@ function editEmployee(id) {
   document.getElementById('emp-shift-start').value = emp.shiftStart || "";
   document.getElementById('emp-shift-end').value = emp.shiftEnd || "";
   document.getElementById('emp-status').value = emp.status || "active";
+  
+  // Populate Custom shifts panel
+  const customToggle = document.getElementById('emp-custom-shifts-toggle');
+  const customPanel = document.getElementById('emp-custom-shifts-panel');
+  const stdWrapper = document.getElementById('emp-standard-shift-wrapper');
+  if (emp.customShifts) {
+    if (customToggle) customToggle.checked = true;
+    if (customPanel) customPanel.style.display = 'block';
+    if (stdWrapper) stdWrapper.style.display = 'none';
+    document.querySelectorAll('#emp-custom-shifts-panel .custom-shift-day-row').forEach(row => {
+      const day = row.getAttribute('data-day');
+      const dayConfig = emp.customShifts[day] || {};
+      const chk = row.querySelector('.day-enabled-chk');
+      const start = row.querySelector('.day-shift-start');
+      const end = row.querySelector('.day-shift-end');
+      
+      if (chk) chk.checked = !!dayConfig.enabled;
+      if (start) { start.value = dayConfig.shiftStart || ""; start.disabled = !dayConfig.enabled; }
+      if (end) { end.value = dayConfig.shiftEnd || ""; end.disabled = !dayConfig.enabled; }
+    });
+  } else {
+    if (customToggle) customToggle.checked = false;
+    if (customPanel) customPanel.style.display = 'none';
+    if (stdWrapper) stdWrapper.style.display = 'block';
+    document.querySelectorAll('#emp-custom-shifts-panel .custom-shift-day-row').forEach(row => {
+      const chk = row.querySelector('.day-enabled-chk');
+      const start = row.querySelector('.day-shift-start');
+      const end = row.querySelector('.day-shift-end');
+      if (chk) chk.checked = false;
+      if (start) { start.value = ""; start.disabled = true; }
+      if (end) { end.value = ""; end.disabled = true; }
+    });
+  }
 
   document.getElementById('emp-std-days').value = emp.stdWorkingDays !== undefined ? emp.stdWorkingDays : "30";
   document.getElementById('emp-pf-enabled').checked = emp.pfEnabled !== false;
@@ -2613,8 +2867,14 @@ function editEmployee(id) {
   document.getElementById('emp-fixed-salary').checked = emp.fixedSalary === true;
   
   const isOffice = (emp.modeOfWork || "").toLowerCase().trim() === 'office staff';
-  document.getElementById('emp-ot-eligible').checked = emp.otEligible !== undefined ? (emp.otEligible === true || emp.otEligible === 'true') : !isOffice;
-  document.getElementById('emp-ot-grace').value = emp.otGraceMinutes !== undefined ? emp.otGraceMinutes : "0";
+  const otEligibleEl = document.getElementById('emp-ot-eligible');
+  const otGraceEl = document.getElementById('emp-ot-grace');
+  if (otEligibleEl) {
+    otEligibleEl.checked = emp.otEligible !== undefined ? (emp.otEligible === true || emp.otEligible === 'true') : !isOffice;
+  }
+  if (otGraceEl) {
+    otGraceEl.value = emp.otGraceMinutes !== undefined ? emp.otGraceMinutes : "0";
+  }
 
   // Reset temp base64 caches
   window.tempProfilePhotoBase64 = null;
@@ -2705,16 +2965,46 @@ async function handleEmployeeSubmit(e) {
     dailyRate: dailyRateVal !== "" ? Number(dailyRateVal) : 120.00,
     monthlyWage: monthlyWageVal !== "" ? Number(monthlyWageVal) : null,
     hourlyRate: hourlyRateVal !== "" ? Number(hourlyRateVal) : (dailyRateVal !== "" ? Number((Number(dailyRateVal) / F).toFixed(2)) : 20.00),
-    shiftStart: shiftStart || "",
-    shiftEnd: shiftEnd || "",
-    shiftGroup: shiftGroup,
+    shiftStart: (() => {
+      const toggle = document.getElementById('emp-custom-shifts-toggle');
+      return (toggle && toggle.checked) ? "" : (shiftStart || "");
+    })(),
+    shiftEnd: (() => {
+      const toggle = document.getElementById('emp-custom-shifts-toggle');
+      return (toggle && toggle.checked) ? "" : (shiftEnd || "");
+    })(),
+    shiftGroup: (() => {
+      const toggle = document.getElementById('emp-custom-shifts-toggle');
+      return (toggle && toggle.checked) ? "Custom Day-Wise Shifts" : shiftGroup;
+    })(),
+    customShifts: (() => {
+      const toggle = document.getElementById('emp-custom-shifts-toggle');
+      if (!toggle || !toggle.checked) return null;
+      const config = {};
+      document.querySelectorAll('#emp-custom-shifts-panel .custom-shift-day-row').forEach(row => {
+        const day = row.getAttribute('data-day');
+        const chk = row.querySelector('.day-enabled-chk');
+        const enabled = chk ? chk.checked : false;
+        const start = row.querySelector('.day-shift-start').value;
+        const end = row.querySelector('.day-shift-end').value;
+        config[day] = { enabled, shiftStart: start, shiftEnd: end };
+      });
+      return config;
+    })(),
     stdWorkingDays: Number(document.getElementById('emp-std-days').value) || 30,
     pfEnabled: document.getElementById('emp-pf-enabled').checked,
     esicEnabled: document.getElementById('emp-esic-enabled').checked,
     ptEnabled: document.getElementById('emp-pt-enabled').checked,
     fixedSalary: document.getElementById('emp-fixed-salary').checked,
-    otEligible: document.getElementById('emp-ot-eligible').checked,
-    otGraceMinutes: Number(document.getElementById('emp-ot-grace').value) || 0,
+    otEligible: (() => {
+      const el = document.getElementById('emp-ot-eligible');
+      const isOffice = (document.getElementById('emp-mode').value || "").toLowerCase().trim() === 'office staff';
+      return el ? el.checked : (existingEmp.otEligible !== undefined ? existingEmp.otEligible : !isOffice);
+    })(),
+    otGraceMinutes: (() => {
+      const el = document.getElementById('emp-ot-grace');
+      return el ? (Number(el.value) || 0) : (existingEmp.otGraceMinutes || 0);
+    })(),
     status: document.getElementById('emp-status').value,
     passcode: document.getElementById('emp-passcode').value.trim() || "1234",
 
@@ -3179,14 +3469,36 @@ function renderEmployeeProfile(emp) {
       <div class="profile-detail-section">
         <h3 class="profile-section-title"><i data-lucide="briefcase"></i> Shift & Compensation</h3>
         <ul class="profile-info-list">
-          <li class="profile-info-row">
-            <span class="profile-info-label">Shift Hours:</span>
-            <span class="profile-info-value">${emp.shiftStart && emp.shiftEnd ? `<span class="badge badge-blue" style="font-family:monospace; margin-right:0;">${emp.shiftStart} - ${emp.shiftEnd}</span>` : '—'}</span>
-          </li>
-          <li class="profile-info-row">
-            <span class="profile-info-label">Shift Duration:</span>
-            <span class="profile-info-value">${durationStr}</span>
-          </li>
+          ${(() => {
+            const hasCustomOverrides = emp.customShifts && Object.keys(emp.customShifts).some(d => emp.customShifts[d].enabled);
+            if (hasCustomOverrides) {
+              const activeDays = Object.keys(emp.customShifts).filter(day => emp.customShifts[day].enabled);
+              return `
+                <li class="profile-info-row full-width">
+                  <span class="profile-info-label" style="color: var(--color-primary); font-weight:600; font-size: 0.9rem;">Custom Day Timings:</span>
+                  <span class="profile-info-value" style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
+                    ${activeDays.map(d => `
+                      <span style="font-size:0.8rem;">
+                        <strong style="text-transform:capitalize;">${d.substring(0,3)}</strong>: 
+                        <span class="badge badge-orange" style="font-family:monospace; margin:0; font-size:0.78rem; text-transform:none;">${emp.customShifts[d].shiftStart} - ${emp.customShifts[d].shiftEnd}</span>
+                      </span>
+                    `).join('')}
+                  </span>
+                </li>
+              `;
+            } else {
+              return `
+                <li class="profile-info-row">
+                  <span class="profile-info-label">Shift Hours (Standard):</span>
+                  <span class="profile-info-value">${emp.shiftStart && emp.shiftEnd ? `<span class="badge badge-blue" style="font-family:monospace; margin-right:0;">${emp.shiftStart} - ${emp.shiftEnd}</span>` : '—'}</span>
+                </li>
+                <li class="profile-info-row">
+                  <span class="profile-info-label">Shift Duration:</span>
+                  <span class="profile-info-value">${durationStr}</span>
+                </li>
+              `;
+            }
+          })()}
           <li class="profile-info-row">
             <span class="profile-info-label">Standard Work Days:</span>
             <span class="profile-info-value">${emp.stdWorkingDays !== undefined ? emp.stdWorkingDays : 30} days/m</span>
@@ -4118,6 +4430,7 @@ function loadSettingsForm() {
   document.getElementById('settings-pf-rate').value = state.settings.pfContributionRate !== undefined ? state.settings.pfContributionRate : 12.00;
   document.getElementById('settings-esic-rate').value = state.settings.esicContributionRate !== undefined ? state.settings.esicContributionRate : 0.75;
   document.getElementById('settings-pt-tax').value = state.settings.ptDeductionStandard !== undefined ? state.settings.ptDeductionStandard : 200.00;
+  document.getElementById('settings-gemini-key').value = state.settings.geminiApiKey || "";
 }
 
 async function refreshGroupList() {
@@ -4159,7 +4472,8 @@ async function handleSettingsSubmit(e) {
     lopDeductionRate: Number(document.getElementById('settings-lop-rate').value),
     pfContributionRate: Number(document.getElementById('settings-pf-rate').value),
     esicContributionRate: Number(document.getElementById('settings-esic-rate').value),
-    ptDeductionStandard: Number(document.getElementById('settings-pt-tax').value)
+    ptDeductionStandard: Number(document.getElementById('settings-pt-tax').value),
+    geminiApiKey: document.getElementById('settings-gemini-key').value.trim()
   };
 
   try {
@@ -4972,8 +5286,9 @@ function recalculatePayrollRow(inputEl) {
     ? Number((otHours * hourlyRate).toFixed(2))
     : Number((otHours * hourlyRate * overtimeRateMultiplier).toFixed(2));
 
-  // Travel Time Payout
-  const travelTimePayout = Number((travelTimeHours * hourlyRate).toFixed(2));
+  // Travel Time Payout (travelTimeHours are stated hours; pay 50% by default per policy)
+  const travelPaidRatio = state.settings?.travelTimePaidRatio !== undefined ? Number(state.settings.travelTimePaidRatio) : 0.50;
+  const travelTimePayout = Number((travelTimeHours * travelPaidRatio * hourlyRate).toFixed(2));
 
   // Extra Days Amount
   const extraDaysAmount = Number((extraDays * dailyRate).toFixed(2));
@@ -5563,153 +5878,267 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
-// --- Travel Time Logs Management ---
-function loadTravelLogs() {
-  const filterMonth = document.getElementById('travel-filter-month');
-  if (filterMonth && !filterMonth.value) {
-    filterMonth.value = toLocalISOString(new Date()).substring(0, 7); // YYYY-MM
+// ──────────────────────────────────────────────────────────────────────────
+// TRAVEL TIME LOG — Load all travel records (all months) once on tab open
+// ──────────────────────────────────────────────────────────────────────────
+
+async function loadTravelLogs() {
+  try {
+    // Fetch ALL travel logs across all months from the dedicated endpoint
+    const logs = await fetch('/api/travel').then(res => res.json());
+    state.travelAttendance = logs;
+
+    // Extract available months from data and populate all month dropdowns
+    const monthSet = new Set(logs.map(l => l.date.substring(0, 7)));
+    const months = [...monthSet].sort().reverse(); // newest first
+
+    const currentMonth = toLocalISOString(new Date()).substring(0, 7);
+
+    const sel = document.getElementById('travel-filter-month');
+    if (sel) {
+      // Preserve selected value if already set
+      const prev = sel.value;
+      sel.innerHTML = '<option value="">All Months</option>';
+      months.forEach(m => {
+        const [y, mo] = m.split('-').map(Number);
+        const label = new Date(y, mo - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = label;
+        if (m === (prev || currentMonth)) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    }
+
+    applyFiltersTravel();
+  } catch (err) {
+    console.error('Travel logs retrieval failed:', err);
   }
-  applyFiltersTravel();
 }
 
 function resetTravelFilters() {
-  const filterMonth = document.getElementById('travel-filter-month');
-  if (filterMonth) {
-    filterMonth.value = toLocalISOString(new Date()).substring(0, 7);
-  }
-  const searchInput = document.getElementById('travel-search-input');
-  if (searchInput) {
-    searchInput.value = "";
-  }
+  const currentMonth = toLocalISOString(new Date()).substring(0, 7);
+  const sel = document.getElementById('travel-filter-month');
+  if (sel) sel.value = currentMonth;
+
+  ['travel-search-input', 'summary-search-input', 'daily-search-input'].forEach(id => {
+    const inp = document.getElementById(id);
+    if (inp) inp.value = '';
+  });
   applyFiltersTravel();
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// TRAVEL FILTERS — Apply all three table filters independently, client-side
+// ──────────────────────────────────────────────────────────────────────────
+
 function applyFiltersTravel() {
-  const monthInput = document.getElementById('travel-filter-month');
-  const searchInput = document.getElementById('travel-search-input');
-  const tbody = document.getElementById('travel-table-body');
-  
-  if (!tbody) return; // Tab view not active/rendered yet
+  const allLogs = state.travelAttendance || [];
 
-  const selectedMonth = monthInput?.value || "";
-  const searchQuery = searchInput?.value.toLowerCase().trim() || "";
+  // Helper: resolve hourly rate for an employee record
+  const getHourlyRate = (emp) => {
+    if (!emp) return 0;
+    if (emp.hourlyRate) return Number(emp.hourlyRate);
+    const shiftF = getEmployeeShiftHours(emp);
+    if (emp.dailyRate) return Number((Number(emp.dailyRate) / shiftF).toFixed(2));
+    const actualSalary = Number(emp.monthlyWage) || 0.0;
+    const stdWorkingDays = Number(emp.stdWorkingDays) || 30;
+    return Number((actualSalary / stdWorkingDays / shiftF).toFixed(2));
+  };
 
-  // Filter logs where travelHours > 0 and date belongs to selectedMonth
-  let filtered = state.attendance.filter(log => {
-    if (!log.travelHours || Number(log.travelHours) <= 0) return false;
-    if (selectedMonth && !log.date.startsWith(selectedMonth)) return false;
-    
-    if (searchQuery) {
-      return log.employeeName.toLowerCase().includes(searchQuery) ||
-             log.siteName.toLowerCase().includes(searchQuery) ||
-             (log.messageText && log.messageText.toLowerCase().includes(searchQuery));
-    }
-    return true;
-  });
+  // Travel paid ratio (50% by default)
+  const travelRatio = (state.settings && state.settings.travelTimePaidRatio !== undefined)
+    ? Number(state.settings.travelTimePaidRatio)
+    : 0.50;
 
-  // Calculate statistics
-  let totalReported = 0;
-  let totalPaid = 0;
-  let totalPayout = 0;
-
-  filtered.forEach(log => {
-    const reported = Number(log.travelHours) * 2;
-    const paid = Number(log.travelHours);
-    
-    // Find employee to get hourly rate
+  // Helper: enrich a log with computed fields
+  const enrich = (log) => {
     const emp = state.employees.find(e => e.id === log.employeeId);
-    let hourlyRate = 0;
-    if (emp) {
-      if (emp.hourlyRate) {
-        hourlyRate = Number(emp.hourlyRate);
-      } else {
-        const shiftF = getEmployeeShiftHours(emp);
-        if (emp.dailyRate) {
-          hourlyRate = Number((Number(emp.dailyRate) / shiftF).toFixed(2));
-        } else {
-          const actualSalary = Number(emp.monthlyWage) || 0.0;
-          const stdWorkingDays = Number(emp.stdWorkingDays) || 30;
-          hourlyRate = Number((actualSalary / stdWorkingDays / shiftF).toFixed(2));
-        }
+    const stated = Number(log.travelHours);
+    const paid = Number((stated * travelRatio).toFixed(2));
+    const hourlyRate = getHourlyRate(emp);
+    const payout = Number((paid * hourlyRate).toFixed(2));
+    return { ...log, emp, stated, paid, hourlyRate, payout };
+  };
+
+  // ── SECTION 1: Stat Cards ──
+  // Use top-level filter (travel-filter-month + travel-search-input)
+  {
+    const monthVal = (document.getElementById('travel-filter-month')?.value || '').trim();
+    const searchVal = (document.getElementById('travel-search-input')?.value || '').toLowerCase().trim();
+
+    const filtered = allLogs.filter(log => {
+      if (monthVal && !log.date.startsWith(monthVal)) return false;
+      if (searchVal) {
+        const hit = log.employeeName.toLowerCase().includes(searchVal) ||
+                    (log.siteName || '').toLowerCase().includes(searchVal) ||
+                    (log.messageText || '').toLowerCase().includes(searchVal);
+        if (!hit) return false;
       }
-    }
+      return true;
+    });
 
-    const payout = paid * hourlyRate;
+    let grandStated = 0, grandPaid = 0, grandPayout = 0;
+    const empSet = new Set();
+    filtered.forEach(log => {
+      const e = enrich(log);
+      grandStated += e.stated;
+      grandPaid += e.paid;
+      grandPayout += e.payout;
+      empSet.add(log.employeeId);
+    });
 
-    totalReported += reported;
-    totalPaid += paid;
-    totalPayout += payout;
-  });
-
-  // Update stat UI
-  const statReported = document.getElementById('travel-stat-reported');
-  if (statReported) statReported.textContent = `${totalReported.toFixed(2)} hrs`;
-  
-  const statPaid = document.getElementById('travel-stat-paid');
-  if (statPaid) statPaid.textContent = `${totalPaid.toFixed(2)} hrs`;
-  
-  const statPayout = document.getElementById('travel-stat-payout');
-  if (statPayout) statPayout.textContent = `₹${totalPayout.toFixed(2)}`;
-
-  tbody.innerHTML = "";
-
-  if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-tertiary);">No travel logs match the filter criteria.</td></tr>`;
-    return;
+    const el = (id, txt) => { const d = document.getElementById(id); if (d) d.textContent = txt; };
+    el('travel-stat-reported', `${grandStated.toFixed(2)} hrs`);
+    el('travel-stat-paid', `${grandPaid.toFixed(2)} hrs`);
+    el('travel-stat-payout', `₹${grandPayout.toFixed(2)}`);
+    el('travel-stat-employees', empSet.size.toString());
   }
 
-  // Sort chronologically ascending, name ascending
-  filtered.sort((a, b) => a.date.localeCompare(b.date) || a.employeeName.localeCompare(b.employeeName));
+  // ── SECTION 2: Monthly Summary per Employee ──
+  {
+    const summaryBody = document.getElementById('travel-summary-table-body');
+    if (summaryBody) {
+      // Use the single top-level month filter
+      const monthVal = (document.getElementById('travel-filter-month')?.value || '').trim();
+      const searchVal = (document.getElementById('summary-search-input')?.value || '').toLowerCase().trim();
 
-  filtered.forEach(row => {
-    const tr = document.createElement('tr');
-    
-    const reported = Number(row.travelHours) * 2;
-    const paid = Number(row.travelHours);
-    
-    const emp = state.employees.find(e => e.id === row.employeeId);
-    let hourlyRate = 0;
-    if (emp) {
-      if (emp.hourlyRate) {
-        hourlyRate = Number(emp.hourlyRate);
-      } else {
-        const shiftF = getEmployeeShiftHours(emp);
-        if (emp.dailyRate) {
-          hourlyRate = Number((Number(emp.dailyRate) / shiftF).toFixed(2));
-        } else {
-          const actualSalary = Number(emp.monthlyWage) || 0.0;
-          const stdWorkingDays = Number(emp.stdWorkingDays) || 30;
-          hourlyRate = Number((actualSalary / stdWorkingDays / shiftF).toFixed(2));
+      const filtered = allLogs.filter(log => {
+        if (monthVal && !log.date.startsWith(monthVal)) return false;
+        if (searchVal) {
+          const hit = log.employeeName.toLowerCase().includes(searchVal) ||
+                      (log.siteName || '').toLowerCase().includes(searchVal);
+          if (!hit) return false;
         }
+        return true;
+      });
+
+      // Group by employee+month combo
+      const summaryMap = {};
+      filtered.forEach(log => {
+        const month = log.date.substring(0, 7);
+        const key = `${log.employeeId}__${month}`;
+        const e = enrich(log);
+        if (!summaryMap[key]) {
+          summaryMap[key] = {
+            employeeName: log.employeeName,
+            designation: e.emp ? (e.emp.designation || 'Worker') : '—',
+            month,
+            totalStated: 0,
+            totalPaid: 0,
+            hourlyRate: e.hourlyRate,
+            totalPayout: 0,
+            sites: new Set()
+          };
+        }
+        const item = summaryMap[key];
+        item.totalStated += e.stated;
+        item.totalPaid += e.paid;
+        item.totalPayout += e.payout;
+        if (log.siteName && log.siteName !== '—' && log.siteName !== '-') {
+          log.siteName.split('/').map(s => s.trim()).filter(Boolean).forEach(s => item.sites.add(s));
+        }
+      });
+
+      const rows = Object.values(summaryMap).sort((a, b) => {
+        // Sort by month desc, then employee name asc
+        const mc = b.month.localeCompare(a.month);
+        return mc !== 0 ? mc : a.employeeName.localeCompare(b.employeeName);
+      });
+
+      summaryBody.innerHTML = '';
+      if (rows.length === 0) {
+        summaryBody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-tertiary);">No travel records match the filter criteria.</td></tr>`;
+      } else {
+        rows.forEach(row => {
+          const tr = document.createElement('tr');
+          const [y, mo] = row.month.split('-').map(Number);
+          const monthLabel = new Date(y, mo - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
+          const sitesArr = row.sites.size > 0 ? Array.from(row.sites) : [];
+          const sitesStr = sitesArr.length > 0 ? sitesArr.join(', ') : '—';
+          const sitesDisplay = sitesArr.length > 0
+            ? `<span title="${escapeHtml(sitesStr)}" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px;">${escapeHtml(sitesArr[0])}${sitesArr.length > 1 ? ` <span style="color:var(--text-tertiary);font-size:0.72rem;">+${sitesArr.length - 1} more</span>` : ''}</span>`
+            : '—';
+          tr.innerHTML = `
+            <td><strong>${row.employeeName}</strong></td>
+            <td><span class="cell-sub-desc">${row.designation}</span></td>
+            <td><span class="badge badge-blue" style="white-space:nowrap;">${monthLabel}</span></td>
+            <td>${sitesDisplay}</td>
+            <td><strong>${row.totalStated.toFixed(2)} hrs</strong></td>
+            <td><span class="badge badge-green">${row.totalPaid.toFixed(2)} hrs</span></td>
+            <td style="white-space:nowrap;">₹${row.hourlyRate.toFixed(2)}/hr</td>
+            <td><span class="wage-amount">₹${row.totalPayout.toFixed(2)}</span></td>
+          `;
+          summaryBody.appendChild(tr);
+        });
       }
     }
-    const payout = paid * hourlyRate;
-
-    tr.innerHTML = `
-      <td><strong>${row.date}</strong></td>
-      <td>
-        <span class="worker-primary-name">${row.employeeName}</span>
-      </td>
-      <td>${row.siteName}</td>
-      <td>${reported.toFixed(2)} hrs</td>
-      <td><span class="badge badge-green">${paid.toFixed(2)} hrs</span></td>
-      <td>₹${hourlyRate.toFixed(2)}/hr</td>
-      <td><span class="wage-amount">₹${payout.toFixed(2)}</span></td>
-      <td>
-        ${row.messageText ? `<span class="cell-sub-desc" title="${escapeHtml(row.messageText)}">Text: ${escapeHtml(row.messageText.substring(0, 45))}${row.messageText.length > 45 ? '...' : ''}</span>` : '—'}
-      </td>
-      <td>
-        <div class="btn-actions-grid">
-          <button class="btn-table-action" onclick="openAttendanceAdjuster('${row.id}')" title="Adjust Attendance"><i data-lucide="edit-3" style="width: 14px; height: 14px;"></i></button>
-        </div>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  });
-
-  if (window.lucide) {
-    window.lucide.createIcons();
   }
+
+  // ── SECTION 3: Daily Travel Logs ──
+  {
+    const dailyBody = document.getElementById('travel-daily-table-body');
+    if (dailyBody) {
+      // Use the single top-level month filter
+      const monthVal = (document.getElementById('travel-filter-month')?.value || '').trim();
+      const searchVal = (document.getElementById('daily-search-input')?.value || '').toLowerCase().trim();
+
+      const filtered = allLogs.filter(log => {
+        if (monthVal && !log.date.startsWith(monthVal)) return false;
+        if (searchVal) {
+          const hit = log.employeeName.toLowerCase().includes(searchVal) ||
+                      (log.siteName || '').toLowerCase().includes(searchVal) ||
+                      (log.messageText || '').toLowerCase().includes(searchVal);
+          if (!hit) return false;
+        }
+        return true;
+      });
+
+      const sorted = [...filtered].sort((a, b) => b.date.localeCompare(a.date) || a.employeeName.localeCompare(b.employeeName));
+
+      dailyBody.innerHTML = '';
+      if (sorted.length === 0) {
+        dailyBody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-tertiary);">No daily travel logs match the filter criteria.</td></tr>`;
+      } else {
+        sorted.forEach(log => {
+          const e = enrich(log);
+          const tr = document.createElement('tr');
+          const siteDisplay = log.siteName
+            ? `<span title="${escapeHtml(log.siteName)}" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(log.siteName)}</span>`
+            : '—';
+          tr.innerHTML = `
+            <td><strong>${log.date}</strong></td>
+            <td><span class="worker-primary-name">${log.employeeName}</span></td>
+            <td>${siteDisplay}</td>
+            <td><strong>${e.stated.toFixed(2)} hrs</strong></td>
+            <td><span class="badge badge-green">${e.paid.toFixed(2)} hrs</span></td>
+            <td style="white-space:nowrap;">₹${e.hourlyRate.toFixed(2)}/hr</td>
+            <td><span class="wage-amount">₹${e.payout.toFixed(2)}</span></td>
+            <td>${log.messageText ? `<span class="cell-sub-desc" title="${escapeHtml(log.messageText)}" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Text: ${escapeHtml(log.messageText.substring(0, 55))}${log.messageText.length > 55 ? '...' : ''}</span>` : '—'}</td>
+            <td>
+              <div class="btn-actions-grid">
+                <button class="btn-table-action" onclick="openAttendanceAdjuster('${log.id}')" title="Adjust Attendance"><i data-lucide="edit-3" style="width:14px;height:14px;"></i></button>
+              </div>
+            </td>
+          `;
+          dailyBody.appendChild(tr);
+        });
+      }
+    }
+  }
+
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function exportTravelExcel() {
+  const monthVal = (document.getElementById('travel-filter-month')?.value || '').trim();
+  const searchVal = (document.getElementById('travel-search-input')?.value || '').trim();
+  
+  let downloadUrl = `/api/export/travel/excel?month=${monthVal}`;
+  if (searchVal) {
+    downloadUrl += `&search=${encodeURIComponent(searchVal)}`;
+  }
+  window.location.href = downloadUrl;
 }
 
 // ==========================================================================
@@ -6524,8 +6953,8 @@ async function loadCctvCameras() {
       const timeString = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + new Date().toLocaleTimeString('en-US', { hour12: false });
       
       const previewHtml = isRunning 
-        ? `<div class="cctv-camera-preview" onclick="enlargeCctvStream('${cam.id}', '${cam.name.replace(/'/g, "\\'")}')" style="width: 100%; aspect-ratio: 16/9; background: #000; border-radius: var(--border-radius-sm); overflow: hidden; margin-top: 4px; border: 1px solid var(--glass-border); display: flex; align-items: center; justify-content: center; position: relative; box-shadow: inset 0 0 20px rgba(0,0,0,0.8); cursor: pointer;">
-             <img src="/api/cctv/stream/${cam.id}" style="width: 100%; height: 100%; object-fit: cover;" alt="Live Stream" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+        ? `<div class="cctv-camera-preview" onclick="window.enlargeCctvStream('${cam.id}', '${cam.name.replace(/'/g, "\\'")}')" style="width: 100%; aspect-ratio: 16/9; background: #000; border-radius: var(--border-radius-sm); overflow: hidden; margin-top: 4px; border: 1px solid var(--glass-border); display: flex; align-items: center; justify-content: center; position: relative; box-shadow: inset 0 0 20px rgba(0,0,0,0.8); cursor: pointer;">
+             <img class="cctv-preview-img" data-camera-id="${cam.id}" src="/api/cctv/snapshot/${cam.id}?t=${Date.now()}" style="width: 100%; height: 100%; object-fit: cover;" alt="Live Snapshot" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
              <div style="display: none; flex-direction: column; align-items: center; gap: 8px; color: var(--text-tertiary); font-size: 0.75rem;">
                <i data-lucide="video-off" style="width: 24px; height: 24px;"></i>
                <span>Preview stream offline</span>
@@ -6550,7 +6979,7 @@ async function loadCctvCameras() {
              <!-- Bottom HUD Timestamp -->
              <div style="position: absolute; bottom: 8px; left: 8px; right: 8px; display: flex; justify-content: space-between; align-items: center; pointer-events: none; text-shadow: 1px 1px 2px #000; font-family: 'Courier New', monospace; font-size: 0.65rem; color: rgba(255, 255, 255, 0.85); z-index: 5;">
                <div style="background: rgba(0, 0, 0, 0.4); padding: 2px 6px; border-radius: 4px;">${cam.name.toUpperCase()}</div>
-               <div style="background: rgba(0, 0, 0, 0.4); padding: 2px 6px; border-radius: 4px;">${timeString}</div>
+               <div class="cctv-hud-timestamp" style="background: rgba(0, 0, 0, 0.4); padding: 2px 6px; border-radius: 4px;">${timeString}</div>
              </div>
              <!-- Scanline Screen Effect overlay -->
              <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%); background-size: 100% 4px; pointer-events: none; opacity: 0.35;"></div>
@@ -6679,19 +7108,34 @@ function closeCctvModal() {
 }
 
 async function handleCctvSubmit(event) {
-  event.preventDefault();
-  
-  const camera = {
-    id: document.getElementById('cctv-id').value || undefined,
-    name: document.getElementById('cctv-name').value,
-    source: document.getElementById('cctv-source').value,
-    siteId: document.getElementById('cctv-site').value,
-    eventType: document.getElementById('cctv-event-type').value,
-    status: document.getElementById('cctv-status').value,
-    invertDirection: document.getElementById('cctv-invert-direction').checked
-  };
-
   try {
+    event.preventDefault();
+    console.log("[CCTV Submit] Form submit event intercepted.");
+    
+    const idVal = document.getElementById('cctv-id')?.value || '';
+    const nameVal = document.getElementById('cctv-name')?.value || '';
+    const sourceVal = document.getElementById('cctv-source')?.value || '';
+    const siteVal = document.getElementById('cctv-site')?.value || '';
+    const eventTypeVal = document.getElementById('cctv-event-type')?.value || 'auto';
+    const statusVal = document.getElementById('cctv-status')?.value || 'active';
+    const invertVal = document.getElementById('cctv-invert-direction')?.checked || false;
+
+    if (!nameVal || !sourceVal) {
+      alert("Validation Error: Camera Name and Stream Source are required.");
+      return;
+    }
+
+    const camera = {
+      id: idVal || undefined,
+      name: nameVal,
+      source: sourceVal,
+      siteId: siteVal,
+      eventType: eventTypeVal,
+      status: statusVal,
+      invertDirection: invertVal
+    };
+
+    console.log("[CCTV Submit] Submitting camera payload to server:", camera);
     const resp = await fetch('/api/cctv', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -6699,6 +7143,7 @@ async function handleCctvSubmit(event) {
     });
     
     if (resp.ok) {
+      console.log("[CCTV Submit] Saved successfully!");
       closeCctvModal();
       loadCctvCameras();
     } else {
@@ -6706,7 +7151,8 @@ async function handleCctvSubmit(event) {
       alert(`Save failed: ${err.error || 'Server error'}`);
     }
   } catch (err) {
-    alert("Connection error: " + err.message);
+    console.error("[CCTV Submit] Error in form submission handler:", err);
+    alert("Connection/JavaScript error: " + err.message);
   }
 }
 
@@ -6776,6 +7222,15 @@ async function testCctvConnection() {
   }
 }
 
+// Explicit global exposure of cctv handlers
+window.openAddCctvModal = openAddCctvModal;
+window.openEditCctvModal = openEditCctvModal;
+window.quickFillCctv = quickFillCctv;
+window.closeCctvModal = closeCctvModal;
+window.handleCctvSubmit = handleCctvSubmit;
+window.deleteCctvCamera = deleteCctvCamera;
+window.testCctvConnection = testCctvConnection;
+
 function initEmployeeWageAutoCalculation() {
   const empMonthly = document.getElementById('emp-monthly');
   const empStdDays = document.getElementById('emp-std-days');
@@ -6800,7 +7255,36 @@ function initEmployeeWageAutoCalculation() {
     const shiftEnd = empShiftEnd.value;
     let workHours = 8; // Default fallback to 8 hours if shift times are missing
 
-    if (shiftStart && shiftEnd) {
+    const customToggle = document.getElementById('emp-custom-shifts-toggle');
+    const isCustomActive = customToggle && customToggle.checked;
+    
+    if (isCustomActive) {
+      const dayRows = Array.from(document.querySelectorAll('#emp-custom-shifts-panel .custom-shift-day-row'));
+      const checkedRows = dayRows.filter(row => row.querySelector('.day-enabled-chk')?.checked);
+      if (checkedRows.length > 0) {
+        // Prefer Monday-Friday overrides for default hourly wage calculation
+        let selectedRow = checkedRows.find(row => {
+          const d = row.getAttribute('data-day');
+          return d !== 'saturday' && d !== 'sunday';
+        });
+        if (!selectedRow) selectedRow = checkedRows[0];
+        
+        const cStart = selectedRow.querySelector('.day-shift-start')?.value;
+        const cEnd = selectedRow.querySelector('.day-shift-end')?.value;
+        if (cStart && cEnd) {
+          const [startH, startM] = cStart.split(':').map(Number);
+          const [endH, endM] = cEnd.split(':').map(Number);
+          let duration = 0;
+          if (endH >= startH) {
+            duration = (endH * 60 + endM) - (startH * 60 + startM);
+          } else {
+            duration = (24 * 60 - (startH * 60 + startM)) + (endH * 60 + endM);
+          }
+          const shiftHours = duration / 60;
+          workHours = Math.max(1, shiftHours >= 9.0 ? shiftHours - 1.0 : shiftHours);
+        }
+      }
+    } else if (shiftStart && shiftEnd) {
       const [startH, startM] = shiftStart.split(':').map(Number);
       const [endH, endM] = shiftEnd.split(':').map(Number);
       
@@ -6858,6 +7342,19 @@ function initEmployeeWageAutoCalculation() {
   empShiftEnd.addEventListener('change', calculateWages);
   empShiftStart.addEventListener('input', calculateWages);
   empShiftEnd.addEventListener('input', calculateWages);
+
+  // Bind custom shifts inputs
+  const customToggle = document.getElementById('emp-custom-shifts-toggle');
+  if (customToggle) {
+    customToggle.addEventListener('change', calculateWages);
+  }
+  document.querySelectorAll('#emp-custom-shifts-panel .day-enabled-chk').forEach(chk => {
+    chk.addEventListener('change', calculateWages);
+  });
+  document.querySelectorAll('#emp-custom-shifts-panel .day-shift-start, #emp-custom-shifts-panel .day-shift-end').forEach(input => {
+    input.addEventListener('input', calculateWages);
+    input.addEventListener('change', calculateWages);
+  });
 
   // Expose function globally so it can be triggered programmatically when opening/populating modal
   window.calculateWages = calculateWages;
@@ -6989,7 +7486,7 @@ async function loadWeldersFridaysDropdown() {
     select.innerHTML = '';
     
     if (!data.fridays || data.fridays.length === 0) {
-      select.innerHTML = '<option value="">No Fridays found</option>';
+      select.innerHTML = '<option value="">No report dates found</option>';
       document.getElementById('welders-attendance-table-body').innerHTML = '<tr><td colspan="11" style="text-align: center;">No weekly reports available</td></tr>';
       document.getElementById('welders-payroll-summary-table-body').innerHTML = '<tr><td colspan="7" style="text-align: center;">No weekly reports available</td></tr>';
       document.getElementById('welders-payroll-table-body').innerHTML = '<tr><td colspan="26" style="text-align: center;">No weekly reports available</td></tr>';
@@ -7005,7 +7502,7 @@ async function loadWeldersFridaysDropdown() {
     
     loadWeldersWeeklyReport();
   } catch (err) {
-    console.error("Failed to load Welders Fridays dropdown:", err);
+    console.error("Failed to load Welders report dropdown:", err);
   }
 }
 
@@ -7013,6 +7510,35 @@ async function loadWeldersWeeklyReport() {
   const select = document.getElementById('welders-friday-select');
   const friday = select.value;
   if (!friday) return;
+
+  // Dynamically update label and day headers depending on whether the selected date is a Saturday or Friday
+  try {
+    const reportDate = new Date(friday);
+    const isSat = reportDate.getUTCDay() === 6;
+    
+    // 1. Update filter label text dynamically
+    const filterGroup = select.closest('.filter-group');
+    if (filterGroup) {
+      const label = filterGroup.querySelector('label');
+      if (label) {
+        label.textContent = isSat ? 'Select Week (Saturday)' : 'Select Week (Friday)';
+      }
+    }
+    
+    // 2. Update Table Day Headers
+    const dayNames = isSat
+      ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+      : ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"];
+      
+    const headers = document.querySelectorAll('#welders-attendance-table thead th');
+    if (headers && headers.length >= 9) {
+      dayNames.forEach((day, idx) => {
+        headers[idx + 2].textContent = day;
+      });
+    }
+  } catch (e) {
+    console.warn("Failed to dynamically update week labels/headers:", e);
+  }
   
   const attBody = document.getElementById('welders-attendance-table-body');
   const paySummaryBody = document.getElementById('welders-payroll-summary-table-body');
@@ -7142,7 +7668,7 @@ function exportWeldersWeeklyExcel() {
   const select = document.getElementById('welders-friday-select');
   const friday = select.value;
   if (!friday) {
-    alert("Please select a week ending Friday first.");
+    alert("Please select a week ending date first.");
     return;
   }
   window.location.href = `/api/export/welders-weekly/excel?friday=${friday}`;
@@ -7773,6 +8299,10 @@ window.sendChatMessage = async function() {
   const msgs = document.getElementById('chatbot-messages');
   if (!msgs) return;
   
+  // Track chat history locally
+  window.chatbotHistory = window.chatbotHistory || [];
+  window.chatbotHistory.push({ role: 'user', text: text });
+  
   // Append user message
   const userMsg = document.createElement('div');
   userMsg.className = 'chat-message user';
@@ -7795,12 +8325,14 @@ window.sendChatMessage = async function() {
     const resp = await fetch('/api/ai/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: text })
+      body: JSON.stringify({ query: text, history: window.chatbotHistory.slice(-10) })
     }).then(r => r.json());
     
     if (resp && resp.success) {
       const steps = resp.steps || [];
       const finalResponse = resp.response || '';
+      // Save assistant response to history
+      window.chatbotHistory.push({ role: 'model', text: finalResponse });
       
       // Render steps sequentially to match high-fidelity UX in screenshot
       for (let i = 0; i < steps.length; i++) {
@@ -8026,6 +8558,77 @@ window.closeCctvEnlargeModal = function() {
     // Clear src to stop stream load immediately
     img.src = '';
   }
+};
+
+window.toggleCustomShiftsPanel = function() {
+  const toggle = document.getElementById('emp-custom-shifts-toggle');
+  const panel = document.getElementById('emp-custom-shifts-panel');
+  const stdWrapper = document.getElementById('emp-standard-shift-wrapper');
+  if (toggle) {
+    if (panel) panel.style.display = toggle.checked ? 'block' : 'none';
+    if (stdWrapper) stdWrapper.style.display = toggle.checked ? 'none' : 'block';
+  }
+};
+
+window.toggleDayInputs = function(chk) {
+  const row = chk.closest('.custom-shift-day-row');
+  if (!row) return;
+  const startInput = row.querySelector('.day-shift-start');
+  const endInput = row.querySelector('.day-shift-end');
+  
+  if (startInput && endInput) {
+    startInput.disabled = !chk.checked;
+    endInput.disabled = !chk.checked;
+    
+    if (chk.checked) {
+      // Auto pre-fill from another checked day or default to standard shift fields
+      if (!startInput.value || !endInput.value) {
+        let fallbackStart = "";
+        let fallbackEnd = "";
+        
+        // 1. Look for another checked custom day
+        document.querySelectorAll('#emp-custom-shifts-panel .custom-shift-day-row').forEach(otherRow => {
+          if (otherRow === row) return;
+          const otherChk = otherRow.querySelector('.day-enabled-chk');
+          if (otherChk && otherChk.checked) {
+            const otherStart = otherRow.querySelector('.day-shift-start')?.value;
+            const otherEnd = otherRow.querySelector('.day-shift-end')?.value;
+            if (otherStart && !fallbackStart) fallbackStart = otherStart;
+            if (otherEnd && !fallbackEnd) fallbackEnd = otherEnd;
+          }
+        });
+        
+        // 2. Fall back to standard modal timings at the top
+        if (!fallbackStart) fallbackStart = document.getElementById('emp-shift-start')?.value;
+        if (!fallbackEnd) fallbackEnd = document.getElementById('emp-shift-end')?.value;
+        
+        if (!startInput.value) startInput.value = fallbackStart || "";
+        if (!endInput.value) endInput.value = fallbackEnd || "";
+      }
+    } else {
+      startInput.value = "";
+      endInput.value = "";
+    }
+  }
+};
+
+window.propagateCustomShiftTime = function(inputEl) {
+  const row = inputEl.closest('.custom-shift-day-row');
+  if (!row) return;
+  const isStart = inputEl.classList.contains('day-shift-start');
+  const val = inputEl.value;
+  
+  // Find all other checked custom shift rows that have empty values, and fill them
+  document.querySelectorAll('#emp-custom-shifts-panel .custom-shift-day-row').forEach(otherRow => {
+    if (otherRow === row) return;
+    const chk = otherRow.querySelector('.day-enabled-chk');
+    if (chk && chk.checked) {
+      const targetInput = isStart ? otherRow.querySelector('.day-shift-start') : otherRow.querySelector('.day-shift-end');
+      if (targetInput && !targetInput.value) {
+        targetInput.value = val;
+      }
+    }
+  });
 };
 
 
