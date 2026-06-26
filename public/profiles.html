@@ -231,20 +231,79 @@
               </div>
             </div>
 
-            <div class="form-row">
-              <div class="form-group">
-                <label for="emp-shift-start">Shift Start Time</label>
-                <input type="time" id="emp-shift-start" class="form-control">
-                <span class="help-text">e.g. 08:00</span>
+            <div id="emp-standard-shift-wrapper">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="emp-shift-start">Shift Start Time</label>
+                  <input type="time" id="emp-shift-start" class="form-control">
+                  <span class="help-text">e.g. 08:00</span>
+                </div>
+                <div class="form-group">
+                  <label for="emp-shift-end">Shift End Time</label>
+                  <input type="time" id="emp-shift-end" class="form-control">
+                  <span class="help-text">e.g. 17:00</span>
+                </div>
               </div>
-              <div class="form-group">
-                <label for="emp-shift-end">Shift End Time</label>
-                <input type="time" id="emp-shift-end" class="form-control">
-                <span class="help-text">e.g. 17:00</span>
-              </div>
+
+              <div id="emp-shift-duration-info" style="font-size: 0.85rem; margin-top: -5px; margin-bottom: 15px; font-weight: 600; color: var(--color-primary);">Shift Duration: —</div>
             </div>
 
-            <div id="emp-shift-duration-info" style="font-size: 0.85rem; margin-top: -5px; margin-bottom: 15px; font-weight: 600; color: var(--color-primary);">Shift Duration: —</div>
+            <!-- Day-wise custom shifts collapsible section -->
+            <div class="form-group" style="margin-top: 10px; border-top: 1px dashed var(--glass-border); padding-top: 15px; margin-bottom: 10px;">
+              <label class="checkbox-container" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem; font-weight: 600;">
+                <input type="checkbox" id="emp-custom-shifts-toggle" style="accent-color: var(--color-primary); width: 16px; height: 16px;" onchange="toggleCustomShiftsPanel()">
+                <span>Enable custom day-specific shift timings</span>
+              </label>
+            </div>
+            
+            <div id="emp-custom-shifts-panel" style="display: none; background: rgba(0,0,0,0.15); border: 1px solid var(--glass-border); border-radius: var(--border-radius-sm); padding: 15px; margin-bottom: 15px;">
+              <h4 style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-primary); margin-top: 0; margin-bottom: 12px;">Day-Specific Timing Overrides</h4>
+              
+              <div style="display: flex; flex-direction: column; gap: 10px;">
+                <div class="custom-shift-day-row" data-day="monday" style="display: grid; grid-template-columns: 90px 30px 1fr 1fr; align-items: center; gap: 10px;">
+                  <span style="font-size: 0.82rem; font-weight: 600; text-transform: capitalize;">Monday</span>
+                  <input type="checkbox" class="day-enabled-chk" onchange="toggleDayInputs(this)" style="accent-color: var(--color-primary); width: 15px; height: 15px;">
+                  <input type="time" class="day-shift-start form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                  <input type="time" class="day-shift-end form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                </div>
+                <div class="custom-shift-day-row" data-day="tuesday" style="display: grid; grid-template-columns: 90px 30px 1fr 1fr; align-items: center; gap: 10px;">
+                  <span style="font-size: 0.82rem; font-weight: 600; text-transform: capitalize;">Tuesday</span>
+                  <input type="checkbox" class="day-enabled-chk" onchange="toggleDayInputs(this)" style="accent-color: var(--color-primary); width: 15px; height: 15px;">
+                  <input type="time" class="day-shift-start form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                  <input type="time" class="day-shift-end form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                </div>
+                <div class="custom-shift-day-row" data-day="wednesday" style="display: grid; grid-template-columns: 90px 30px 1fr 1fr; align-items: center; gap: 10px;">
+                  <span style="font-size: 0.82rem; font-weight: 600; text-transform: capitalize;">Wednesday</span>
+                  <input type="checkbox" class="day-enabled-chk" onchange="toggleDayInputs(this)" style="accent-color: var(--color-primary); width: 15px; height: 15px;">
+                  <input type="time" class="day-shift-start form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                  <input type="time" class="day-shift-end form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                </div>
+                <div class="custom-shift-day-row" data-day="thursday" style="display: grid; grid-template-columns: 90px 30px 1fr 1fr; align-items: center; gap: 10px;">
+                  <span style="font-size: 0.82rem; font-weight: 600; text-transform: capitalize;">Thursday</span>
+                  <input type="checkbox" class="day-enabled-chk" onchange="toggleDayInputs(this)" style="accent-color: var(--color-primary); width: 15px; height: 15px;">
+                  <input type="time" class="day-shift-start form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                  <input type="time" class="day-shift-end form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                </div>
+                <div class="custom-shift-day-row" data-day="friday" style="display: grid; grid-template-columns: 90px 30px 1fr 1fr; align-items: center; gap: 10px;">
+                  <span style="font-size: 0.82rem; font-weight: 600; text-transform: capitalize;">Friday</span>
+                  <input type="checkbox" class="day-enabled-chk" onchange="toggleDayInputs(this)" style="accent-color: var(--color-primary); width: 15px; height: 15px;">
+                  <input type="time" class="day-shift-start form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                  <input type="time" class="day-shift-end form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                </div>
+                <div class="custom-shift-day-row" data-day="saturday" style="display: grid; grid-template-columns: 90px 30px 1fr 1fr; align-items: center; gap: 10px;">
+                  <span style="font-size: 0.82rem; font-weight: 600; text-transform: capitalize;">Saturday</span>
+                  <input type="checkbox" class="day-enabled-chk" onchange="toggleDayInputs(this)" style="accent-color: var(--color-primary); width: 15px; height: 15px;">
+                  <input type="time" class="day-shift-start form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                  <input type="time" class="day-shift-end form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                </div>
+                <div class="custom-shift-day-row" data-day="sunday" style="display: grid; grid-template-columns: 90px 30px 1fr 1fr; align-items: center; gap: 10px;">
+                  <span style="font-size: 0.82rem; font-weight: 600; text-transform: capitalize;">Sunday</span>
+                  <input type="checkbox" class="day-enabled-chk" onchange="toggleDayInputs(this)" style="accent-color: var(--color-primary); width: 15px; height: 15px;">
+                  <input type="time" class="day-shift-start form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                  <input type="time" class="day-shift-end form-control" oninput="propagateCustomShiftTime(this)" style="height: 30px; padding: 2px 6px; font-size: 0.78rem;" disabled>
+                </div>
+              </div>
+            </div>
 
             <div class="form-row-3">
               <div class="form-group">
