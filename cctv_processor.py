@@ -92,7 +92,7 @@ def crossing_direction(l1, l2, t_prev, t_curr):
 # ==========================================================================
 
 class CCTVStreamProcessor(threading.Thread):
-    def __init__(self, camera_id, name, source, site_name, event_type, threshold=0.51, node_server="http://localhost:3000", invert_direction=False):
+    def __init__(self, camera_id, name, source, site_name, event_type, threshold=0.38, node_server="http://localhost:3000", invert_direction=False):
         super().__init__()
         self.camera_id = camera_id
         self.name = name
@@ -109,32 +109,30 @@ class CCTVStreamProcessor(threading.Thread):
         self.grab_thread = None
 
         # ── Producer-consumer inference pipeline ───────────────────────────────
-        # The inference thread puts results here; the tracking thread consumes them.
-        # maxsize=2 keeps latency low: if the tracker falls behind the detector
-        # drops the stale result rather than accumulating a growing backlog.
-        self._detection_queue = queue.Queue(maxsize=2)
+        # maxsize=6: larger buffer supports 5 people in frame (each detection batch is heavier)
+        # without dropping frames when the tracker briefly falls behind.
+        self._detection_queue = queue.Queue(maxsize=6)
         self._inference_thread = None
 
         # Shared frame ring-buffer: avoids copying the full frame into every track.
-        # Size=32 covers ~2 seconds at 15 FPS; old frames are overwritten automatically.
+        # Size=64 covers ~4 seconds at 15 FPS; supports 5 simultaneous tracks safely.
         self._frame_ring = []          # list of np.ndarray (no copy on insert)
         self._frame_ring_idx = 0       # next write position
-        self._frame_ring_size = 32
+        self._frame_ring_size = 64
         self._frame_ring_lock = threading.Lock()
 
-        # LRU identity cache: if a face's top-2 embedding scores haven't changed
-        # significantly between frames, reuse the last resolved identity and skip
-        # the full matrix multiply.  Capacity=10 covers typical simultaneous crowds.
+        # LRU identity cache: reuse last resolved identity and skip full matrix multiply.
+        # Capacity=20 covers full 30-person rush hour crowds.
         self._id_cache = OrderedDict()  # key: track_id → (best_emp_id, best_conf, votes)
-        self._id_cache_max = 10
+        self._id_cache_max = 20
 
         # Centroid tracker details (Multi-target face tracking)
         self.tracks = {}  # { track_id: { ... } }
         self.next_track_id = 0
-        self.max_disappeared_seconds = 3.5   # for RECOGNIZED tracks (occlusion tolerance)
-        self.max_disappeared_unknown = 2.0   # for UNRECOGNIZED / junk tracks (fast cleanup)
+        self.max_disappeared_seconds = 5.0   # for RECOGNIZED tracks (longer for group scenarios)
+        self.max_disappeared_unknown = 3.0   # for UNRECOGNIZED tracks (was 2.0)
         self.cooldowns = {}  # { "employee_id_eventtype": timestamp }
-        self.cooldown_seconds = 20
+        self.cooldown_seconds = 10  # Reduced from 20s to 10s for rapid group entries
         
         # Door opening/closing detection state
         self.door_baseline = None
@@ -205,28 +203,51 @@ class CCTVStreamProcessor(threading.Thread):
         self.grab_thread = threading.Thread(target=grab_loop, daemon=True)
         self.grab_thread.start()
 
-        # ── Model init (shared singleton) ─────────────────────────────────────
-        from face_recognition_service import initialize_model
-        model = initialize_model()
+        # ── Model init (dedicated per camera thread for lock-free parallel execution) ──
+        from face_recognition_service import FaceRecognitionModel
+        self.model = FaceRecognitionModel(model_name='buffalo_l')
+        self.model.warm_up()
+        
+        # Load initial embeddings
+        embeddings_file = os.path.join(os.path.dirname(__file__), 'data', 'employee_embeddings.json')
+        if os.path.exists(embeddings_file):
+            self.model.load_embeddings(embeddings_file)
+            try:
+                self.last_embeddings_mtime = os.path.getmtime(embeddings_file)
+            except Exception:
+                self.last_embeddings_mtime = 0
+        else:
+            self.last_embeddings_mtime = 0
 
         # ── Inference thread (producer) ───────────────────────────────────────
-        # Runs model.get_faces_fast() in its own thread so the tracking loop
+        # Runs model.detect_faces() in its own thread so the tracking loop
         # (consumer) is never blocked waiting for InsightFace.
         def inference_loop():
             frame_counter = 0
             while self.running:
                 try:
+                    # Dynamically reload embeddings if database is updated on disk
+                    if os.path.exists(embeddings_file):
+                        try:
+                            mtime = os.path.getmtime(embeddings_file)
+                            if getattr(self, "last_embeddings_mtime", 0) != mtime:
+                                logger.info(f"[{self.name}] Detected updated embeddings file on disk. Reloading...")
+                                self.model.load_embeddings(embeddings_file)
+                                self.last_embeddings_mtime = mtime
+                                self._emb_matrix_len = -1
+                        except Exception as reload_err:
+                            logger.error(f"[{self.name}] Failed to reload embeddings: {reload_err}")
+
                     frame = self.latest_frame
                     if frame is None or (time.time() - self.latest_frame_time > 5.0):
                         time.sleep(0.05)
                         continue
 
                     # Adaptive frame skip:
-                    #   0 active tracks  → process every 3rd frame  (save CPU when idle)
-                    #   1-2 active tracks → process every 2nd frame
-                    #   3+ active tracks  → process every frame      (max accuracy when busy)
+                    #   0 active tracks  → process every 2nd frame  (save CPU when idle)
+                    #   1+ active tracks → process every frame      (max accuracy when busy)
                     n_tracks = len(self.tracks)
-                    skip = 3 if n_tracks == 0 else (2 if n_tracks <= 2 else 1)
+                    skip = 2 if n_tracks == 0 else 1
                     frame_counter += 1
                     if frame_counter % skip != 0:
                         time.sleep(0.02)
@@ -242,66 +263,55 @@ class CCTVStreamProcessor(threading.Thread):
                         self._frame_ring_idx += 1
                         ring_ref_idx = idx  # tracker will use this index
 
-                    # Detect all faces via fast 320×320 detector
+                    # Detect all faces via fast detector
                     h, w = frame.shape[:2]
-                    raw_faces = model.get_faces_fast(frame)
+                    raw_faces, enhanced = self.model.detect_faces(frame)
+
+                    target_h = 540
+                    target_w = int(w * (target_h / h))
+                    scale_x = w / target_w
+                    scale_y = h / target_h
 
                     detections = []
                     for face in raw_faces:
                         bbox = face.bbox
                         x1, y1, x2, y2 = map(int, bbox)
-                        cx = int((x1 + x2) / 2)
-                        cy = int((y1 + y2) / 2)
-
-                        # ── Vectorised recognition (matmul across all employees) ──
-                        emp_id = None
-                        confidence = 0.0
-                        best_match = None
-                        best_score = 0.0
-                        if face.embedding is not None and model.embeddings_db:
-                            embedding = face.embedding / np.linalg.norm(face.embedding)
-
-                            # Rebuild embedding matrix cache only when DB changes
-                            db_len = len(model.embeddings_db)
-                            if getattr(self, "_emb_matrix_len", -1) != db_len:
-                                emb_ids = list(model.embeddings_db.keys())
-                                emb_mat = np.array(list(model.embeddings_db.values()), dtype=np.float32)
-                                self._emb_ids = emb_ids
-                                self._emb_mat = emb_mat
-                                self._emb_matrix_len = db_len
-
-                            scores = self._emb_mat @ embedding
-                            best_idx = int(np.argmax(scores))
-                            best_score = float(scores[best_idx])
-                            best_match = self._emb_ids[best_idx]
-
-                            if best_score >= self.threshold:
-                                emp_id = best_match
-                                confidence = best_score
-                                logger.info(f"[{self.name}] Face recognized: {emp_id} (score: {best_score:.3f})")
-                            else:
-                                logger.info(f"[{self.name}] Face unrecognized: best match {best_match} (score: {best_score:.3f}, threshold: {self.threshold})")
+                        
+                        # Scale coordinates back to original size for tracking
+                        x1_scaled = int(x1 * scale_x)
+                        y1_scaled = int(y1 * scale_y)
+                        x2_scaled = int(x2 * scale_x)
+                        y2_scaled = int(y2 * scale_y)
+                        cx_scaled = int((x1_scaled + x2_scaled) / 2)
+                        cy_scaled = int((y1_scaled + y2_scaled) / 2)
+                        bbox_scaled = np.array([x1_scaled, y1_scaled, x2_scaled, y2_scaled], dtype=np.float32)
 
                         # ── Liveness (Laplacian variance) ────────────────────────
+                        # Top-angle cameras (Gate 1, Gate 3) see slightly blurry faces
+                        # from above; lower the threshold to 80 for top-down angles.
                         liveness = False
-                        if x2 > x1 and y2 > y1:
-                            face_crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+                        is_topdown = any(n in self.name.lower() for n in ['gate 1', 'gate 3'])
+                        liveness_thresh = 80.0 if is_topdown else 150.0
+                        if x2_scaled > x1_scaled and y2_scaled > y1_scaled:
+                            face_crop = frame[max(0, y1_scaled):min(h, y2_scaled), max(0, x1_scaled):min(w, x2_scaled)]
                             if face_crop.size > 0:
                                 gray_crop = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
                                 lap_var = cv2.Laplacian(gray_crop, cv2.CV_64F).var()
-                                if lap_var > 200.0:
+                                if lap_var > liveness_thresh:
                                     liveness = True
 
                         detections.append({
-                            "bbox": bbox,
-                            "centroid": (cx, cy),
-                            "emp_id": emp_id,
-                            "confidence": confidence,
-                            "best_match": best_match,
-                            "best_score": best_score,
+                            "bbox": bbox_scaled,
+                            "centroid": (cx_scaled, cy_scaled),
+                            "emp_id": None,
+                            "confidence": 0.0,
+                            "best_match": None,
+                            "best_score": 0.0,
                             "liveness": liveness,
                             "roi_ignored": False,
                             "ring_idx": ring_ref_idx,
+                            "face_obj": face,
+                            "enhanced_frame": enhanced,
                         })
 
                     # Push to queue (non-blocking: drop if tracker hasn't consumed yet)
@@ -317,7 +327,7 @@ class CCTVStreamProcessor(threading.Thread):
 
         self._inference_thread = threading.Thread(target=inference_loop, daemon=True, name=f"infer-{self.camera_id}")
         self._inference_thread.start()
-        logger.info(f"[{self.name}] Inference thread started (fast 320×320 detector + adaptive frame skip)")
+        logger.info(f"[{self.name}] Inference thread started (fast detection-only + adaptive frame skip)")
 
         # ── Tracking thread (consumer / main loop) ────────────────────────────
         while self.running:
@@ -404,7 +414,7 @@ class CCTVStreamProcessor(threading.Thread):
         # Hungarian Algorithm: Optimal 1-to-1 assignment
         # Builds a cost matrix and finds the globally optimal match so each detection
         # gets at most 1 track and each track gets at most 1 detection.
-        MATCH_THRESHOLD = 120.0  # baseline pixels
+        MATCH_THRESHOLD = 75.0  # reduced from 160 to prevent track hijacking by close-by targets
 
         if len(detections) > 0 and len(track_ids) > 0:
             # Scale match threshold to face size: larger faces (closer to camera) move
@@ -416,7 +426,8 @@ class CCTVStreamProcessor(threading.Thread):
                     diag = ((bb[2] - bb[0]) ** 2 + (bb[3] - bb[1]) ** 2) ** 0.5
                     diags.append(diag)
                 avg_diag = float(np.mean(diags))
-                MATCH_THRESHOLD = max(120.0, avg_diag * 0.45)
+                # 0.55 factor (was 0.45) gives more slack for fast-walkers in groups
+                MATCH_THRESHOLD = max(75.0, avg_diag * 0.55)
 
             cost_matrix = np.zeros((len(detections), len(track_ids)), dtype=np.float32)
             for d_idx, det in enumerate(detections):
@@ -425,10 +436,7 @@ class CCTVStreamProcessor(threading.Thread):
                 for t_idx, tc in enumerate(track_centroids):
                     tid = track_ids[t_idx]
                     track_emp = self.tracks[tid].get("best_emp_id")
-                    if det_emp and track_emp and det_emp != track_emp:
-                        cost_matrix[d_idx, t_idx] = 999999.0
-                    else:
-                        cost_matrix[d_idx, t_idx] = np.linalg.norm(dc - np.array(tc, dtype=np.float32))
+                    cost_matrix[d_idx, t_idx] = np.linalg.norm(dc - np.array(tc, dtype=np.float32))
 
             if _HAS_SCIPY:
                 # Optimal assignment via Hungarian algorithm
@@ -445,16 +453,21 @@ class CCTVStreamProcessor(threading.Thread):
                         used_tracks.add(best_t)
 
             for d_idx, t_idx in assignments:
-                if cost_matrix[d_idx, t_idx] < MATCH_THRESHOLD:
-                    tid = track_ids[t_idx]
+                tid = track_ids[t_idx]
+                dt = now - self.tracks[tid]["last_seen_time"]
+                # Dynamically expand search radius based on time gap to prevent tracker fragmentation during detection drops
+                # Cap dt at 1.5 seconds to prevent track ID switching / merging across different targets
+                dt_capped = min(dt, 1.5)
+                track_threshold = MATCH_THRESHOLD + 120.0 * dt_capped
+                if cost_matrix[d_idx, t_idx] < track_threshold:
                     self.update_track(tid, detections[d_idx], now, frame)
                     matched_detections.add(d_idx)
                     matched_tracks.add(tid)
 
         # ── Register every unmatched detection as a new independent track ──────
-        # Guard: limit max concurrent tracks to 12 (enough for 5 simultaneous people
-        # plus background noise, while protecting against memory exhaustion)
-        MAX_CONCURRENT_TRACKS = 12
+        # MAX_CONCURRENT_TRACKS=30 supports 5 people per camera across 6 cameras
+        # simultaneously, plus some slack for background noise tracks.
+        MAX_CONCURRENT_TRACKS = 30
         for det_idx, det in enumerate(detections):
             if det_idx not in matched_detections:
                 if det.get("roi_ignored", False):
@@ -509,13 +522,50 @@ class CCTVStreamProcessor(threading.Thread):
         track_min_x = det["centroid"][0]
         track_max_x = det["centroid"][0]
         
+        # Run selective recognition on the new track
+        best_match = None
+        best_score = 0.0
+        face_obj = det.get("face_obj")
+        
+        w_box = bbox[2] - bbox[0]
+        h_box = bbox[3] - bbox[1]
+        
+        logger.info(f"[{self.name}] [Register Track] Attempting track {tid} registration. bbox size: {w_box}x{h_box}, face_obj exists: {face_obj is not None}")
+        
+        if face_obj is not None and w_box >= 40 and h_box >= 40:
+            face_obj = self.model.extract_embedding_for_face(det["enhanced_frame"], face_obj)
+            if face_obj.embedding is not None and self.model.embeddings_db:
+                embedding = face_obj.embedding / np.linalg.norm(face_obj.embedding)
+                
+                # Rebuild embedding matrix cache only when DB changes
+                db_len = len(self.model.embeddings_db)
+                if getattr(self, "_emb_matrix_len", -1) != db_len:
+                    self._emb_ids = list(self.model.embeddings_db.keys())
+                    self._emb_mat = np.array(list(self.model.embeddings_db.values()), dtype=np.float32)
+                    self._emb_matrix_len = db_len
+                    
+                scores = self._emb_mat @ embedding
+                best_idx = int(np.argmax(scores))
+                best_score = float(scores[best_idx])
+                best_match = self._emb_ids[best_idx]
+                logger.info(f"[{self.name}] [Register Track] Track {tid} recognition outcome: best_match={best_match}, score={best_score:.3f} (thresh={self.threshold})")
+            else:
+                logger.warning(f"[{self.name}] [Register Track] Track {tid} embedding extraction failed or DB is empty.")
+        
         face_matches = {}
         emp_confidences = {}
-        best_match = det.get("best_match")
-        best_score = det.get("best_score", 0.0)
-        if best_match and best_score >= 0.46:
+        if best_match and best_score >= self.threshold:
             face_matches[best_match] = 1
             emp_confidences[best_match] = best_score
+            det["emp_id"] = best_match
+            det["confidence"] = best_score
+            det["best_match"] = best_match
+            det["best_score"] = best_score
+        else:
+            det["emp_id"] = None
+            det["confidence"] = 0.0
+            det["best_match"] = None
+            det["best_score"] = 0.0
 
         # Store only a lightweight reference index into the shared ring buffer
         # instead of copying the full frame into each track dictionary.
@@ -546,8 +596,8 @@ class CCTVStreamProcessor(threading.Thread):
             "best_frame": frame,
             "best_ring_ref": ring_ref,
             "best_bbox": det["bbox"],
-            "best_emp_id": best_match if best_score >= 0.46 else None,
-            "best_confidence": best_score if best_score >= 0.46 else 0.0,
+            "best_emp_id": best_match if best_score >= self.threshold else None,
+            "best_confidence": best_score if best_score >= self.threshold else 0.0,
             "confirmed": False,
             "face_matches": face_matches,
             "emp_confidences": emp_confidences,
@@ -560,6 +610,7 @@ class CCTVStreamProcessor(threading.Thread):
             
             # Video frames buffer (lightweight ring references instead of copies)
             "frames_buffer": [],
+            "rec_attempts": 1 if (face_obj is not None and w_box >= 40 and h_box >= 40) else 0,
         }
         logger.debug(f"[{self.name}] Registered new face track {tid}")
 
@@ -576,6 +627,13 @@ class CCTVStreamProcessor(threading.Thread):
         # Lets you calibrate the virtual line to the real door position without code changes.
         if hasattr(self, '_y_line_percent') and self._y_line_percent is not None:
             return int(h * self._y_line_percent)
+        is_gate1_entry = self.name.lower() == 'gate 1 entry'
+        is_gate1_exit = self.name.lower() == 'gate 1 exit'
+        is_gate3_entry = self.name.lower() == 'gate 3 entry'
+        is_gate3_exit = self.name.lower() == 'gate 3 exit'
+        if is_gate1_entry or is_gate1_exit or is_gate3_entry or is_gate3_exit:
+            return False
+
         is_entry_cam = 'entrance' in self.name.lower() or 'entry' in self.name.lower() or self.event_type == 'entry'
         if is_entry_cam:
             return int(h * 0.65)
@@ -646,29 +704,81 @@ class CCTVStreamProcessor(threading.Thread):
             return
 
         h, w = frame.shape[:2] if frame is not None else (720, 1280)
+        is_gate1_entry = self.name.lower() == 'gate 1 entry'
+        is_gate1_exit = self.name.lower() == 'gate 1 exit'
+        is_gate3_entry = self.name.lower() == 'gate 3 entry'
         is_entry_cam = 'entrance' in self.name.lower() or 'entry' in self.name.lower() or self.event_type == 'entry'
         is_exit_cam = 'exit' in self.name.lower() or self.event_type == 'exit'
+
+        # Gate 1 Entry / Gate 3 Entry custom trajectory fallbacks
+        if is_gate1_entry or is_gate3_entry:
+            best_emp = track.get("best_emp_id")
+            y_start = track.get("y_start_original", track["centroids"][0][1])
+            y_end = track["centroids"][-1][1]
+            x_end = track["centroids"][-1][0]
+            x_start = track["centroids"][0][0]
+            net_displacement = y_end - y_start  # Entry is downward (y increases)
+            
+            if best_emp and net_displacement >= 20:
+                if is_gate1_entry:
+                    x_left = int(w * 0.35)
+                    x_right = int(w * 0.58)
+                    door_y_limit = int(h * 0.44)
+                    
+                    started_in_col = (x_left - 15 <= x_start <= x_right + 15)
+                    started_above = (y_start <= door_y_limit + 50)
+                    in_door_zone = started_in_col and started_above and (x_left - 60 <= x_end <= x_right + 60)
+                else:  # is_gate3_entry
+                    x_left = int(w * 0.39)
+                    x_right = int(w * 0.87)
+                    in_door_zone = (x_left - 60 <= x_end <= x_right + 60)
+                    
+                if in_door_zone:
+                    track["crossed"] = True
+                    track["crossing_direction"] = "entry"
+                    logger.info(f"[{self.name}] [Fallback Path] Confirmed motion via trajectory fallback: entry (y_start={y_start:.0f} -> y_end={y_end:.0f})")
+            return
 
         if track["frames_active"] < 4:  # Relax from 5 to 4 frames to capture quick crossings
             return
 
-        y_line = self.get_y_line(h)
-
-        if is_entry_cam:
+        # Gate 1 Exit uses its own crossing line and x bounds (different from other exit cameras)
+        if is_gate1_exit:
+            y_line = int(h * 0.55)
+            x_left = int(w * 0.18)
+            x_right = int(w * 0.38)
+            
+            x_start = track["centroids"][0][0]
+            # Enforce that the track started inside the actual door width (with 10px padding)
+            # to exclude people standing or hanging out near the side windows.
+            if not (x_left - 10 <= x_start <= x_right + 10):
+                return
+        elif is_entry_cam:
+            y_line = self.get_y_line(h)
             x_left = int(w * 0.35)
             x_right = int(w * 0.70)
         elif is_exit_cam:
+            y_line = self.get_y_line(h)
             x_left = int(w * 0.32)
             x_right = int(w * 0.55)
         else:
+            return
+
+        if not y_line:
             return
 
         y_start = track.get("y_start_original", track["centroids"][0][1])
         y_end = track["centroids"][-1][1]
         x_end = track["centroids"][-1][0]
 
-        in_door_zone = x_left - 50 <= x_end <= x_right + 50
+        in_door_zone = x_left - 40 <= x_end <= x_right + 40
         net_displacement = abs(y_end - y_start)
+        
+        # If the track is verified to belong to a registered employee, we can be slightly more relaxed 
+        # on the door zone bounds check (using 60px padding) to prevent missing diagonal walks while avoiding office workers.
+        best_emp = track.get("best_emp_id")
+        if best_emp:
+            in_door_zone = x_left - 60 <= x_end <= x_right + 60
 
         crossed = False
         crossing_point = (int(x_end), y_line)
@@ -683,9 +793,8 @@ class CCTVStreamProcessor(threading.Thread):
             crossed = True
             logger.info(f"[{self.name}] [Fallback Path] Confirmed motion: {crossing_dir} (y_start={y_start:.0f} -> y_end={y_end:.0f}, y_line={y_line})")
         else:
-            best_emp = track.get("best_emp_id")
             if best_emp:
-                logger.info(f"[{self.name}] [Fallback Path] Skipped recognized emp {best_emp}: in_door_zone={in_door_zone} (x_end={x_end:.0f}, bounds=[{x_left-50}, {x_right+50}]), net_displacement={net_displacement:.0f} (y_start={y_start:.0f} -> y_end={y_end:.0f})")
+                logger.info(f"[{self.name}] [Fallback Path] Skipped recognized emp {best_emp}: in_door_zone={in_door_zone} (x_end={x_end:.0f}, bounds=[{x_left-150}, {x_right+150}]), net_displacement={net_displacement:.0f} (y_start={y_start:.0f} -> y_end={y_end:.0f})")
             else:
                 logger.debug(f"[{self.name}] [Fallback Path] Skipped: in_door_zone={in_door_zone}, net_displacement={net_displacement:.0f}")
 
@@ -716,17 +825,102 @@ class CCTVStreamProcessor(threading.Thread):
             track["best_ring_ref"] = det.get("ring_idx")
             track["best_bbox"] = det["bbox"]
 
+        # Run selective recognition on the active track
+        best_match = None
+        best_score = 0.0
+        face_obj = det.get("face_obj")
+        
+        if face_obj is not None:
+            track["rec_attempts"] = track.get("rec_attempts", 0)
+            votes_count = sum(track.get("face_matches", {}).values())
+            
+            w_box = x2 - x1
+            h_box = y2 - y1
+            
+            if votes_count < 5 and track["rec_attempts"] < 8 and w_box >= 40 and h_box >= 40:
+                track["rec_attempts"] += 1
+                logger.info(f"[{self.name}] [Update Track] Track {tid} (frame {track['frames_active']}): Running recognition attempt {track['rec_attempts']}. bbox size: {w_box}x{h_box}")
+                face_obj = self.model.extract_embedding_for_face(det["enhanced_frame"], face_obj)
+                
+                if face_obj.embedding is not None and self.model.embeddings_db:
+                    embedding = face_obj.embedding / np.linalg.norm(face_obj.embedding)
+                    
+                    # Rebuild embedding matrix cache only when DB changes
+                    db_len = len(self.model.embeddings_db)
+                    if getattr(self, "_emb_matrix_len", -1) != db_len:
+                        self._emb_ids = list(self.model.embeddings_db.keys())
+                        self._emb_mat = np.array(list(self.model.embeddings_db.values()), dtype=np.float32)
+                        self._emb_matrix_len = db_len
+                        
+                    scores = self._emb_mat @ embedding
+                    best_idx = int(np.argmax(scores))
+                    best_score = float(scores[best_idx])
+                    best_match = self._emb_ids[best_idx]
+                    logger.info(f"[{self.name}] [Update Track] Track {tid} recognition outcome: best_match={best_match}, score={best_score:.3f} (thresh={self.threshold})")
+                    
+                    det["best_match"] = best_match
+                    det["best_score"] = best_score
+                    if best_score >= self.threshold:
+                        det["emp_id"] = best_match
+                        det["confidence"] = best_score
+                    else:
+                        det["emp_id"] = None
+                        det["confidence"] = 0.0
+                else:
+                    det["best_match"] = None
+                    det["best_score"] = 0.0
+                    det["emp_id"] = None
+                    det["confidence"] = 0.0
+            else:
+                det["best_match"] = None
+                det["best_score"] = 0.0
+                det["emp_id"] = None
+                det["confidence"] = 0.0
+        else:
+            det["best_match"] = None
+            det["best_score"] = 0.0
+            det["emp_id"] = None
+            det["confidence"] = 0.0
+
         # Update face matches frequency mapping for majority voting identity resolution
-        best_match = det.get("best_match")
-        best_score = det.get("best_score", 0.0)
-        if best_match and best_score >= 0.46:
+        best_match_resolved = det.get("best_match")
+        best_score_resolved = det.get("best_score", 0.0)
+        if best_match_resolved and best_score_resolved >= self.threshold:
+            current_best = track.get("best_emp_id")
+            if current_best and best_match_resolved != current_best:
+                # Target switch detected! Split track to log the first person and switch to the new identity
+                logger.info(f"[{self.name}] Target switch detected in track {tid}: {current_best} -> {best_match_resolved}")
+                
+                # 1. If the previous person has already crossed, confirm their attendance immediately!
+                if track.get("crossed") and not track.get("confirmed"):
+                    track["confirmed"] = True
+                    crossing_dir_val = track.get("crossing_direction")
+                    curr_y_val = track["centroids"][-1][1]
+                    logger.info(f"[{self.name}] [Path Track] Confirming expired/switched track {tid} for {current_best} (direction: {crossing_dir_val}, final position: {curr_y_val})")
+                    self.confirm_attendance_event(tid, track.get("best_frame", frame))
+                
+                # 2. Reset the track history and parameters for the new person
+                track["face_matches"] = {}
+                track["emp_confidences"] = {}
+                track["best_emp_id"] = None
+                track["best_confidence"] = 0.0
+                track["rec_attempts"] = 0 # Reset attempts so it will run 8 new attempts for the new person
+                track["centroids"] = [curr_centroid] # Keep only the current centroid
+                track["bboxes"] = [det["bbox"]] # Keep only the current bbox
+                track["track_min_y"] = curr_centroid[1]
+                track["track_max_y"] = curr_centroid[1]
+                track["track_min_x"] = curr_centroid[0]
+                track["track_max_x"] = curr_centroid[0]
+                track["crossed"] = False
+                track["confirmed"] = False
+
             if "face_matches" not in track:
                 track["face_matches"] = {}
             if "emp_confidences" not in track:
                 track["emp_confidences"] = {}
                 
-            track["face_matches"][best_match] = track["face_matches"].get(best_match, 0) + 1
-            track["emp_confidences"][best_match] = max(track["emp_confidences"].get(best_match, 0.0), best_score)
+            track["face_matches"][best_match_resolved] = track["face_matches"].get(best_match_resolved, 0) + 1
+            track["emp_confidences"][best_match_resolved] = max(track["emp_confidences"].get(best_match_resolved, 0.0), best_score_resolved)
             
             # Resolve best matched employee ID by majority vote (tie-breaker: highest confidence)
             best_emp = None
@@ -759,7 +953,9 @@ class CCTVStreamProcessor(threading.Thread):
             if std_x > 0.4 or std_y > 0.4:
                 track["motion_verified"] = True
 
-        if len(track["centroids"]) > 15:
+        # Keep up to 25 centroids (was 15): longer history is critical for
+        # slow-moving group members who take many frames to cross the line.
+        if len(track["centroids"]) > 25:
             track["centroids"].pop(0)
             track["bboxes"].pop(0)
 
@@ -792,7 +988,113 @@ class CCTVStreamProcessor(threading.Thread):
             crossing_point = None
             crossing_dir = ""
 
-            if is_entry_cam or is_exit_cam:
+            is_gate1_entry = self.name.lower() == 'gate 1 entry'
+            is_gate1_exit = self.name.lower() == 'gate 1 exit'
+            is_gate3_entry = self.name.lower() == 'gate 3 entry'
+            is_gate3_exit = self.name.lower() == 'gate 3 exit'
+
+            if is_gate1_entry:
+                # Trajectory-based checking robust against diagonal paths and frame skips
+                door_y_limit = int(h * 0.44)
+                x_left = int(w * 0.35)
+                x_right = int(w * 0.58)
+
+                track_min_y = track.get("track_min_y", curr_y)
+                track_max_y = track.get("track_max_y", curr_y)
+                y_traj_start = track.get("y_start_original", track["centroids"][0][1])
+                x_traj_start = track["centroids"][0][0]
+
+                started_in_door_col = x_left - 15 <= x_traj_start <= x_right + 15
+
+                if track["frames_active"] >= 3:
+                    if is_entry_cam:
+                        # Entry: started near/above door, moved down into office (no final x restriction)
+                        if started_in_door_col and y_traj_start <= door_y_limit + 120 and curr_y > door_y_limit + 30 and (track_max_y > y_traj_start + 25):
+                            crossed = True
+                            crossing_dir = "entry"
+                            crossing_point = (int(curr_x), door_y_limit)
+                        # Exit: started deep inside office, moved up to door, ended in/near door col
+                        elif y_traj_start > door_y_limit + 100 and track_min_y <= door_y_limit + 80 and (x_left - 15 <= curr_x <= x_right + 15):
+                            crossed = True
+                            crossing_dir = "exit"
+                            crossing_point = (int(curr_x), door_y_limit)
+
+            elif is_gate1_exit:
+                # Gate 1 Exit: person walks through glass door from office side.
+                # EXIT: starts at/above door, walks down onto porch (can exit diagonally left/right or stop to wear shoes)
+                # ENTRY: starts below door, walks up into door column
+                crossing_line_y = int(h * 0.55)
+                x_door_left  = int(w * 0.18)
+                x_door_right = int(w * 0.38)
+
+                track_min_y = track.get("track_min_y", curr_y)
+                track_max_y = track.get("track_max_y", curr_y)
+                y_traj_start = track.get("y_start_original", track["centroids"][0][1])
+                x_traj_start = track["centroids"][0][0]
+
+                started_in_door_col = x_door_left - 10 <= x_traj_start <= x_door_right + 10
+
+                if track["frames_active"] >= 3:
+                    # Exit: started at/above door, moved down onto porch/stairs (no final x restriction)
+                    if started_in_door_col and y_traj_start <= crossing_line_y + 80 and curr_y >= crossing_line_y + 20 and (track_max_y > y_traj_start + 25):
+                        crossed = True
+                        crossing_dir = "exit"
+                        crossing_point = (int(curr_x), crossing_line_y)
+                    # Entry: started below door, moved up into door column
+                    elif y_traj_start > crossing_line_y + 50 and track_min_y <= crossing_line_y + 50 and (x_door_left - 10 <= curr_x <= x_door_right + 10):
+                        crossed = True
+                        crossing_dir = "entry"
+                        crossing_point = (int(curr_x), crossing_line_y)
+
+            elif is_gate3_entry:
+                # Gate 3 Entry sloped threshold crossing
+                x1, y1 = int(w * 0.39), int(h * 0.72)
+                x2, y2 = int(w * 0.87), int(h * 0.99)
+                
+                # Check if previous centroid was above the sloped line and current is below
+                def get_sloped_y(x):
+                    if x <= x1: return y1
+                    if x >= x2: return y2
+                    return y1 + (y2 - y1) * (x - x1) / (x2 - x1)
+                
+                prev_line_y = get_sloped_y(prev_x)
+                curr_line_y = get_sloped_y(curr_x)
+                
+                if x1 - 30 <= curr_x <= x2 + 30:
+                    if prev_y <= prev_line_y and curr_y > curr_line_y:
+                        crossed = True
+                        crossing_dir = "entry"
+                        crossing_point = (int(curr_x), int(curr_line_y))
+                    elif prev_y >= prev_line_y and curr_y < curr_line_y:
+                        crossed = True
+                        crossing_dir = "exit"
+                        crossing_point = (int(curr_x), int(curr_line_y))
+            elif is_gate3_exit:
+                # Gate 3 Exit sloped threshold crossing
+                x1, y1 = int(w * 0.24), int(h * 0.77)
+                x2, y2 = int(w * 0.58), int(h * 0.63)
+                
+                def get_sloped_y(x):
+                    if x <= x1: return y1
+                    if x >= x2: return y2
+                    return y1 + (y2 - y1) * (x - x1) / (x2 - x1)
+                
+                prev_line_y = get_sloped_y(prev_x)
+                curr_line_y = get_sloped_y(curr_x)
+                
+                y_start = track.get("y_start_original", track["centroids"][0][1])
+                x_start = track["centroids"][0][0]
+                line_y_start = get_sloped_y(x_start)
+                
+                started_inside_gate = (y_start <= line_y_start + 250) and (int(w * 0.20) - 30 <= x_start <= int(w * 0.58) + 30)
+                
+                if started_inside_gate:
+                    if prev_y <= prev_line_y and curr_y > curr_line_y:
+                        crossed = True
+                        crossing_dir = "exit"
+                        crossing_point = (int(curr_x), int(curr_line_y))
+            else:
+                # Gate 2 (original strict line-crossing)
                 if is_entry_cam:
                     y_line = self.get_y_line(h)
                     x_left = int(w * 0.35)
@@ -923,27 +1225,74 @@ class CCTVStreamProcessor(threading.Thread):
 
         is_entry_cam = 'entrance' in self.name.lower() or 'entry' in self.name.lower() or self.event_type == 'entry'
         is_exit_cam = 'exit' in self.name.lower() or self.event_type == 'exit'
+        is_gate1_entry = self.name.lower() == 'gate 1 entry'
+        is_gate1_exit = self.name.lower() == 'gate 1 exit'
+        is_gate3_entry = self.name.lower() == 'gate 3 entry'
+        is_gate3_exit = self.name.lower() == 'gate 3 exit'
 
-        if is_entry_cam:
-            y_line = self.get_y_line(h)
+        if is_gate1_entry:
+            y_door = int(h * 0.44)
             x_left = int(w * 0.35)
-            x_right = int(w * 0.70)
-            cv2.line(audit_frame, (0, y_line), (w, y_line), (0, 0, 255), 2)
-            cv2.line(audit_frame, (x_left, 0), (x_left, h), (0, 0, 255), 2)
-            cv2.line(audit_frame, (x_right, 0), (x_right, h), (0, 0, 255), 2)
-            cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (MID)", (10, y_line - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-            cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (LEFT)", (x_left + 5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
-            cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (RIGHT)", (x_right + 10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
-        elif is_exit_cam:
-            y_line = self.get_y_line(h)
-            x_left = int(w * 0.32)
-            x_right = int(w * 0.55)
-            cv2.line(audit_frame, (0, y_line), (w, y_line), (0, 0, 255), 2)
-            cv2.line(audit_frame, (x_left, 0), (x_left, h), (0, 0, 255), 2)
-            cv2.line(audit_frame, (x_right, 0), (x_right, h), (0, 0, 255), 2)
-            cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (MID)", (10, y_line - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-            cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (LEFT)", (x_left + 5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
-            cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (RIGHT)", (x_right + 10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            x_right = int(w * 0.58)
+            cv2.line(audit_frame, (x_left, y_door), (x_right, y_door), (0, 0, 255), 2)
+            cv2.line(audit_frame, (x_left, 0), (x_left, y_door), (0, 0, 255), 2)
+            cv2.line(audit_frame, (x_right, 0), (x_right, y_door), (0, 0, 255), 2)
+            mode_label = "ENTRY" if is_entry_cam else "EXIT"
+            cv2.putText(audit_frame, f"GLASS DOOR {mode_label} ZONE", (x_left + 10, y_door - 10), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2)
+        elif is_gate1_exit:
+            crossing_line_y = int(h * 0.55)
+            x_door_left  = int(w * 0.18)
+            x_door_right = int(w * 0.38)
+            cv2.line(audit_frame, (x_door_left, crossing_line_y), (x_door_right, crossing_line_y), (0, 255, 255), 2)
+            cv2.line(audit_frame, (x_door_left, 0), (x_door_left, crossing_line_y), (0, 255, 255), 1)
+            cv2.line(audit_frame, (x_door_right, 0), (x_door_right, crossing_line_y), (0, 255, 255), 1)
+            cv2.putText(audit_frame, "GATE 1 EXIT LINE", (x_door_left + 5, crossing_line_y - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 2)
+        elif is_gate3_entry:
+            x_left = int(w * 0.39)
+            x_right_top = int(w * 0.96)
+            x_right_mid = int(w * 0.87)
+            y_left_bottom = int(h * 0.72)
+            y_right_bottom = int(h * 0.99)
+            cv2.line(audit_frame, (x_left, 0), (x_left, y_left_bottom), (0, 0, 255), 2)
+            cv2.line(audit_frame, (x_right_top, 0), (x_right_mid, y_right_bottom), (0, 0, 255), 2)
+            cv2.line(audit_frame, (x_left, y_left_bottom), (x_right_mid, y_right_bottom), (0, 0, 255), 2)
+            cv2.putText(audit_frame, "GATE 3 ENTRY CORRIDOR", (x_left + 15, y_left_bottom - 15), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        elif is_gate3_exit:
+            x_left = int(w * 0.20)
+            x_left_bottom = int(w * 0.24)
+            x_right_top = int(w * 0.56)
+            x_right_bottom = int(w * 0.58)
+            y_left_bottom = int(h * 0.77)
+            y_right_bottom = int(h * 0.63)
+            cv2.line(audit_frame, (x_left, 0), (x_left_bottom, y_left_bottom), (0, 0, 255), 2)
+            cv2.line(audit_frame, (x_right_top, 0), (x_right_bottom, y_right_bottom), (0, 0, 255), 2)
+            cv2.line(audit_frame, (x_left_bottom, y_left_bottom), (x_right_bottom, y_right_bottom), (0, 0, 255), 2)
+            cv2.putText(audit_frame, "GATE 3 EXIT CORRIDOR", (x_left_bottom + 15, y_left_bottom - 15), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        else:
+            if is_entry_cam:
+                y_line = self.get_y_line(h)
+                x_left = int(w * 0.35)
+                x_right = int(w * 0.70)
+                cv2.line(audit_frame, (0, y_line), (w, y_line), (0, 0, 255), 2)
+                cv2.line(audit_frame, (x_left, 0), (x_left, h), (0, 0, 255), 2)
+                cv2.line(audit_frame, (x_right, 0), (x_right, h), (0, 0, 255), 2)
+                cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (MID)", (10, y_line - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (LEFT)", (x_left + 5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (RIGHT)", (x_right + 10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            elif is_exit_cam:
+                y_line = self.get_y_line(h)
+                x_left = int(w * 0.32)
+                x_right = int(w * 0.55)
+                cv2.line(audit_frame, (0, y_line), (w, y_line), (0, 0, 255), 2)
+                cv2.line(audit_frame, (x_left, 0), (x_left, h), (0, 0, 255), 2)
+                cv2.line(audit_frame, (x_right, 0), (x_right, h), (0, 0, 255), 2)
+                cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (MID)", (10, y_line - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (LEFT)", (x_left + 5, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                cv2.putText(audit_frame, "VIRTUAL ATTENDANCE LINE (RIGHT)", (x_right + 10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
         for i in range(1, len(track["centroids"])):
             c_prev = tuple(map(int, track["centroids"][i-1]))
@@ -961,16 +1310,24 @@ class CCTVStreamProcessor(threading.Thread):
             try:
                 out_dir = r"D:\Whatsapp Attendance Tracking\public\uploads\camera_videos"
                 os.makedirs(out_dir, exist_ok=True)
-                video_filename = f"video_{int(time.time() * 1000)}_{emp_id}.webm"
+                video_filename = f"video_{int(time.time() * 1000)}_{emp_id}.mp4"
                 video_path = os.path.join(out_dir, video_filename)
                 
                 h_f, w_f = frames_buffer[0].shape[:2]
-                fourcc = cv2.VideoWriter_fourcc(*'VP80')
+                # Try H.264 avc1 codec first (supported via openh264 DLL)
+                fourcc = cv2.VideoWriter_fourcc(*'avc1')
                 out = cv2.VideoWriter(video_path, fourcc, 15.0, (w_f, h_f))
+                
+                # Fallback 1: MPEG-4 Part 2
                 if not out.isOpened():
-                    video_filename = f"video_{int(time.time() * 1000)}_{emp_id}.mp4"
-                    video_path = os.path.join(out_dir, video_filename)
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    out = cv2.VideoWriter(video_path, fourcc, 15.0, (w_f, h_f))
+                
+                # Fallback 2: WebM VP8
+                if not out.isOpened():
+                    video_filename = f"video_{int(time.time() * 1000)}_{emp_id}.webm"
+                    video_path = os.path.join(out_dir, video_filename)
+                    fourcc = cv2.VideoWriter_fourcc(*'VP80')
                     out = cv2.VideoWriter(video_path, fourcc, 15.0, (w_f, h_f))
                 
                 if out.isOpened():
@@ -1181,7 +1538,7 @@ class CCTVStreamProcessor(threading.Thread):
         self.running = False
 
 
-def start_cctv_thread(camera_id, name, source, site_name, event_type, threshold=0.51, node_server="http://localhost:3000", invert_direction=False, y_line_percent=None):
+def start_cctv_thread(camera_id, name, source, site_name, event_type, threshold=0.38, node_server="http://localhost:3000", invert_direction=False, y_line_percent=None):
     with active_cameras_lock:
         if camera_id in active_cameras:
             existing = active_cameras[camera_id]
