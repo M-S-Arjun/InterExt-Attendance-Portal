@@ -237,6 +237,7 @@
                   <th>Timestamp</th>
                   <th>Image</th>
                   <th>Status</th>
+                  <th style="width: 80px;">Actions</th>
                 </tr>
               </thead>
               <tbody id="camera-events-table-body">
@@ -342,6 +343,36 @@
         <img id="cctv-enlarge-img" src="" style="width: 100%; height: 100%; object-fit: contain;" alt="Enlarged Live Stream">
         <!-- Overlay scanning lines -->
         <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%); background-size: 100% 4px; pointer-events: none; opacity: 0.25;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Camera Event Edit Modal -->
+  <div class="modal" id="camera-event-edit-modal">
+    <div class="modal-content glass-card" style="max-width: 450px;">
+      <div class="modal-header">
+        <h3>Correct Camera Identification</h3>
+        <button class="btn-close" onclick="closeCameraEventEditorModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="camera-event-edit-form" onsubmit="handleCameraEventEditSubmit(event)">
+          <input type="hidden" id="edit-event-id">
+          
+          <div class="form-group">
+            <label for="edit-event-emp-select">Select Correct Employee</label>
+            <select id="edit-event-emp-select" class="form-control" required>
+              <!-- Populated dynamically -->
+            </select>
+            <span style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px; display: block;">
+              Select the employee who actually passed through the camera to correct the records.
+            </span>
+          </div>
+          
+          <div class="modal-footer" style="padding-top: 12px; margin-top: 16px; border-top: 1px solid var(--glass-border); display: flex; justify-content: flex-end; gap: 8px;">
+            <button type="button" class="btn btn-secondary" onclick="closeCameraEventEditorModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Correction</button>
+          </div>
+        </form>
       </div>
     </div>
   </div>
