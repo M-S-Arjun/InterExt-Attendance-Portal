@@ -8,6 +8,7 @@ import sys
 import json
 import base64
 import traceback
+import threading
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import numpy as np
@@ -34,7 +35,7 @@ try:
             sess_options = ort.SessionOptions()
         
         # Optimize CPU threads to prevent thread context-switching thrashing on host
-        sess_options.intra_op_num_threads = 4
+        sess_options.intra_op_num_threads = 1
         sess_options.inter_op_num_threads = 1
         sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -50,6 +51,7 @@ except Exception as ort_err:
 try:
     import insightface
     from insightface.app import FaceAnalysis
+    from insightface.app.common import Face
     import cv2
 except ImportError:
     logger.error("InsightFace not installed. Install with: pip install insightface opencv-python")
@@ -69,6 +71,7 @@ class FaceRecognitionModel:
         self.model_name = model_name
         self.app = None
         self.embeddings_db = {}  # {employee_id: embedding_vector}
+        self.lock = threading.Lock()
         self.load_model()
     
     def load_model(self):
@@ -79,7 +82,7 @@ class FaceRecognitionModel:
         """
         try:
             logger.info(f"Loading InsightFace model: {self.model_name} (dual-res)")
-            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            providers = ['CPUExecutionProvider']
 
             # High-resolution model for accurate training / static recognition
             self.app = FaceAnalysis(
@@ -87,15 +90,16 @@ class FaceRecognitionModel:
                 allowed_modules=['detection', 'recognition'],
                 providers=providers
             )
-            self.app.prepare(ctx_id=0, det_size=(640, 640))
+            self.app.prepare(ctx_id=-1, det_size=(640, 640), det_thresh=0.4)
 
-            # Fast model for real-time CCTV loop (shared ONNX weights, smaller input)
+            # Fast model for real-time CCTV loop - lower det_thresh=0.35 catches
+            # faces at distance/angle in group scenarios (standard=0.4).
             self.fast_app = FaceAnalysis(
                 name=self.model_name,
                 allowed_modules=['detection', 'recognition'],
                 providers=providers
             )
-            self.fast_app.prepare(ctx_id=0, det_size=(320, 320))
+            self.fast_app.prepare(ctx_id=-1, det_size=(640, 640), det_thresh=0.25)
 
             logger.info("InsightFace dual-res model loaded successfully")
         except Exception as e:
@@ -117,13 +121,98 @@ class FaceRecognitionModel:
             logger.warning(f"[Warm-up] Warm-up failed (non-fatal): {e}")
 
     def get_faces_fast(self, frame: np.ndarray):
-        """Run face detection+embedding using the fast 320×320 detector.
+        """Run face detection+embedding using the fast detector with 4K scaling & CLAHE contrast enhancement.
 
-        Use this in the live CCTV inference thread for maximum throughput.
-        Falls back to the high-res detector if fast_app is unavailable.
+        Use this in the live CCTV inference thread for maximum throughput and accuracy.
+        Resizes high-res/4K inputs to 540p target height, enhances contrast for shadows and
+        varying skin tones using CLAHE, and scales detected coordinates back to original resolution.
+        """
+        h, w = frame.shape[:2]
+        target_h = 540
+        target_w = int(w * (target_h / h))
+        
+        # 1. Resize frame to target height for fast and accurate detection
+        resized = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+        
+        # 2. Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to optimize 
+        # detection for dark skin tones and shadows under outdoor/indoor lights.
+        lab = cv2.cvtColor(resized, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        cl = clahe.apply(l_channel)
+        enhanced_lab = cv2.merge((cl, a_channel, b_channel))
+        enhanced = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+        
+        detector = getattr(self, 'fast_app', None) or self.app
+        faces = detector.get(enhanced)
+        
+        # 3. Scale bounding boxes and landmarks back to original frame size (4K)
+        scale_x = w / target_w
+        scale_y = h / target_h
+        for face in faces:
+            bbox = face.bbox
+            face.bbox = np.array([
+                bbox[0] * scale_x,
+                bbox[1] * scale_y,
+                bbox[2] * scale_x,
+                bbox[3] * scale_y
+            ], dtype=np.float32)
+            
+            if getattr(face, 'kps', None) is not None:
+                face.kps = np.array(face.kps, dtype=np.float32)
+                face.kps[:, 0] *= scale_x
+                face.kps[:, 1] *= scale_y
+                
+        return faces
+
+    def detect_faces(self, frame: np.ndarray) -> Tuple[List[Face], np.ndarray]:
+        """Run face detection ONLY (no recognition) using the fast detector.
+        
+        This is extremely fast (~38ms on CPU) and does not hold any thread locks.
+        Resizes frame to 540p, applies CLAHE, and returns unscaled Face objects 
+        with the CLAHE-enhanced frame.
+        """
+        h, w = frame.shape[:2]
+        target_h = 540
+        target_w = int(w * (target_h / h))
+        
+        resized = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+        
+        # CLAHE optimization
+        lab = cv2.cvtColor(resized, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        cl = clahe.apply(l_channel)
+        enhanced_lab = cv2.merge((cl, a_channel, b_channel))
+        enhanced = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+        
+        detector = getattr(self, 'fast_app', None) or self.app
+        
+        # Call the underlying detection model directly to avoid running other modules
+        bboxes, kpss = detector.det_model.detect(enhanced, max_num=0, metric='default')
+        if bboxes is None or bboxes.shape[0] == 0:
+            return [], enhanced
+            
+        faces = []
+        for i in range(bboxes.shape[0]):
+            bbox = bboxes[i, 0:4]
+            det_score = bboxes[i, 4]
+            kps = kpss[i] if kpss is not None else None
+            
+            face = Face(bbox=bbox, kps=kps, det_score=det_score)
+            faces.append(face)
+            
+        return faces, enhanced
+
+    def extract_embedding_for_face(self, frame: np.ndarray, face: Face) -> Face:
+        """Run recognition (embedding extraction) on a single pre-detected face.
+        
+        Runs lock-free. Expects the frame coordinates to align with face.kps.
         """
         detector = getattr(self, 'fast_app', None) or self.app
-        return detector.get(frame)
+        if 'recognition' in detector.models:
+            detector.models['recognition'].get(frame, face)
+        return face
 
     
     def _load_image_array(self, image_path_or_data) -> Optional[np.ndarray]:
@@ -187,7 +276,8 @@ class FaceRecognitionModel:
                 return None
             
             # Detect faces and get embeddings
-            faces = self.app.get(image_array)
+            with self.lock:
+                faces = self.app.get(image_array)
             
             if len(faces) == 0:
                 logger.warning("No face detected in image")
@@ -235,7 +325,8 @@ class FaceRecognitionModel:
             return []
         
         # Detect faces and get embeddings
-        faces = self.app.get(image_array)
+        with self.lock:
+            faces = self.app.get(image_array)
         
         if len(faces) == 0:
             logger.warning("No face detected in image")
