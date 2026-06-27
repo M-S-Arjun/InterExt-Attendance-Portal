@@ -4,7 +4,7 @@
   "description": "WhatsApp Group Message Attendance and Payroll Tracker for On-Site Daily Wage Workers",
   "main": "main.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node supervisor.js",
     "dev": "node server.js",
     "app:run": "electron .",
     "app:package": "electron-packager . \"Antigravity Attendance System\" --platform=win32 --arch=x64 --out=dist --overwrite --ignore=\"/\\.wwebjs_auth\" --ignore=\"/\\.wwebjs_cache\" --ignore=\"/dist\" --ignore=\"/backups\""
