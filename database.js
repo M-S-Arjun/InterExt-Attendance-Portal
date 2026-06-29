@@ -863,6 +863,7 @@ class Database {
     camera.siteId = camera.siteId || '';
     camera.eventType = camera.eventType || 'auto'; // 'entry', 'exit', or 'auto'
     camera.status = camera.status !== undefined ? camera.status : 'inactive'; // 'active' or 'inactive'
+    camera.invertDirection = camera.invertDirection !== undefined ? !!camera.invertDirection : false;
     camera.updatedAt = new Date().toISOString();
 
     const existingIndex = db.cctvCameras.findIndex(c => c.id === camera.id);
@@ -899,7 +900,9 @@ class Database {
     // Auto-resolve source for any existing punches that lack one
     record.punches.forEach(p => {
       if (!p.source) {
-        if (p.messageText && (p.messageText.includes('CCTV') || p.messageText.includes('Camera') || p.messageText.includes('Face recognized') || p.messageText.includes('CCTV Face recognized'))) {
+        if (record.source === 'MANUAL' || record.source === 'Manual' || record.isManualOverride) {
+          p.source = record.source || 'MANUAL';
+        } else if (p.messageText && (p.messageText.includes('CCTV') || p.messageText.includes('Camera') || p.messageText.includes('Face recognized') || p.messageText.includes('CCTV Face recognized'))) {
           p.source = 'CCTV';
         } else if (p.messageText && (p.messageText.includes('Selfie') || p.messageText.includes('Geofence') || p.messageText.includes('selfie') || p.messageText.includes('Webcam Scan'))) {
           p.source = 'Selfie';
@@ -916,8 +919,8 @@ class Database {
       const exists = record.punches.some(p => p.time === record.checkIn && p.type === 'in');
       if (!exists) {
         let source = 'WhatsApp';
-        if (record.isManualOverride) {
-          source = 'Manual';
+        if (record.source === 'MANUAL' || record.source === 'Manual' || record.isManualOverride) {
+          source = record.source || 'MANUAL';
         } else if (record.verificationMethod === 'Face Recognition' || (record.messageText && (record.messageText.includes('CCTV') || record.messageText.includes('Camera') || record.messageText.includes('Face recognized')))) {
           if (record.siteName && record.siteName.includes('Webcam Scan')) {
             source = 'Selfie';
@@ -942,8 +945,8 @@ class Database {
       const exists = record.punches.some(p => p.time === record.checkOut && p.type === 'out');
       if (!exists) {
         let source = 'WhatsApp';
-        if (record.isManualOverride) {
-          source = 'Manual';
+        if (record.source === 'MANUAL' || record.source === 'Manual' || record.isManualOverride) {
+          source = record.source || 'MANUAL';
         } else if (record.verificationMethod === 'Face Recognition' || (record.messageText && (record.messageText.includes('CCTV') || record.messageText.includes('Camera') || record.messageText.includes('Face recognized')))) {
           if (record.siteName && record.siteName.includes('Webcam Scan')) {
             source = 'Selfie';
@@ -1004,7 +1007,7 @@ class Database {
       const existing = db.attendance[existingIndex];
       if (existing.id !== record.id) {
         // Skip merge if existing has manual override
-        if (existing.isManualOverride && !record.isManualOverride) {
+        if (existing.isManualOverride && !record.isManualOverride && record.source !== 'MANUAL' && record.source !== 'Manual') {
           console.log(`[Database] Skipping update/merge for employee ${record.employeeName} on ${record.date} because a manual override is active.`);
           return existing;
         }
@@ -1070,8 +1073,13 @@ class Database {
           if (ins.length > 0) {
             record.checkIn = ins[0].time;
           }
-          if (outs.length > 0) {
-            record.checkOut = outs[outs.length - 1].time;
+          if (record.punches.length > 0) {
+            const lastPunch = record.punches[record.punches.length - 1];
+            if (lastPunch.type === 'in') {
+              record.checkOut = null;
+            } else {
+              record.checkOut = lastPunch.time;
+            }
           } else {
             record.checkOut = null;
           }
@@ -1232,7 +1240,7 @@ class Database {
     // Insert or update
     const index = db.attendance.findIndex(a => a.id === record.id || (a.employeeId === record.employeeId && a.date === record.date));
     if (index >= 0) {
-      if (db.attendance[index].isManualOverride && !record.isManualOverride) {
+      if (db.attendance[index].isManualOverride && !record.isManualOverride && record.source !== 'MANUAL' && record.source !== 'Manual') {
         console.log(`[Database] Skipping update for employee ${record.employeeName} on ${record.date} because a manual override is active.`);
         return db.attendance[index];
       }
@@ -1509,6 +1517,42 @@ class Database {
         extractedTime: parsedData.extractedTime,
         extractedDate: targetDateStr
       });
+    } else if (parsedData.extractedAction === 'late') {
+      if (existingLogIndex >= 0) {
+        const existing = db.attendance[existingLogIndex];
+        existing.isLate = true;
+        if (parsedData.hospitalHours) {
+          existing.isHospitalCase = true;
+          existing.hospitalHours = parsedData.hospitalHours;
+        }
+        if (existing.messageText) {
+          const parts = existing.messageText.split(' | ').map(p => p.trim());
+          if (!parts.includes(rawText.trim())) {
+            existing.messageText = [...parts, rawText.trim()].join(' | ');
+          }
+        } else {
+          existing.messageText = rawText;
+        }
+        return this.saveAttendance(existing);
+      }
+      
+      const record = {
+        employeeId: employee.id,
+        employeeName: employee.name,
+        siteName: site.name,
+        date: targetDateStr,
+        checkIn: null,
+        checkOut: null,
+        messageText: rawText,
+        status: "late",
+        isLate: true,
+        isHospitalCase: !!parsedData.isHospitalCase,
+        hospitalHours: parsedData.hospitalHours || 0.0,
+        scannedCheckIn: false,
+        travelHours: parsedData.travelHours || 0.0,
+        punches: []
+      };
+      return this.saveAttendance(record);
     } else if (parsedData.extractedAction === 'in') {
       // Create new check-in
       const record = {
@@ -1683,8 +1727,8 @@ class Database {
     const settings = this.getSettings();
     const todayStr = getLocalDateString();
     
-    // Find all attendance records from previous days that are still "checked-in"
-    const pendingLogs = db.attendance.filter(log => log.date < todayStr && log.status === 'checked-in');
+    // Find all attendance records from previous days that are checked-in but not checked-out
+    const pendingLogs = db.attendance.filter(log => log.date < todayStr && log.checkIn && !log.checkOut);
     
     if (pendingLogs.length === 0) return 0;
     
@@ -1954,7 +1998,7 @@ class Database {
       
       // Count present days from logs (include late check-in days)
       const empLogs = attendanceLogs.filter(log => log.employeeId === emp.id);
-      const presentCount = empLogs.filter(log => log.status === 'completed' || log.status === 'checked-in' || log.status === 'late' || log.status === 'Late Check-in' || log.status === 'Early Check-out').length;
+      const presentCount = empLogs.filter(log => log.status === 'completed' || log.status === 'checked-in' || (log.status === 'late' && log.checkIn) || log.status === 'Late Check-in' || log.status === 'Early Check-out').length;
       
       // Calculate hospital case exemptions and standard late counts chronologically
       const sortedEmpLogs = [...empLogs].sort((a, b) => a.date.localeCompare(b.date));
@@ -2185,7 +2229,7 @@ class Database {
         
         if (log) {
           status = log.status.toUpperCase();
-          const isPresent = log.status === 'completed' || log.status === 'checked-in' || log.status === 'late' || log.status === 'Late Check-in' || log.status === 'Early Check-out' || log.status === 'half-day leave';
+          const isPresent = log.status === 'completed' || log.status === 'checked-in' || (log.status === 'late' && log.checkIn) || log.status === 'Late Check-in' || log.status === 'Early Check-out' || log.status === 'half-day leave';
           
           if (isPresent) {
             totalPresentDays += 1;

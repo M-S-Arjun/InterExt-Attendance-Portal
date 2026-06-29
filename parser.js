@@ -825,26 +825,7 @@ class AttendanceParser {
         const valStr = matchedLate[1];
         const lateHours = parseHoursVal(valStr);
         if (!isNaN(lateHours)) {
-          let shiftStart = (matchedEmployee && matchedEmployee.shiftStart) ? matchedEmployee.shiftStart : "09:00";
-          if (!shiftStart || !shiftStart.includes(':')) {
-            shiftStart = "09:00";
-          }
-          const [sh, sm] = shiftStart.split(':').map(Number);
-          let hours = sh + Math.floor(lateHours);
-          let minutes = sm + Math.round((lateHours % 1) * 60);
-          if (minutes >= 60) {
-            hours += 1;
-            minutes -= 60;
-          }
-          
-          const d = new Date();
-          if (dateStr) {
-            const parts = dateStr.split('-');
-            d.setFullYear(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-          }
-          d.setHours(hours, minutes, 0, 0);
-          checkInTimestamp = d.toISOString();
-          actionType = 'in';
+          actionType = 'late';
           hasParsedLate = true;
           if (isHospitalCase) {
             hospitalHours = lateHours;
@@ -854,26 +835,7 @@ class AttendanceParser {
         const valStr = lateMinMatch[1] || lateMinMatch[2];
         const lateMins = parseFloat(valStr);
         if (!isNaN(lateMins)) {
-          let shiftStart = (matchedEmployee && matchedEmployee.shiftStart) ? matchedEmployee.shiftStart : "09:00";
-          if (!shiftStart || !shiftStart.includes(':')) {
-            shiftStart = "09:00";
-          }
-          const [sh, sm] = shiftStart.split(':').map(Number);
-          let hours = sh;
-          let minutes = sm + lateMins;
-          while (minutes >= 60) {
-            hours += 1;
-            minutes -= 60;
-          }
-          
-          const d = new Date();
-          if (dateStr) {
-            const parts = dateStr.split('-');
-            d.setFullYear(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-          }
-          d.setHours(hours, minutes, 0, 0);
-          checkInTimestamp = d.toISOString();
-          actionType = 'in';
+          actionType = 'late';
           hasParsedLate = true;
           if (isHospitalCase) {
             hospitalHours = Number((lateMins / 60).toFixed(2));
@@ -881,19 +843,7 @@ class AttendanceParser {
         }
       } else if (cleanLine.match(/\blate\b/i)) {
         hasParsedLate = true;
-        actionType = 'in';
-        let shiftStart = (matchedEmployee && matchedEmployee.shiftStart) ? matchedEmployee.shiftStart : "09:00";
-        if (!shiftStart || !shiftStart.includes(':')) {
-          shiftStart = "09:00";
-        }
-        const [sh, sm] = shiftStart.split(':').map(Number);
-        const d = new Date();
-        if (dateStr) {
-          const parts = dateStr.split('-');
-          d.setFullYear(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-        }
-        d.setHours(sh + 1, sm, 0, 0);
-        checkInTimestamp = d.toISOString();
+        actionType = 'late';
         if (isHospitalCase) {
           hospitalHours = 1;
         }
@@ -1004,10 +954,10 @@ class AttendanceParser {
       leaveDate = dateStr;
     }
 
-    const isSuccess = !!(matchedEmployee && (actionType === 'leave' || actionType === 'half-day-leave' || actionType === 'out-for-lunch' || matchedSite || (extractedSite && extractedSite !== "—")));
+    const isSuccess = !!(matchedEmployee && (actionType === 'leave' || actionType === 'half-day-leave' || actionType === 'out-for-lunch' || actionType === 'late' || matchedSite || (extractedSite && extractedSite !== "—")));
     let reason = "";
     if (!matchedEmployee) reason = "Worker name unrecognized";
-    else if (actionType !== 'leave' && !matchedSite && (!extractedSite || extractedSite === "—")) reason = "Work site not specified/recognized";
+    else if (actionType !== 'leave' && actionType !== 'late' && !matchedSite && (!extractedSite || extractedSite === "—")) reason = "Work site not specified/recognized";
 
     return {
       isSuccess,
