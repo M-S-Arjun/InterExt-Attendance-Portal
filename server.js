@@ -271,6 +271,420 @@ app.get('/mobile', (req, res) => {
   res.sendFile(path.join(__dirname, 'mobile_dist', 'index.html'));
 });
 
+// --- Employee Mobile App Authentication & APIs ---
+
+// Active Employee Session Cache
+const activeEmployeeSessions = new Map();
+
+function requireEmployeeAuth(req, res, next) {
+  const cookies = parseCookies(req.headers.cookie);
+  const employeeToken = cookies['employee_token'];
+  if (employeeToken && activeEmployeeSessions.has(employeeToken)) {
+    req.employeeId = activeEmployeeSessions.get(employeeToken);
+    return next();
+  }
+  
+  // Custom header authorization fallback for native mobile requests
+  const authHeader = req.headers['authorization'];
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    if (activeEmployeeSessions.has(token)) {
+      req.employeeId = activeEmployeeSessions.get(token);
+      return next();
+    }
+  }
+
+  res.status(401).json({ error: "Unauthorized. Employee login required." });
+}
+
+// Employee Login Endpoint
+app.post('/api/employee/login', (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: "Employee ID and password are required." });
+    }
+    const db = database.read();
+    const employee = db.employees.find(e => e && e.userId === username);
+    if (!employee) {
+      return res.status(401).json({ error: "Invalid Employee ID or password." });
+    }
+    
+    let isValid = false;
+    if (!employee.password) {
+      isValid = (password === "1234");
+    } else {
+      isValid = bcrypt.compareSync(password, employee.password);
+    }
+    
+    if (!isValid) {
+      return res.status(401).json({ error: "Invalid Employee ID or password." });
+    }
+    
+    const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    activeEmployeeSessions.set(token, employee.id);
+    
+    res.cookie('employee_token', token, { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true });
+    res.json({
+      success: true,
+      token: token,
+      employee: {
+        id: employee.id,
+        userId: employee.userId,
+        name: employee.name,
+        designation: employee.designation || "Staff"
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Employee Change Password Endpoint
+app.post('/api/employee/change-password', requireEmployeeAuth, (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: "Old and new passwords are required." });
+    }
+    
+    const db = database.read();
+    const employee = db.employees.find(e => e && e.id === req.employeeId);
+    if (!employee) {
+      return res.status(404).json({ error: "Employee not found." });
+    }
+    
+    let isValid = false;
+    if (!employee.password) {
+      isValid = (oldPassword === "1234");
+    } else {
+      isValid = bcrypt.compareSync(oldPassword, employee.password);
+    }
+    
+    if (!isValid) {
+      return res.status(400).json({ error: "Incorrect current password." });
+    }
+    
+    employee.password = bcrypt.hashSync(newPassword, 10);
+    database.writeAtomic(db);
+    database.syncToExcelAsync();
+    
+    res.json({ success: true, message: "Password updated successfully." });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Employee Dashboard combined data Endpoint
+app.get('/api/employee/dashboard-data', requireEmployeeAuth, (req, res) => {
+  try {
+    const db = database.read();
+    const employee = db.employees.find(e => e && e.id === req.employeeId);
+    if (!employee) {
+      return res.status(404).json({ error: "Employee not found." });
+    }
+
+    const todayStr = getLocalDateString();
+    
+    // Fetch employee attendance logs this month
+    const currentMonthPrefix = new Date().toISOString().substring(0, 7); // "2026-06"
+    const attendanceLogs = (db.attendance || []).filter(
+      a => a.employeeId === employee.id && a.date.startsWith(currentMonthPrefix)
+    );
+    
+    // Sort logs descending by date
+    attendanceLogs.sort((a, b) => b.date.localeCompare(a.date));
+    
+    // Helper function to check if a status is present
+    const isPresent = (status) => ['checked-in', 'completed', 'late', 'Late Check-in', 'Early Check-out', 'half-day leave'].includes(status);
+
+    // Sum worked days, late days, OT hours
+    const workedDays = attendanceLogs.filter(a => isPresent(a.status)).length;
+    const lateDays = attendanceLogs.filter(a => a.isLate === true || a.status === 'late' || a.status === 'Late Check-in').length;
+    const otHoursSum = attendanceLogs.reduce((sum, a) => sum + (Number(a.otHours) || 0), 0);
+    
+    // Active loans and balance
+    const loans = employee.loans || [];
+    const activeLoans = loans.filter(l => l.status === 'active');
+    const totalLoanBalance = activeLoans.reduce((sum, l) => sum + (Number(l.balance) || 0), 0);
+    
+    // Leaves summary
+    const leaveApplications = employee.leaveApplications || [];
+    const approvedLeavesCount = leaveApplications.filter(l => l.status === 'approved').length;
+    // Also include daily attendance marked as 'leave'
+    const markedLeavesCount = (db.attendance || []).filter(
+      a => a.employeeId === employee.id && a.status === 'leave' && a.date.startsWith(currentMonthPrefix)
+    ).length;
+    const totalLeavesTaken = approvedLeavesCount + markedLeavesCount;
+    const leavesAllowed = 15;
+    const leavesRemaining = Math.max(0, leavesAllowed - totalLeavesTaken);
+    
+    // Fetch payslips (monthly salary sheet calculations)
+    // Let's generate payslip details dynamically for the past 3 months
+    const payslips = [];
+    const currentMonth = new Date().getMonth();
+    const currentYear = new Date().getFullYear();
+    
+    for (let i = 0; i < 3; i++) {
+      const d = new Date(currentYear, currentMonth - i, 1);
+      const mStr = d.toISOString().substring(0, 7);
+      const mName = d.toLocaleString('default', { month: 'long', year: 'numeric' });
+      
+      const salarySheet = database.getMonthlySalarySheet(mStr);
+      const empRecord = (salarySheet.rows || []).find(r => r.id === employee.id);
+      
+      if (empRecord) {
+        payslips.push({
+          period: mName,
+          monthStr: mStr,
+          daysWorked: empRecord.daysWorked || 0,
+          grossSalary: empRecord.payableSalary || 0,
+          deductions: empRecord.advancesDeducted || 0,
+          netSalary: empRecord.netPayable || 0,
+          dailyRate: employee.dailyRate || 0,
+          monthlyWage: employee.monthlyWage || 0,
+          designation: employee.designation || "Staff"
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      employee: {
+        id: employee.id,
+        userId: employee.userId,
+        name: employee.name,
+        designation: employee.designation || "Staff"
+      },
+      stats: {
+        workedDays,
+        lateDays,
+        otHours: otHoursSum,
+        totalLoanBalance,
+        leavesAllowed,
+        leavesTaken: totalLeavesTaken,
+        leavesRemaining
+      },
+      attendance: attendanceLogs,
+      loans: loans,
+      leaves: leaveApplications,
+      payslips: payslips
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Employee Apply Leave Endpoint
+app.post('/api/employee/apply-leave', requireEmployeeAuth, (req, res) => {
+  try {
+    const { startDate, endDate, reason } = req.body;
+    if (!startDate || !endDate || !reason) {
+      return res.status(400).json({ error: "Start date, end date, and reason are required." });
+    }
+    
+    const db = database.read();
+    const employee = db.employees.find(e => e && e.id === req.employeeId);
+    if (!employee) {
+      return res.status(404).json({ error: "Employee not found." });
+    }
+    
+    if (!employee.leaveApplications) {
+      employee.leaveApplications = [];
+    }
+    
+    const newLeave = {
+      id: `leave_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      startDate,
+      endDate,
+      reason,
+      status: "pending",
+      createdAt: new Date().toISOString()
+    };
+    
+    employee.leaveApplications.push(newLeave);
+    database.writeAtomic(db);
+    database.syncToExcelAsync();
+    
+    res.status(201).json({ success: true, leave: newLeave });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Employee Check-In Endpoint
+app.post('/api/employee/checkin', requireEmployeeAuth, (req, res) => {
+  try {
+    const { imageBase64, latitude, longitude } = req.body;
+    if (!imageBase64) {
+      return res.status(400).json({ error: "Selfie photo is required." });
+    }
+    
+    const db = database.read();
+    const employee = db.employees.find(e => e && e.id === req.employeeId);
+    if (!employee) {
+      return res.status(404).json({ error: "Employee not found." });
+    }
+    
+    const now = new Date();
+    const timestamp = now.toISOString();
+    const eventDate = timestamp.split('T')[0];
+    
+    // Check if already checked in / out today
+    const existingAttendance = (db.attendance || []).find(
+      a => a.employeeId === employee.id && a.date === eventDate
+    );
+    
+    const localHour = now.getHours();
+    const isLunchHour = (localHour === 13);
+    
+    // Calculate if late check-in
+    const [sh, sm] = (employee.shiftStart || "09:00").split(':').map(Number);
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const shiftStartMinutes = sh * 60 + sm;
+    const isScanLateTime = nowMinutes > shiftStartMinutes;
+    
+    const isLateCheckInPendingScan = existingAttendance && existingAttendance.status === 'late' && !existingAttendance.scannedCheckIn;
+    const isLateCheckIn = isLateCheckInPendingScan || ((!existingAttendance || existingAttendance.status === 'absent') && isScanLateTime);
+    
+    let eventType = 'entry';
+    const attendanceEntry = {
+      employeeId: employee.id,
+      employeeName: employee.name,
+      date: eventDate,
+      siteName: 'Mobile Scan',
+      facialRecognitionMatch: true, // Native face tracking done locally
+      matchConfidence: 1.0,
+      latitude: latitude ? Number(latitude) : undefined,
+      longitude: longitude ? Number(longitude) : undefined,
+      verificationMethod: 'Mobile Face Detection',
+      notes: 'Face detected locally'
+    };
+    
+    if (existingAttendance) {
+      attendanceEntry.id = existingAttendance.id;
+      attendanceEntry.checkIn = existingAttendance.checkIn;
+      attendanceEntry.checkOut = existingAttendance.checkOut || null;
+      attendanceEntry.lunchOut = existingAttendance.lunchOut || null;
+      attendanceEntry.lunchIn = existingAttendance.lunchIn || null;
+      attendanceEntry.travelHours = existingAttendance.travelHours || 0.0;
+      attendanceEntry.notes = existingAttendance.notes || "";
+      attendanceEntry.status = existingAttendance.status;
+      attendanceEntry.isLate = existingAttendance.isLate || isLateCheckIn;
+      attendanceEntry.isHospitalCase = existingAttendance.isHospitalCase;
+      attendanceEntry.hospitalHours = existingAttendance.hospitalHours;
+      attendanceEntry.scannedCheckIn = existingAttendance.scannedCheckIn;
+    }
+    
+    if (existingAttendance && existingAttendance.checkIn && existingAttendance.status !== 'absent' && !isLateCheckInPendingScan) {
+      if (existingAttendance.status === 'completed' || existingAttendance.status === 'leave') {
+        return res.status(400).json({ error: "Attendance already completed or marked leave for today." });
+      }
+      
+      let lastEventTime = new Date(existingAttendance.checkIn);
+      if (existingAttendance.lunchIn) {
+        lastEventTime = new Date(existingAttendance.lunchIn);
+      } else if (existingAttendance.lunchOut) {
+        lastEventTime = new Date(existingAttendance.lunchOut);
+      }
+      
+      const diffSeconds = (now - lastEventTime) / 1000;
+      if (diffSeconds < 30) {
+        return res.status(400).json({ error: "Duplicate scan. Please wait 30 seconds." });
+      }
+      
+      if (existingAttendance.lunchOut && existingAttendance.lunchIn) {
+        eventType = 'exit';
+        attendanceEntry.checkOut = timestamp;
+      } else if (existingAttendance.lunchOut && !existingAttendance.lunchIn) {
+        eventType = 'lunch-in';
+        attendanceEntry.lunchIn = timestamp;
+      } else if (!existingAttendance.lunchOut && isLunchHour) {
+        eventType = 'lunch-out';
+        attendanceEntry.lunchOut = timestamp;
+      } else {
+        eventType = 'exit';
+        attendanceEntry.checkOut = timestamp;
+      }
+    } else {
+      eventType = 'entry';
+      attendanceEntry.checkIn = timestamp;
+      if (isLateCheckIn) {
+        attendanceEntry.isLate = true;
+        attendanceEntry.scannedCheckIn = true;
+        attendanceEntry.status = "Late Check-in";
+      }
+    }
+    
+    // Geofencing verification
+    let siteName = 'Mobile Scan';
+    let distance = null;
+    let closestSite = null;
+    
+    if (latitude && longitude && db.sites && db.sites.length > 0) {
+      let minDistance = Infinity;
+      db.sites.forEach(site => {
+        if (site.latitude && site.longitude) {
+          const dist = database.getHaversineDistance(latitude, longitude, site.latitude, site.longitude);
+          if (dist < minDistance) {
+            minDistance = dist;
+            closestSite = site;
+          }
+        }
+      });
+      
+      if (closestSite) {
+        distance = minDistance;
+        if (minDistance <= 200) {
+          siteName = closestSite.name;
+        } else {
+          siteName = `Off-Site (${closestSite.name})`;
+        }
+      }
+    }
+    
+    attendanceEntry.siteName = siteName;
+    if (distance !== null && distance > 200) {
+      attendanceEntry.notes = `[FLAGGED LOCATION] Off-Site Scan (${Math.round(distance)}m) ${attendanceEntry.notes}`;
+    }
+    
+    // Save camera event
+    const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+    const savedEvent = database.saveCameraEvent({
+      employeeId: employee.id,
+      employeeName: employee.name,
+      eventType: eventType,
+      siteName: siteName,
+      timestamp: timestamp,
+      date: eventDate,
+      imageBase64: cleanBase64,
+      imageFilename: 'mobile_selfie.jpg',
+      isConfidence: true,
+      matchConfidence: 1.0,
+      latitude: latitude ? Number(latitude) : null,
+      longitude: longitude ? Number(longitude) : null,
+      status: "approved"
+    });
+    
+    // Update or add attendance record
+    database.updateOrAddAttendanceRecord(attendanceEntry);
+    database.syncToExcelAsync();
+    
+    // Notify dashboard clients
+    io.emit('attendance_updated');
+    io.emit('stats_updated');
+    io.emit('new_camera_event', savedEvent);
+    
+    res.json({
+      success: true,
+      status: eventType === 'entry' ? 'checked-in' : (eventType === 'exit' ? 'completed' : eventType),
+      message: `Selfie Attendance accepted (${eventType === 'entry' ? 'Checked In' : (eventType === 'exit' ? 'Checked Out' : eventType)})`
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Express REST API Routes ---
 
 // WhatsApp Connection Status
