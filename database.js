@@ -1734,6 +1734,11 @@ class Database {
 
   // --- Asynchronous Background Excel Sync Queue ---
   syncToExcelAsync() {
+    if (this.skipExcelSync) {
+      this.pendingExcelSync = true;
+      return;
+    }
+    
     if (this.isSyncingExcel) {
       this.pendingExcelSync = true;
       return;

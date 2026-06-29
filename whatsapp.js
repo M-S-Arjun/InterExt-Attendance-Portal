@@ -697,13 +697,22 @@ class WhatsAppManager extends EventEmitter {
 
       const groupInfo = { name: chat.name, id: chat.id._serialized };
 
-      for (const msg of sortedMessages) {
-        const msgId = msg.id._serialized;
-        if (!processedIds.includes(msgId)) {
-          console.log(`[Recovery Engine] Found missed message from ${msg.author || msg.from} sent at ${new Date(msg.timestamp * 1000).toISOString()}: "${msg.body || ''}"`);
-          // Process this message using the processor logic, skipping slow lookup during bulk operations
-          await this.processMessage(msg, true, groupInfo);
-          processedCount++;
+      database.skipExcelSync = true;
+      try {
+        for (const msg of sortedMessages) {
+          const msgId = msg.id._serialized;
+          if (!processedIds.includes(msgId)) {
+            console.log(`[Recovery Engine] Found missed message from ${msg.author || msg.from} sent at ${new Date(msg.timestamp * 1000).toISOString()}: "${msg.body || ''}"`);
+            // Process this message using the processor logic, skipping slow lookup during bulk operations
+            await this.processMessage(msg, true, groupInfo);
+            processedCount++;
+          }
+        }
+      } finally {
+        database.skipExcelSync = false;
+        if (database.pendingExcelSync) {
+          database.pendingExcelSync = false;
+          database.syncToExcelAsync();
         }
       }
 
