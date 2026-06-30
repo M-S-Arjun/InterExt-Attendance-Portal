@@ -72,21 +72,58 @@ class FaceRecognitionModel:
         self.load_model()
     
     def load_model(self):
-        """Load the InsightFace model"""
+        """Load the InsightFace model with dual-resolution detectors.
+
+        self.app      → high-res 640×640 detector (training & static recognition)
+        self.fast_app → fast 320×320 detector (live CCTV hot loop — ~3× faster)
+        """
         try:
-            logger.info(f"Loading InsightFace model: {self.model_name}")
-            # Enable GPU execution provider if available, with CPU fallback
+            logger.info(f"Loading InsightFace model: {self.model_name} (dual-res)")
             providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+
+            # High-resolution model for accurate training / static recognition
             self.app = FaceAnalysis(
-                name=self.model_name, 
-                allowed_modules=['detection', 'recognition'], 
+                name=self.model_name,
+                allowed_modules=['detection', 'recognition'],
                 providers=providers
             )
-            self.app.prepare(ctx_id=0, det_size=(480, 480))
-            logger.info("InsightFace model loaded successfully")
+            self.app.prepare(ctx_id=0, det_size=(640, 640))
+
+            # Fast model for real-time CCTV loop (shared ONNX weights, smaller input)
+            self.fast_app = FaceAnalysis(
+                name=self.model_name,
+                allowed_modules=['detection', 'recognition'],
+                providers=providers
+            )
+            self.fast_app.prepare(ctx_id=0, det_size=(320, 320))
+
+            logger.info("InsightFace dual-res model loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
+
+    def warm_up(self):
+        """Run a blank frame through both detectors to pre-JIT the ONNX graph.
+
+        Eliminates the first-frame latency spike (often 500ms+) that occurs when
+        ONNX Runtime lazily compiles the computation graph on first real inference.
+        """
+        try:
+            dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+            self.app.get(dummy)
+            self.fast_app.get(dummy)
+            logger.info("[Warm-up] Both detectors pre-JITted successfully (zero first-frame latency).")
+        except Exception as e:
+            logger.warning(f"[Warm-up] Warm-up failed (non-fatal): {e}")
+
+    def get_faces_fast(self, frame: np.ndarray):
+        """Run face detection+embedding using the fast 320×320 detector.
+
+        Use this in the live CCTV inference thread for maximum throughput.
+        Falls back to the high-res detector if fast_app is unavailable.
+        """
+        detector = getattr(self, 'fast_app', None) or self.app
+        return detector.get(frame)
 
     
     def _load_image_array(self, image_path_or_data) -> Optional[np.ndarray]:
@@ -119,9 +156,10 @@ class FaceRecognitionModel:
                 logger.error("Unsupported image input type")
                 return None
 
-            # Downscale large images for faster face detection and embedding extraction
+            # Only downscale very large images (>1280px) to preserve face detail on RTSP streams.
+            # Previously capped at 480px which crushed small faces on sub-streams.
             h, w = image_array.shape[:2]
-            max_size = 480
+            max_size = 1280
             if max(h, w) > max_size:
                 scale = max_size / max(h, w)
                 image_array = cv2.resize(image_array, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
@@ -420,10 +458,11 @@ face_model = None
 
 
 def initialize_model(model_name: str = 'buffalo_l') -> FaceRecognitionModel:
-    """Initialize the face recognition model"""
+    """Initialize the face recognition model (singleton, with warm-up)."""
     global face_model
     if face_model is None:
         face_model = FaceRecognitionModel(model_name=model_name)
+        face_model.warm_up()  # Pre-JIT both detectors to avoid first-frame spike
     return face_model
 
 

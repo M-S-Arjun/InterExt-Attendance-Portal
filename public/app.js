@@ -303,8 +303,8 @@ const TransactionManager = {
       gap: 12px;
       padding: 12px 18px;
       border-radius: var(--border-radius-md);
-      background: rgba(20, 20, 25, 0.85);
-      border: 1px solid var(--glass-border);
+      background: var(--toast-bg);
+      border: 1px solid var(--toast-border);
       backdrop-filter: blur(12px);
       box-shadow: var(--glass-shadow);
       color: var(--text-primary);
@@ -461,11 +461,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     setCameraEventTimestampNow();
   }
 
-  // Render clock tick
-  if (document.getElementById('header-datetime')) {
-    updateHeaderClock();
-    setInterval(updateHeaderClock, 1000);
+  // Render clock tick (robust single interval, survives camera refresh/dom mutations)
+  // Never let missing #header-datetime prevent the clock interval from starting.
+  try {
+    if (!window.__headerClockTimer) {
+      window.__headerClockTimer = setInterval(() => {
+        try {
+          const el = document.getElementById('header-datetime');
+          if (el) updateHeaderClock();
+        } catch (e) {
+          // Ignore clock tick errors to keep UI alive
+        }
+      }, 1000);
+    }
+
+    // Immediate paint if the element exists right now
+    if (document.getElementById('header-datetime')) {
+      updateHeaderClock();
+    } else {
+      // Start as soon as header is injected (some pages swap DOM)
+      const clockObserver = new MutationObserver(() => {
+        const el = document.getElementById('header-datetime');
+        if (el) {
+          try { updateHeaderClock(); } catch (e) {}
+          clockObserver.disconnect();
+        }
+      });
+      clockObserver.observe(document.documentElement, { childList: true, subtree: true });
+
+      // Safety disconnect after 10s
+      setTimeout(() => clockObserver.disconnect(), 10000);
+    }
+  } catch (e) {
+    // Do not crash bootstrap if clock fails
   }
+
+
 
   // Load initial REST API datasets
   await loadDatabaseCore();
@@ -1402,9 +1433,11 @@ function renderAttendanceLogsTable(r) {
     } else if (row.status === 'late') {
       if (row.checkOut) {
         statusBadge = `<span class="badge badge-orange">Late Check-in</span>`;
-      } else {
-        statusBadge = `<span class="badge badge-orange">Late (Pending)</span>`;
+      } else if (row.checkIn) {
+        statusBadge = `<span class="badge badge-orange">Late Check-in</span>`;
         tr.className = "table-row-checked-in";
+      } else {
+        statusBadge = `<span class="badge badge-orange">Late (Informed)</span>`;
       }
     } else if (row.status === 'Late Check-in') {
       statusBadge = `<span class="badge badge-orange">Late Check-in</span>`;
@@ -1437,7 +1470,9 @@ function renderAttendanceLogsTable(r) {
       const hospitalExemptText = row.isHospitalExempt ? " (Hosp)" : "";
       shiftSummary = row.extraHours > 0 ? `Half Day + ${row.extraHours} hr Ext${hospitalExemptText}` : `Half-Day Shift${hospitalExemptText}`;
     } else if (row.status === 'completed' || row.status === 'late' || row.status === 'Late Check-in' || row.status === 'Early Check-out') {
-      if (!row.checkOut) {
+      if (!row.checkIn) {
+        shiftSummary = "Late - Informed";
+      } else if (!row.checkOut) {
         shiftSummary = "Late - Active Duty";
       } else {
         const hospitalExemptText = row.isHospitalExempt ? " (Hosp)" : "";
@@ -1589,9 +1624,11 @@ function renderPunchesTable(r) {
     } else if (row.status === 'late') {
       if (row.checkOut) {
         statusBadge = `<span class="badge badge-orange">Late Check-in</span>`;
+      } else if (row.checkIn) {
+        statusBadge = `<span class="badge badge-orange">Late Check-in</span>`;
+        tr.className = "table-row-checked-in";
       } else {
-        statusBadge = `<span class="badge badge-orange">Late (Pending)</span>`;
-        if (!row.checkOut) tr.className = "table-row-checked-in";
+        statusBadge = `<span class="badge badge-orange">Late (Informed)</span>`;
       }
     } else if (row.status === 'Late Check-in') {
       statusBadge = `<span class="badge badge-orange">Late Check-in</span>`;
@@ -2063,13 +2100,22 @@ async function submitCameraEvent(payload) {
 }
 
 function resetCameraEventForm() {
-  const form = document.getElementById('camera-event-form');
-  if (form) form.reset();
-  const now = new Date();
-  const localValue = toLocalISOString(now).slice(0, 16);
-  const timestampInput = document.getElementById('camera-event-timestamp');
-  if (timestampInput) timestampInput.value = localValue;
+  try {
+    const form = document.getElementById('camera-event-form');
+    if (form && typeof form.reset === 'function') form.reset();
+
+    const timestampInput = document.getElementById('camera-event-timestamp');
+    if (timestampInput) {
+      const now = new Date();
+      const localValue = toLocalISOString(now).slice(0, 16);
+      timestampInput.value = localValue;
+    }
+  } catch (e) {
+    // Never let camera form reset break the rest of the page (clock/rendering)
+    console.warn('[Camera] resetCameraEventForm failed:', e);
+  }
 }
+
 
 function setCameraEventTimestampNow() {
   const now = new Date();
@@ -2439,7 +2485,7 @@ function showMetricEmployees(metricType) {
       });
     } else if (metricType === 'present') {
       modalTitle = "Present Today";
-      list = attendance.filter(a => a.status === 'checked-in' || a.status === 'completed' || a.status === 'late' || a.status === 'Late Check-in' || a.status === 'Early Check-out' || a.status === 'half-day leave').map(a => ({
+      list = attendance.filter(a => a.status === 'checked-in' || a.status === 'completed' || (a.status === 'late' && a.checkIn) || a.status === 'Late Check-in' || a.status === 'Early Check-out' || a.status === 'half-day leave').map(a => ({
         name: a.employeeName,
         checkIn: a.checkIn,
         checkOut: a.checkOut,
@@ -3785,7 +3831,8 @@ async function handleAttendanceSubmit(e) {
     isManualOverride: document.getElementById('att-override').checked,
     travelHours: Number(document.getElementById('att-travel-hours').value || 0.0),
     isHospitalCase: document.getElementById('att-is-hospital').checked,
-    hospitalHours: Number(document.getElementById('att-hospital-hours').value || 0.0)
+    hospitalHours: Number(document.getElementById('att-hospital-hours').value || 0.0),
+    source: 'MANUAL'
   };
 
   if (status === 'absent' || status === 'leave') {
@@ -4380,7 +4427,7 @@ function updateCharts() {
   const siteDistribution = {};
   
   // Only look at present/checked-in rows
-  const activeRecords = state.attendance.filter(r => r.status === 'checked-in' || r.status === 'completed' || r.status === 'late' || r.status === 'Late Check-in' || r.status === 'Early Check-out');
+  const activeRecords = state.attendance.filter(r => r.status === 'checked-in' || r.status === 'completed' || (r.status === 'late' && r.checkIn) || r.status === 'Late Check-in' || r.status === 'Early Check-out');
   activeRecords.forEach(row => {
     const site = row.siteName || "Main Site";
     siteDistribution[site] = (siteDistribution[site] || 0) + 1;
@@ -4426,7 +4473,7 @@ function updateCharts() {
     // If it's today, grab actual active rates, else render semi-random simulated rates between 60%-95% to make the dashboard look alive and fully functional!
     if (i === 0) {
       const activeCount = state.employees.filter(e => e.status === 'active').length;
-      const presentCount = state.attendance.filter(r => r.status === 'checked-in' || r.status === 'completed' || r.status === 'late' || r.status === 'Late Check-in' || r.status === 'Early Check-out').length;
+      const presentCount = state.attendance.filter(r => r.status === 'checked-in' || r.status === 'completed' || (r.status === 'late' && r.checkIn) || r.status === 'Late Check-in' || r.status === 'Early Check-out').length;
       const rate = activeCount > 0 ? Math.round((presentCount / activeCount) * 100) : 0;
       historyRates.push(rate);
     } else {
@@ -6224,19 +6271,19 @@ function showFloatingNotification(employeeName, confidence, eventType) {
   }
 
   const toast = document.createElement('div');
-  toast.className = 'toast-card glass-card success';
+  toast.className = 'toast-card glass-card';
   toast.style.display = 'flex';
   toast.style.alignItems = 'center';
   toast.style.gap = '14px';
   toast.style.padding = '14px 20px';
-  toast.style.background = 'rgba(10, 25, 15, 0.9)';
+  toast.style.background = 'var(--toast-success-bg)';
   toast.style.backdropFilter = 'blur(12px)';
-  toast.style.border = '1px solid rgba(46, 213, 115, 0.3)';
+  toast.style.border = '1px solid var(--toast-success-border)';
   toast.style.borderRadius = 'var(--border-radius-md)';
-  toast.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.4)';
+  toast.style.boxShadow = 'var(--glass-shadow)';
   toast.style.transform = 'translateX(120%)';
   toast.style.transition = 'transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
-  toast.style.color = '#fff';
+  toast.style.color = 'var(--text-primary)';
   toast.style.minWidth = '280px';
   
   let iconName = 'check-circle';
@@ -6251,19 +6298,24 @@ function showFloatingNotification(employeeName, confidence, eventType) {
     borderIconColor = 'rgba(46, 213, 115, 0.25)';
     bgIconColor = 'rgba(46, 213, 115, 0.1)';
     titleText = 'Checked In';
+    toast.style.background = 'var(--toast-success-bg)';
+    toast.style.border = '1px solid var(--toast-success-border)';
   } else if (eventType === 'lunch-in') {
     iconName = 'coffee';
     iconColor = '#2ed573';
     borderIconColor = 'rgba(46, 213, 115, 0.25)';
     bgIconColor = 'rgba(46, 213, 115, 0.1)';
     titleText = 'Returned from Lunch';
+    toast.style.background = 'var(--toast-success-bg)';
+    toast.style.border = '1px solid var(--toast-success-border)';
   } else if (eventType === 'lunch-out') {
     iconName = 'coffee';
     iconColor = '#ffa500';
     borderIconColor = 'rgba(255, 165, 0, 0.25)';
     bgIconColor = 'rgba(255, 165, 0, 0.1)';
     titleText = 'Out for Lunch';
-    toast.style.border = '1px solid rgba(255, 165, 0, 0.3)';
+    toast.style.background = 'var(--toast-warning-bg)';
+    toast.style.border = '1px solid var(--toast-warning-border)';
   } else {
     // exit
     iconName = 'check-circle';
@@ -6271,7 +6323,8 @@ function showFloatingNotification(employeeName, confidence, eventType) {
     borderIconColor = 'rgba(255, 71, 87, 0.25)';
     bgIconColor = 'rgba(255, 71, 87, 0.1)';
     titleText = 'Checked Out';
-    toast.style.border = '1px solid rgba(255, 71, 87, 0.3)';
+    toast.style.background = 'var(--toast-warning-bg)';
+    toast.style.border = '1px solid var(--toast-warning-border)';
   }
   
   toast.innerHTML = `
@@ -6325,19 +6378,19 @@ function showFloatingRejectionNotification(message) {
   }
 
   const toast = document.createElement('div');
-  toast.className = 'toast-card glass-card warning';
+  toast.className = 'toast-card glass-card';
   toast.style.display = 'flex';
   toast.style.alignItems = 'center';
   toast.style.gap = '14px';
   toast.style.padding = '14px 20px';
-  toast.style.background = 'rgba(35, 15, 15, 0.9)';
+  toast.style.background = 'var(--toast-warning-bg)';
   toast.style.backdropFilter = 'blur(12px)';
-  toast.style.border = '1px solid rgba(255, 71, 87, 0.3)';
+  toast.style.border = '1px solid var(--toast-warning-border)';
   toast.style.borderRadius = 'var(--border-radius-md)';
-  toast.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.4)';
+  toast.style.boxShadow = 'var(--glass-shadow)';
   toast.style.transform = 'translateX(120%)';
   toast.style.transition = 'transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
-  toast.style.color = '#fff';
+  toast.style.color = 'var(--text-primary)';
   toast.style.minWidth = '280px';
   
   toast.innerHTML = `
@@ -6475,7 +6528,7 @@ async function loadCctvCameras() {
         <div style="font-size: 0.75rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 4px;">
           <div style="text-overflow: ellipsis; overflow: hidden; white-space: nowrap;"><span style="color: var(--text-tertiary);">Source:</span> <code style="color: var(--color-primary);">${cam.source}</code></div>
           <div><span style="color: var(--text-tertiary);">Target Location:</span> ${siteName}</div>
-          <div><span style="color: var(--text-tertiary);">Action Mode:</span> ${cam.eventType.toUpperCase()}</div>
+          <div><span style="color: var(--text-tertiary);">Action Mode:</span> ${cam.eventType.toUpperCase()}${cam.invertDirection ? ' (Inverted)' : ''}</div>
         </div>
         <div style="display: flex; gap: 8px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--glass-border); justify-content: flex-end;">
           <button class="btn btn-secondary btn-xs" onclick="openEditCctvModal(JSON.parse('${escapedCam}'))" style="font-size: 0.7rem; padding: 4px 8px; height: 26px;">Edit</button>
@@ -6500,6 +6553,7 @@ function openAddCctvModal() {
   document.getElementById('cctv-source').value = '';
   document.getElementById('cctv-event-type').value = 'auto';
   document.getElementById('cctv-status').value = 'active';
+  document.getElementById('cctv-invert-direction').checked = false;
   
   const presetSelect = document.getElementById('cctv-preset');
   if (presetSelect) presetSelect.value = '';
@@ -6516,6 +6570,7 @@ function openEditCctvModal(cam) {
   document.getElementById('cctv-site').value = cam.siteId;
   document.getElementById('cctv-event-type').value = cam.eventType;
   document.getElementById('cctv-status').value = cam.status;
+  document.getElementById('cctv-invert-direction').checked = !!cam.invertDirection;
   
   const presetSelect = document.getElementById('cctv-preset');
   if (presetSelect) presetSelect.value = '';
@@ -6574,7 +6629,8 @@ async function handleCctvSubmit(event) {
     source: document.getElementById('cctv-source').value,
     siteId: document.getElementById('cctv-site').value,
     eventType: document.getElementById('cctv-event-type').value,
-    status: document.getElementById('cctv-status').value
+    status: document.getElementById('cctv-status').value,
+    invertDirection: document.getElementById('cctv-invert-direction').checked
   };
 
   try {
@@ -7531,18 +7587,26 @@ function injectChatbot() {
     </div>
     <div class="chatbot-messages" id="chatbot-messages">
       <div class="chat-message assistant">
-        <p>Hello! 👋</p>
-        <p>Welcome to InterExt. How can I help you today?</p>
+        <p>Hello! 👋 I'm <strong>InterExt AI</strong></p>
+        <p>Ask me anything about attendance, payroll, employees, overtime, leaves, or any data in the system!</p>
       </div>
     </div>
     <div class="chatbot-suggestions" id="chatbot-suggestions">
-      <button class="suggestion-chip" onclick="sendSuggestion('How many staff members are present today?')">Present today?</button>
-      <button class="suggestion-chip" onclick="sendSuggestion('Who didn\\'t show up today?')">Who's absent?</button>
-      <button class="suggestion-chip" onclick="sendSuggestion('How many are on leave today?')">On leave?</button>
-      <button class="suggestion-chip" onclick="sendSuggestion('What\\'s payable this month?')">Payable this month?</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Who is present today?')">Present today?</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Who is absent today?')">Who's absent?</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Who came late today?')">Late today?</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Payroll summary this month')">Payroll this month</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Who worked the most hours this month?')">Top performers</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Attendance summary today')">Today's summary</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Who is on leave today?')">On leave?</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Late arrivals this month')">Late this month</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Overtime rankings this month')">OT rankings</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('How many employees?')">Employee count</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Upcoming holidays')">Holidays</button>
+      <button class="suggestion-chip" onclick="sendSuggestion('Download Excel report')">Export Excel</button>
     </div>
     <div class="chatbot-input-container">
-      <input type="text" id="chatbot-input" placeholder="Ask anything about attendance, leaves or payroll..." onkeypress="handleChatKeypress(event)">
+      <input type="text" id="chatbot-input" placeholder="Ask anything: [name]'s salary, who was present on 25th June, overtime..." onkeypress="handleChatKeypress(event)">
       <button id="btn-send-chat" onclick="sendChatMessage()">
         <i data-lucide="arrow-up" style="width: 16px; height: 16px;"></i>
       </button>

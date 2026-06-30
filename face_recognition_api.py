@@ -80,7 +80,8 @@ def _restore_cameras():
                         cfg.get('site_name', 'Office'),
                         cfg.get('event_type', 'auto'),
                         cfg.get('threshold', 0.52),
-                        node_server
+                        node_server,
+                        cfg.get('invert_direction', False)
                     )
                     logger.info(f"[Auto-Restore] Restarted camera: {cfg['name']}")
                 except Exception as ex:
@@ -336,6 +337,10 @@ def cctv_start():
         event_type = data.get('event_type') or request.form.get('event_type', 'auto')
         threshold = float(data.get('threshold') or request.form.get('threshold', 0.52))
         
+        # invert_direction can be boolean or string 'true'/'false'
+        invert_dir_val = data.get('invert_direction') or request.form.get('invert_direction', 'false')
+        invert_direction = str(invert_dir_val).lower() == 'true'
+        
         node_server = os.environ.get('NODE_SERVER_URL', 'http://localhost:3000')
         
         if not camera_id or not name or not source:
@@ -344,12 +349,13 @@ def cctv_start():
         # Persist config so we can restore after restart
         _save_camera_config(camera_id, {
             'name': name, 'source': source, 'site_name': site_name,
-            'event_type': event_type, 'threshold': threshold
+            'event_type': event_type, 'threshold': threshold,
+            'invert_direction': invert_direction
         })
 
         import cctv_processor
         success = cctv_processor.start_cctv_thread(
-            camera_id, name, source, site_name, event_type, threshold, node_server
+            camera_id, name, source, site_name, event_type, threshold, node_server, invert_direction
         )
         
         return jsonify({'success': success, 'message': f'CCTV thread started for camera {name}'})
@@ -499,7 +505,8 @@ if __name__ == '__main__':
                 host='0.0.0.0',
                 port=5000,
                 debug=False,
-                use_reloader=False
+                use_reloader=False,
+                threaded=True  # Allow concurrent requests from multiple camera threads
             )
         else:
             logger.info("Exiting after training.")
@@ -512,5 +519,6 @@ if __name__ == '__main__':
         host='0.0.0.0',
         port=5000,
         debug=False,
-        use_reloader=False  # Disable reloader to avoid model reloading
+        use_reloader=False,
+        threaded=True  # Allow concurrent requests from multiple camera threads
     )

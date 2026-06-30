@@ -396,10 +396,10 @@ app.get('/api/employee/dashboard-data', requireEmployeeAuth, (req, res) => {
     attendanceLogs.sort((a, b) => b.date.localeCompare(a.date));
     
     // Helper function to check if a status is present
-    const isPresent = (status) => ['checked-in', 'completed', 'late', 'Late Check-in', 'Early Check-out', 'half-day leave'].includes(status);
+    const isPresent = (status, checkIn) => ['checked-in', 'completed', 'Late Check-in', 'Early Check-out', 'half-day leave'].includes(status) || (status === 'late' && checkIn);
 
     // Sum worked days, late days, OT hours
-    const workedDays = attendanceLogs.filter(a => isPresent(a.status)).length;
+    const workedDays = attendanceLogs.filter(a => isPresent(a.status, a.checkIn)).length;
     const lateDays = attendanceLogs.filter(a => a.isLate === true || a.status === 'late' || a.status === 'Late Check-in').length;
     const otHoursSum = attendanceLogs.reduce((sum, a) => sum + (Number(a.otHours) || 0), 0);
     
@@ -667,8 +667,7 @@ app.post('/api/employee/checkin', requireEmployeeAuth, (req, res) => {
     });
     
     // Update or add attendance record
-    database.updateOrAddAttendanceRecord(attendanceEntry);
-    database.syncToExcelAsync();
+    database.saveAttendance(attendanceEntry);
     
     // Notify dashboard clients
     io.emit('attendance_updated');
@@ -722,7 +721,7 @@ app.get('/api/stats', (req, res) => {
   const activeEmpCount = employees.filter(e => e.status === 'active').length;
   const attendanceToday = database.getAttendanceForDate(todayStr);
   
-  const presentCount = attendanceToday.filter(a => a.status === 'checked-in' || a.status === 'completed' || a.status === 'late' || a.status === 'Late Check-in' || a.status === 'Early Check-out' || a.status === 'half-day leave').length;
+  const presentCount = attendanceToday.filter(a => ['checked-in', 'completed', 'Late Check-in', 'Early Check-out', 'half-day leave'].includes(a.status) || (a.status === 'late' && a.checkIn)).length;
   const halfDayCount = attendanceToday.filter(a => a.isHalfDay === true || a.isHalfDay === 'true' || a.status === 'half-day leave').length;
   const lateCount = attendanceToday.filter(a => a.status === 'Late Check-in' || a.status === 'late' || a.isLate === true || a.isLate === 'true').length;
   const earlyCount = attendanceToday.filter(a => a.status === 'Early Check-out' || a.isEarlyCheckout === true || a.isEarlyCheckout === 'true').length;
@@ -2346,6 +2345,10 @@ app.post('/api/face/cctv-event', async (req, res) => {
 
     if (existingAttendance) {
       attendanceEntry.id = existingAttendance.id;
+      if (isLateCheckIn && newPunchType === 'in') {
+        attendanceEntry.scannedCheckIn = true;
+        attendanceEntry.status = "Late Check-in";
+      }
     } else {
       if (isLateCheckIn) {
         attendanceEntry.isLate = true;
@@ -4376,6 +4379,15 @@ function hasFuzzyKeyword(query, keywords) {
   const words = cleanQuery.split(/\s+/).map(w => w.replace(/[^\w]/g, ''));
   for (const word of words) {
     if (word.length < 3) continue;
+    
+    // Safeguard to prevent common words from matching unrelated keywords
+    if (['worked', 'worker', 'hours', 'month', 'site', 'today'].includes(word)) {
+      for (const keyword of keywords) {
+        if (word === keyword) return true;
+      }
+      continue;
+    }
+
     for (const keyword of keywords) {
       // Calculate max allowed distance based on word/keyword length to prevent false matches
       const minLen = Math.min(word.length, keyword.length);
@@ -4392,7 +4404,7 @@ function hasFuzzyKeyword(query, keywords) {
 }
 
 // AI Query Endpoint
-app.post('/api/ai/query', (req, res) => {
+app.post('/api/ai/query', async (req, res) => {
   try {
     const { query } = req.body;
     if (!query) {
@@ -4401,30 +4413,151 @@ app.post('/api/ai/query', (req, res) => {
 
     const cleanQuery = query.toLowerCase().trim();
     const todayStr = getLocalDateString();
-    
-    // Read current database state
     const db = database.read();
     const employees = db.employees || [];
     const dailyLogs = database.getAttendanceForDate(todayStr) || [];
-    
+    const today = new Date();
+
+    // Check for Gemini API key
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (apiKey) {
+      try {
+        const parts = todayStr.split('-');
+        const startOfMonth = `${parts[0]}-${parts[1]}-01`;
+        
+        // 1. Clean employees (active only)
+        const cleanEmployees = (db.employees || [])
+          .filter(e => e && e.status === 'active')
+          .map(e => ({
+            id: e.id,
+            name: e.name,
+            designation: e.designation || 'Staff',
+            modeOfWork: e.modeOfWork || '—',
+            dailyRate: e.dailyRate || 0,
+            shiftStart: e.shiftStart || '09:00',
+            shiftEnd: e.shiftEnd || '18:00'
+          }));
+
+        // 2. Fetch current month's attendance records (strip base64 images for token efficiency)
+        const rawLogs = database.getAttendanceForRange(startOfMonth, todayStr) || [];
+        const cleanLogs = rawLogs.map(log => ({
+          employeeId: log.employeeId,
+          employeeName: log.employeeName,
+          date: log.date,
+          checkIn: log.checkIn,
+          checkOut: log.checkOut,
+          status: log.status,
+          duration: log.duration || 0,
+          regularHours: log.regularHours || 0,
+          otHours: log.otHours || 0,
+          isLate: !!log.isLate,
+          isHalfDay: !!log.isHalfDay,
+          calculatedWage: log.calculatedWage || 0,
+          siteName: log.siteName || '—'
+        }));
+
+        // 3. Clean holidays
+        const cleanHolidays = db.holidays || [];
+
+        // 4. Construct lightweight context
+        const context = {
+          currentDate: todayStr,
+          employees: cleanEmployees,
+          attendanceLogs: cleanLogs,
+          holidays: cleanHolidays
+        };
+
+        const systemInstruction = `You are InterExt AI v1.0, the virtual assistant for the InterExt Attendance & Payroll Portal.
+Your task is to analyze the user's query and the provided database context to answer their question correctly.
+The user may make typos or grammatical errors (e.g. "presnt count", "salry summary", "who worked most hours"). Understand their intent and answer correctly.
+
+Context:
+- Today's date: ${context.currentDate}
+- Employee Directory: ${JSON.stringify(context.employees)}
+- Attendance Logs for the current month: ${JSON.stringify(context.attendanceLogs)}
+- Company Holidays: ${JSON.stringify(context.holidays)}
+
+Instructions:
+1. Think step-by-step to compute the answer (e.g., if asked for present count today, filter logs for today where status is completed/checked-in/Late Check-in/etc. If asked for payroll summary, sum calculated wages/advances for all employees in the month. If asked for top performers, aggregate working hours per employee and rank them).
+2. Format your response in clean Markdown.
+3. Be professional, friendly, and concise.
+4. Output a JSON object containing:
+   - "steps": An array of strings describing your analytical/thinking steps (2-4 steps).
+   - "response": Your markdown formatted answer.
+
+JSON Schema:
+{
+  "steps": ["step 1", "step 2"],
+  "response": "Your markdown answer"
+}`;
+
+        const requestBody = {
+          contents: [
+            {
+              parts: [
+                {
+                  text: `User Query: "${query}"`
+                }
+              ]
+            }
+          ],
+          systemInstruction: {
+            parts: [
+              {
+                text: systemInstruction
+              }
+            ]
+          },
+          generationConfig: {
+            responseMimeType: "application/json"
+          }
+        };
+
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+          throw new Error(`Gemini API returned status: ${response.status} ${response.statusText}`);
+        }
+
+        const responseData = await response.json();
+        const rawJsonText = responseData.candidates[0].content.parts[0].text;
+        const result = JSON.parse(rawJsonText);
+        
+        return res.json({
+          success: true,
+          steps: result.steps || ["Query analyzed.", "Result generated."],
+          response: result.response
+        });
+      } catch (geminiErr) {
+        console.error("[AI Chatbot] Gemini API execution failed. Falling back to local classifier...", geminiErr);
+        // Fall back to local classifier below
+      }
+    }
+
+    // Local Fallback Classifier Path
     let steps = [];
     let responseText = "";
 
     // Helper functions for statuses
-    const isPresent = (status) => ['checked-in', 'completed', 'late', 'Late Check-in', 'Early Check-out', 'half-day leave'].includes(status);
+    const isPresent = (status, checkIn) => ['checked-in', 'completed', 'Late Check-in', 'Early Check-out', 'half-day leave'].includes(status) || (status === 'late' && checkIn);
     const isLeave = (status) => status === 'leave';
     const isAbsent = (status) => status === 'absent';
 
     // Define semantic keyword maps for intents
     const presentKeywords = ['present', 'presnt', 'attendance', 'atendance', 'here', 'marked', 'presents'];
     const absentKeywords = ['absent', 'absnt', 'missing', 'absentees', 'away', 'show', 'turned', 'absents'];
-    const leaveKeywords = ['leave', 'leve', 'leaves', 'vacation', 'holiday', 'holidays', 'off', 'sick'];
+    const leaveKeywords = ['leave', 'leve', 'leaves', 'vacation', 'off', 'sick'];
     const payrollKeywords = ['payable', 'payabel', 'payroll', 'salary', 'salry', 'wage', 'wages', 'earnings', 'payout', 'payouts', 'amount', 'pay'];
     const cctvKeywords = ['cctv', 'camera', 'cam', 'cams', 'stream', 'feeds', 'video', 'feed', 'cameras', 'camra'];
     const helpKeywords = ['help', 'guide', 'use', 'check-in', 'clock-in', 'install', 'download', 'website', 'portal', 'features'];
-
-    // Define dynamic date ranges for Excel links
-    const today = new Date();
+    const excelKeywords = ['excel', 'excl', 'export', 'sheet', 'download', 'xlsx', 'report', 'file', 'spreadsheet'];
+    
     const year = today.getFullYear();
     const month = String(today.getMonth() + 1).padStart(2, '0');
     const startOfMonthStr = `${year}-${month}-01`;
@@ -4436,20 +4569,133 @@ app.post('/api/ai/query', (req, res) => {
     lastFriday.setDate(today.getDate() - diffToFriday);
     const lastFridayStr = getLocalDateString(lastFriday);
 
-    const excelKeywords = ['excel', 'excl', 'export', 'sheet', 'download', 'xlsx', 'report', 'file', 'spreadsheet'];
     const isExcelRequested = hasFuzzyKeyword(cleanQuery, excelKeywords);
     
     let excelSuffixText = "";
     if (isExcelRequested) {
       excelSuffixText = `\n\n📊 **Excel Export Options:**\n` +
-                        `• **[Download Attendance Sheet (Excel)](/api/export/excel?startDate=${startOfMonthStr}&endDate=${todayStr})**\n` +
-                        `• **[Download Payroll Wage Summary (Excel)](/api/export/payroll/excel?startDate=${startOfMonthStr}&endDate=${todayStr})**\n` +
+                        `• **[Download Attendance Log (Excel)](/api/export/excel?startDate=${startOfMonthStr}&endDate=${todayStr})**\n` +
+                        `• **[Download Payroll Sheet (Excel)](/api/export/payroll/excel?startDate=${startOfMonthStr}&endDate=${todayStr})**\n` +
                         `• **[Download Welders Weekly Report (Excel)](/api/export/welders-weekly/excel?friday=${lastFridayStr})**\n` +
                         `*(Configured for date range: ${startOfMonthStr} to ${todayStr})*`;
     }
 
+    // First: Check if the query is referring to a specific employee
+    let matchedEmp = null;
+    for (const emp of employees) {
+      if (emp.name && cleanQuery.includes(emp.name.toLowerCase())) {
+        matchedEmp = emp;
+        break;
+      }
+    }
+    
+    // Fallback to fuzzy name lookup if name matches a specific word
+    if (!matchedEmp) {
+      const nameExclusions = ['who', 'the', 'and', 'for', 'are', 'was', 'day', 'out', 'late', 'work', 'pay', 'off', 'absent', 'leave', 'cctv', 'status', 'summary', 'today', 'month', 'week', 'year', 'excel', 'sheet', 'salary', 'payroll', 'wages', 'wage', 'payout', 'payouts', 'amount', 'present', 'absentees', 'leaves', 'holiday', 'holidays', 'camera', 'cams', 'stream', 'feeds', 'video', 'feed', 'website', 'portal', 'help', 'guide', 'use', 'report', 'xlsx', 'export', 'here', 'marked', 'presnt', 'atendance'];
+      const queryWords = cleanQuery.split(/\s+/).map(w => w.replace(/[^\w]/g, ''));
+      for (const word of queryWords) {
+        if (word.length >= 3 && !nameExclusions.includes(word)) {
+          matchedEmp = employees.find(e => e.name && e.name.toLowerCase().split(/\s+/).includes(word));
+          if (matchedEmp) break;
+        }
+      }
+    }
+
+    // 0. Intent: Specific employee lookup (Highest priority to prevent keyword overlaps)
+    if (matchedEmp) {
+      steps = [
+        `Searching registry for '${matchedEmp.name}'...`,
+        "Retrieving shift and designation profiles...",
+        "Aggregating monthly payroll ledger...",
+        "Putting it all together..."
+      ];
+
+      const monthStr = today.toISOString().substring(0, 7);
+      const startOfMonth = `${monthStr}-01`;
+      const monthlyLogs = database.getAttendanceForRange(startOfMonth, todayStr) || [];
+      const empLogs = monthlyLogs.filter(log => log.employeeId === matchedEmp.id);
+      
+      const presentCount = empLogs.filter(log => isPresent(log.status, log.checkIn)).length;
+      const lateCount = empLogs.filter(log => log.isLate || log.status === 'late' || log.status === 'Late Check-in').length;
+      const totalHours = empLogs.reduce((sum, log) => sum + ((log.duration || 0) / 60), 0);
+      
+      const payrollData = database.getMonthlySalarySheet(monthStr) || [];
+      const payrollRow = payrollData.find(r => r.employeeId === matchedEmp.id) || {};
+
+      const todayLog = dailyLogs.find(log => log.employeeId === matchedEmp.id);
+      let todayStatus = "Absent / Not Checked In";
+      if (todayLog) {
+        if (todayLog.status === 'leave') todayStatus = "On Leave";
+        else if (todayLog.status === 'late') todayStatus = "Late (Informed)";
+        else if (todayLog.status === 'Late Check-in') todayStatus = `Late Check-in (Arrived at ${todayLog.checkIn ? new Date(todayLog.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
+        else if (todayLog.status === 'checked-in') todayStatus = `Checked In (Arrived at ${todayLog.checkIn ? new Date(todayLog.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
+        else if (todayLog.status === 'completed') todayStatus = `Completed Shift (Checked out at ${todayLog.checkOut ? new Date(todayLog.checkOut).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
+        else if (todayLog.status === 'Early Check-out') todayStatus = `Early Check-out (Checked out at ${todayLog.checkOut ? new Date(todayLog.checkOut).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'unknown'})`;
+      }
+      
+      // Direct Answer Helper based on query context
+      let directAnswer = "";
+      if (cleanQuery.includes("present") || cleanQuery.includes("here") || cleanQuery.includes("attend") || cleanQuery.includes("check")) {
+        const isPresentToday = ['Checked In', 'Late Check-in', 'Completed Shift', 'Early Check-out'].some(s => todayStatus.startsWith(s));
+        if (isPresentToday) {
+          directAnswer = `✅ **Yes**, **${matchedEmp.name}** is **present** today. (Current status: *${todayStatus}*)`;
+        } else if (todayStatus === 'Late (Informed)') {
+          directAnswer = `⏳ **No**, **${matchedEmp.name}** has not checked in yet today. They are currently marked as **Late (Informed)** (sent a notice but hasn't scanned in).`;
+        } else if (todayStatus === 'On Leave') {
+          directAnswer = `🌴 **No**, **${matchedEmp.name}** is not present today. They are **On Leave**.`;
+        } else {
+          directAnswer = `❌ **No**, **${matchedEmp.name}** is not present today. (Current status: *${todayStatus}*)`;
+        }
+      } else if (cleanQuery.includes("absent") || cleanQuery.includes("missing") || cleanQuery.includes("not in") || cleanQuery.includes("not here")) {
+        const isPresentToday = ['Checked In', 'Late Check-in', 'Completed Shift', 'Early Check-out'].some(s => todayStatus.startsWith(s));
+        if (isPresentToday) {
+          directAnswer = `❌ **No**, **${matchedEmp.name}** is not absent today. They are **present** (Current status: *${todayStatus}*).`;
+        } else {
+          directAnswer = `✅ **Yes**, **${matchedEmp.name}** is **absent/not in** today. (Current status: *${todayStatus}*)`;
+        }
+      } else if (cleanQuery.includes("leave") || cleanQuery.includes("off") || cleanQuery.includes("vacation")) {
+        if (todayStatus === 'On Leave') {
+          directAnswer = `🌴 **Yes**, **${matchedEmp.name}** is **on leave** today.`;
+        } else {
+          directAnswer = `❌ **No**, **${matchedEmp.name}** is not on leave today. (Current status: *${todayStatus}*)`;
+        }
+      } else if (cleanQuery.includes("late")) {
+        if (todayStatus.startsWith('Late Check-in') || todayStatus === 'Late (Informed)') {
+          directAnswer = `⏰ **Yes**, **${matchedEmp.name}** is marked as **late** today. (Current status: *${todayStatus}*)`;
+        } else {
+          directAnswer = `✅ **No**, **${matchedEmp.name}** is not marked late today. (Current status: *${todayStatus}*)`;
+        }
+      } else if (cleanQuery.includes("phone") || cleanQuery.includes("contact") || cleanQuery.includes("mobile") || cleanQuery.includes("number")) {
+        if (matchedEmp.phone) {
+          directAnswer = `📞 The phone number of **${matchedEmp.name}** is **+${matchedEmp.phone}**.`;
+        } else {
+          directAnswer = `📞 There is no phone number listed in the registry for **${matchedEmp.name}**.`;
+        }
+      } else if (cleanQuery.includes("salary") || cleanQuery.includes("wage") || cleanQuery.includes("pay")) {
+        const monthlyAmount = matchedEmp.monthlyWage || 0;
+        const dailyAmount = matchedEmp.dailyRate || 0;
+        directAnswer = `💰 The salary/wages of **${matchedEmp.name}** is **₹${monthlyAmount.toLocaleString('en-IN')}/month** (or **₹${dailyAmount.toFixed(2)}/day**).`;
+      }
+
+      if (directAnswer) {
+        responseText = directAnswer;
+      } else {
+        responseText = `👤 **Employee Profile: ${matchedEmp.name}**\n\n` +
+                       `• **Designation**: ${matchedEmp.designation || 'Staff'} (${matchedEmp.modeOfWork || 'Office Staff'})\n` +
+                       `• **Phone Number**: ${matchedEmp.phone ? '+' + matchedEmp.phone : 'Not Available'}\n` +
+                       `• **Wages**: ₹${(matchedEmp.dailyRate || 0).toFixed(2)}/day (or ₹${(matchedEmp.monthlyWage || 0).toLocaleString('en-IN')}/month)\n` +
+                       `• **Standard Shift**: ${matchedEmp.shiftStart || '09:00'} to ${matchedEmp.shiftEnd || '18:00'}\n` +
+                       `• **Status**: ${matchedEmp.status.toUpperCase()}\n` +
+                       `• **Today's Attendance**: ${todayStatus}\n\n` +
+                       `📊 **Monthly Stats (${today.toLocaleString('default', { month: 'long', year: 'numeric' })}):**\n` +
+                       `• **Days Present**: ${presentCount} days\n` +
+                       `• **Hours Worked**: ${totalHours.toFixed(2)} hours\n` +
+                       `• **Late Days**: ${lateCount} days\n` +
+                       `• **Net Salary (after advances)**: ₹${(payrollRow.netSalary || 0).toLocaleString('en-IN')}`;
+      }
+    }
     // 1. Intent: Present Count / Present List
-    if (hasFuzzyKeyword(cleanQuery, presentKeywords) && !hasFuzzyKeyword(cleanQuery, absentKeywords)) {
+    else if (hasFuzzyKeyword(cleanQuery, presentKeywords) && !hasFuzzyKeyword(cleanQuery, absentKeywords) && !cleanQuery.includes("late") && !cleanQuery.includes("summary")) {
       steps = [
         "Checking today's attendance records...",
         "Identifying marked 'Present' entries...",
@@ -4457,7 +4703,7 @@ app.post('/api/ai/query', (req, res) => {
         "Putting it all together..."
       ];
       
-      const presentLogs = dailyLogs.filter(log => isPresent(log.status));
+      const presentLogs = dailyLogs.filter(log => isPresent(log.status, log.checkIn));
       const count = presentLogs.length;
       
       if (count === 0) {
@@ -4476,10 +4722,8 @@ app.post('/api/ai/query', (req, res) => {
         "Putting it all together..."
       ];
       
-      // Filter active employees
       const activeEmployees = employees.filter(emp => emp.status === 'active');
-      // Find who is absent or not in logs
-      const presentIds = new Set(dailyLogs.filter(log => isPresent(log.status)).map(log => log.employeeId));
+      const presentIds = new Set(dailyLogs.filter(log => isPresent(log.status, log.checkIn)).map(log => log.employeeId));
       const leaveIds = new Set(dailyLogs.filter(log => isLeave(log.status)).map(log => log.employeeId));
       
       const absentEmployees = activeEmployees.filter(emp => !presentIds.has(emp.id) && !leaveIds.has(emp.id));
@@ -4511,7 +4755,24 @@ app.post('/api/ai/query', (req, res) => {
         responseText = `**${count} staff members are on leave today:**\n\n` + listItems.join("\n") + excelSuffixText;
       }
     }
-    // 4. Intent: Payroll / Payable this month
+    // 4. Intent: Late arrivals today
+    else if (cleanQuery.includes("late today") || cleanQuery.includes("who is late") || cleanQuery.includes("came late today")) {
+      steps = [
+        "Checking today's attendance records...",
+        "Identifying late entries...",
+        "Compiling late list...",
+        "Putting it all together..."
+      ];
+      const lateLogs = dailyLogs.filter(log => log.isLate || log.status === 'late' || log.status === 'Late Check-in');
+      const count = lateLogs.length;
+      if (count === 0) {
+        responseText = `**No staff members are marked late today.**` + excelSuffixText;
+      } else {
+        const listItems = lateLogs.map((log, index) => `${index + 1}. **${log.employeeName}** (${log.checkIn ? 'scanned at ' + new Date(log.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'informed late'})`);
+        responseText = `**${count} staff members arrived late today:**\n\n` + listItems.join("\n") + excelSuffixText;
+      }
+    }
+    // 5. Intent: Payroll / Payable this month
     else if (hasFuzzyKeyword(cleanQuery, payrollKeywords)) {
       const monthStr = today.toISOString().substring(0, 7); // e.g. "2026-06"
       const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -4524,28 +4785,172 @@ app.post('/api/ai/query', (req, res) => {
         "Putting it all together..."
       ];
       
-      const payrollData = database.getMonthlySalarySheet(monthStr);
-      const totalPayable = payrollData.summary ? payrollData.summary.totalPayable : 0;
-      const totalAdvances = payrollData.summary ? (payrollData.summary.totalAdvances || 0) : 0;
-      const totalNetPayable = payrollData.summary ? payrollData.summary.totalNetPayable : 0;
+      const payrollData = database.getMonthlySalarySheet(monthStr) || [];
+      const totalPayable = payrollData.reduce((sum, r) => sum + (Number(r.earnedSalary) || 0), 0);
+      const totalAdvances = payrollData.reduce((sum, r) => sum + (Number(r.salaryAdvance) || 0), 0);
+      const totalNetPayable = payrollData.reduce((sum, r) => sum + (Number(r.netSalary) || 0), 0);
       
       responseText = `**Total net payable salary for this month (${currentMonthName}) is ₹${totalNetPayable.toLocaleString('en-IN')}.**\n\n**Breakdown:**\n• Gross Wages: ₹${totalPayable.toLocaleString('en-IN')}\n• Deductions/Advances: ₹${totalAdvances.toLocaleString('en-IN')}\n• Net Payable: ₹${totalNetPayable.toLocaleString('en-IN')}` + excelSuffixText;
     }
-    // 5. Intent: Excel Exporter link request
+    // 6. Intent: Top performers / worked most hours
+    else if (cleanQuery.includes("top performer") || cleanQuery.includes("most hours") || cleanQuery.includes("worked most") || cleanQuery.includes("best performer")) {
+      steps = [
+        "Fetching attendance logs for this month...",
+        "Aggregating working hours per employee...",
+        "Sorting in descending order...",
+        "Putting it all together..."
+      ];
+      const monthStr = today.toISOString().substring(0, 7);
+      const startOfMonth = `${monthStr}-01`;
+      const monthlyLogs = database.getAttendanceForRange(startOfMonth, todayStr) || [];
+      const hoursMap = {};
+      monthlyLogs.forEach(log => {
+        if (log.employeeId && log.duration) {
+          hoursMap[log.employeeId] = (hoursMap[log.employeeId] || 0) + (log.duration / 60);
+        }
+      });
+      const sortedPerformers = Object.entries(hoursMap)
+        .map(([id, hours]) => {
+          const emp = employees.find(e => e.id === id);
+          return { name: emp ? emp.name : 'Unknown', hours: Number(hours.toFixed(2)) };
+        })
+        .sort((a, b) => b.hours - a.hours)
+        .slice(0, 5);
+
+      if (sortedPerformers.length === 0) {
+        responseText = `**No working hours recorded for this month yet.**`;
+      } else {
+        const listItems = sortedPerformers.map((p, index) => `${index + 1}. **${p.name}**: ${p.hours} hours`);
+        responseText = `🏆 **Top Performers (Most Hours Worked this Month):**\n\n` + listItems.join("\n");
+      }
+    }
+    // 7. Intent: Overtime rankings this month
+    else if (cleanQuery.includes("overtime rankings") || cleanQuery.includes("ot rankings") || cleanQuery.includes("most ot") || cleanQuery.includes("overtime this month")) {
+      steps = [
+        "Fetching monthly attendance records...",
+        "Aggregating overtime hours per employee...",
+        "Sorting rankings...",
+        "Putting it all together..."
+      ];
+      const monthStr = today.toISOString().substring(0, 7);
+      const startOfMonth = `${monthStr}-01`;
+      const monthlyLogs = database.getAttendanceForRange(startOfMonth, todayStr) || [];
+      const otMap = {};
+      monthlyLogs.forEach(log => {
+        if (log.employeeId && log.otHours) {
+          otMap[log.employeeId] = (otMap[log.employeeId] || 0) + Number(log.otHours);
+        }
+      });
+      const sortedOt = Object.entries(otMap)
+        .map(([id, ot]) => {
+          const emp = employees.find(e => e.id === id);
+          return { name: emp ? emp.name : 'Unknown', ot: Number(ot.toFixed(2)) };
+        })
+        .filter(p => p.ot > 0)
+        .sort((a, b) => b.ot - a.ot)
+        .slice(0, 5);
+
+      if (sortedOt.length === 0) {
+        responseText = `**No overtime hours recorded for this month yet.**`;
+      } else {
+        const listItems = sortedOt.map((p, index) => `${index + 1}. **${p.name}**: ${p.ot} OT hours`);
+        responseText = `⚡ **Overtime Rankings (Current Month):**\n\n` + listItems.join("\n");
+      }
+    }
+    // 8. Intent: Late arrivals this month
+    else if (cleanQuery.includes("late this month") || cleanQuery.includes("late arrivals this month") || cleanQuery.includes("who was late this month")) {
+      steps = [
+        "Fetching monthly attendance records...",
+        "Aggregating late arrivals...",
+        "Sorting rankings...",
+        "Putting it all together..."
+      ];
+      const monthStr = today.toISOString().substring(0, 7);
+      const startOfMonth = `${monthStr}-01`;
+      const monthlyLogs = database.getAttendanceForRange(startOfMonth, todayStr) || [];
+      const lateMap = {};
+      monthlyLogs.forEach(log => {
+        if (log.employeeId && (log.isLate || log.status === 'late' || log.status === 'Late Check-in')) {
+          lateMap[log.employeeId] = (lateMap[log.employeeId] || 0) + 1;
+        }
+      });
+      const sortedLate = Object.entries(lateMap)
+        .map(([id, lates]) => {
+          const emp = employees.find(e => e.id === id);
+          return { name: emp ? emp.name : 'Unknown', lates: lates };
+        })
+        .sort((a, b) => b.lates - a.lates)
+        .slice(0, 5);
+
+      if (sortedLate.length === 0) {
+        responseText = `**No late arrivals recorded for this month.**`;
+      } else {
+        const listItems = sortedLate.map((p, index) => `${index + 1}. **${p.name}**: ${p.lates} late arrivals`);
+        responseText = `⏰ **Late Arrival Rankings (Current Month):**\n\n` + listItems.join("\n");
+      }
+    }
+    // 9. Intent: Today's Summary
+    else if (cleanQuery.includes("summary today") || cleanQuery.includes("today's summary") || cleanQuery.includes("attendance summary today") || cleanQuery.includes("stats today")) {
+      steps = [
+        "Analyzing today's attendance logs...",
+        "Aggregating headcount metrics...",
+        "Putting it all together..."
+      ];
+      const activeEmployees = employees.filter(emp => emp.status === 'active');
+      const presentLogs = dailyLogs.filter(log => isPresent(log.status, log.checkIn));
+      const leaveLogs = dailyLogs.filter(log => isLeave(log.status));
+      const lateLogs = dailyLogs.filter(log => log.isLate || log.status === 'late' || log.status === 'Late Check-in');
+      const absentCount = activeEmployees.length - presentLogs.length - leaveLogs.length;
+
+      responseText = `📋 **Today's Attendance Summary (${todayStr}):**\n\n` +
+                     `• **Total Active Staff**: ${activeEmployees.length}\n` +
+                     `• **Present**: ${presentLogs.length} workers\n` +
+                     `• **Absent**: ${Math.max(0, absentCount)} workers\n` +
+                     `• **On Leave**: ${leaveLogs.length} workers\n` +
+                     `• **Late Arrivals**: ${lateLogs.length} workers`;
+    }
+    // 10. Intent: Employee Count
+    else if (cleanQuery.includes("employee count") || cleanQuery.includes("how many staff") || cleanQuery.includes("how many employees") || cleanQuery.includes("total employees")) {
+      steps = [
+        "Checking database employee registry...",
+        "Counting active personnel...",
+        "Putting it all together..."
+      ];
+      const activeCount = employees.filter(e => e.status === 'active').length;
+      responseText = `👥 **Total Active Staff Count:**\n\nThere are currently **${activeCount} active employees** registered in the database.`;
+    }
+    // 11. Intent: Upcoming holidays
+    else if (cleanQuery.includes("holiday") || cleanQuery.includes("holidays") || cleanQuery.includes("calendar")) {
+      steps = [
+        "Checking company holiday registry...",
+        "Filtering upcoming calendar dates...",
+        "Putting it all together..."
+      ];
+      const upcomingHolidays = (db.holidays || [])
+        .filter(h => h.date >= todayStr)
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      if (upcomingHolidays.length === 0) {
+        responseText = `**No upcoming holidays registered for the rest of the year.**`;
+      } else {
+        const listItems = upcomingHolidays.map(h => `• **${h.date}**: ${h.name}`);
+        responseText = `📅 **Upcoming Holidays:**\n\n` + listItems.join("\n");
+      }
+    }
+    // 12. Intent: Excel Exporter link request
     else if (isExcelRequested) {
       steps = [
         "Generating Excel export endpoints...",
         "Formatting spreadsheet download paths...",
         "Putting it all together..."
       ];
-      
       responseText = `Here are the Excel download links compiled according to your needs:\n\n` +
                      `• **[Download Attendance Log (Excel)](/api/export/excel?startDate=${startOfMonthStr}&endDate=${todayStr})**\n` +
                      `• **[Download Payroll Sheet (Excel)](/api/export/payroll/excel?startDate=${startOfMonthStr}&endDate=${todayStr})**\n` +
                      `• **[Download Welders Weekly Report (Excel)](/api/export/welders-weekly/excel?friday=${lastFridayStr})**\n\n` +
                      `*(The date range has been pre-configured for you from ${startOfMonthStr} to ${todayStr})*`;
     }
-    // 6. Intent: CCTV camera status
+    // 13. Intent: CCTV camera status
     else if (hasFuzzyKeyword(cleanQuery, cctvKeywords)) {
       steps = [
         "Querying active CCTV stream threads...",
@@ -4559,7 +4964,7 @@ app.post('/api/ai/query', (req, res) => {
       responseText = `**CCTV System Status:**\n\nCurrently, there are **${activeCount} active camera feed(s)** configured in the workspace:\n` +
                      cameras.map(c => `• **${c.name}**: ${c.eventType.toUpperCase()} feed (${c.source})`).join("\n");
     }
-    // 6. Intent: Help / Website FAQ
+    // 13. Intent: Help / FAQs
     else if (hasFuzzyKeyword(cleanQuery, helpKeywords) || cleanQuery.includes("how to") || cleanQuery.includes("features")) {
       steps = [
         "Searching website user manual...",
@@ -4573,7 +4978,7 @@ app.post('/api/ai/query', (req, res) => {
                      `4. **Android APK Download**: Download the companion Android Face Check-In App from the **Settings** panel link.\n` +
                      `5. **Chatbot Commands**: You can query me anytime for present lists, absentees, leaves, and payroll breakdown totals!`;
     }
-    // Default fallback
+    // 14. Default fallback help response
     else {
       steps = [
         "Analyzing search parameters...",
