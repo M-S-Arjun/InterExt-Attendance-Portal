@@ -909,7 +909,7 @@ class AttendanceParser {
         }
       }
 
-      if (timeMatches.length >= 2 && actionType !== 'out-for-lunch' && actionType !== 'half-day-leave') {
+      if (timeMatches.length >= 2 && actionType !== 'out-for-lunch' && actionType !== 'half-day-leave' && actionType !== 'late' && !hasParsedLate) {
         try {
           checkInTimestamp = parseTimeStr(timeMatches[0], dateStr, false);
           checkOutTimestamp = parseTimeStr(timeMatches[1], dateStr, true);
@@ -917,7 +917,7 @@ class AttendanceParser {
         } catch (err) {
           console.error("Time range parsing failed:", err);
         }
-      } else if (timeMatches.length === 1 && actionType !== 'half-day-leave' && actionType !== 'out-for-lunch') {
+      } else if (timeMatches.length === 1 && actionType !== 'half-day-leave' && actionType !== 'out-for-lunch' && actionType !== 'late' && !hasParsedLate) {
         const outKeywords = ['out', 'checkout', 'check-out', 'left', 'exit', 'finish', 'done', 'leaving'];
         const foundOut = outKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(lineForTimeMatching));
         try {

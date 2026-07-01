@@ -92,7 +92,7 @@ def crossing_direction(l1, l2, t_prev, t_curr):
 # ==========================================================================
 
 class CCTVStreamProcessor(threading.Thread):
-    def __init__(self, camera_id, name, source, site_name, event_type, threshold=0.52, node_server="http://localhost:3000", invert_direction=False):
+    def __init__(self, camera_id, name, source, site_name, event_type, threshold=0.51, node_server="http://localhost:3000", invert_direction=False):
         super().__init__()
         self.camera_id = camera_id
         self.name = name
@@ -1181,12 +1181,25 @@ class CCTVStreamProcessor(threading.Thread):
         self.running = False
 
 
-def start_cctv_thread(camera_id, name, source, site_name, event_type, threshold=0.52, node_server="http://localhost:3000", invert_direction=False, y_line_percent=None):
+def start_cctv_thread(camera_id, name, source, site_name, event_type, threshold=0.51, node_server="http://localhost:3000", invert_direction=False, y_line_percent=None):
     with active_cameras_lock:
         if camera_id in active_cameras:
+            existing = active_cameras[camera_id]
+            # Check if camera is alive and configuration parameters match
+            if (existing.running and existing.is_alive() and
+                existing.source == source and
+                existing.name == name and
+                existing.threshold == threshold and
+                existing.invert_direction == invert_direction and
+                getattr(existing, '_y_line_percent', None) == y_line_percent):
+                logger.info(f"Camera thread {camera_id} is already running with identical configuration. Skipping restart.")
+                return True
+                
             logger.info(f"Camera thread {camera_id} is already running. Stopping it...")
-            active_cameras[camera_id].stop_capture()
-            active_cameras[camera_id].join(timeout=2.0)
+            existing.stop_capture()
+            existing.join(timeout=5.0)
+            if existing.is_alive():
+                logger.warning(f"Old camera thread {camera_id} did not stop within 5 seconds. Forcing removal from active cache.")
             del active_cameras[camera_id]
             
         processor = CCTVStreamProcessor(camera_id, name, source, site_name, event_type, threshold, node_server, invert_direction)

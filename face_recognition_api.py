@@ -79,7 +79,7 @@ def _restore_cameras():
                         cfg['source'],
                         cfg.get('site_name', 'Office'),
                         cfg.get('event_type', 'auto'),
-                        cfg.get('threshold', 0.52),
+                        cfg.get('threshold', 0.51),
                         node_server,
                         cfg.get('invert_direction', False)
                     )
@@ -189,7 +189,7 @@ def recognize_face():
     - JSON: {'image': 'base64_image_data'} or
     - Files: {'image': file_object}
     Optional:
-    - {'threshold': 0.52}
+    - {'threshold': 0.51}
     """
     try:
         if not model:
@@ -201,8 +201,8 @@ def recognize_face():
         threshold = request.form.get('threshold', None, type=float)
         if threshold is None and request.is_json:
             body = request.get_json(silent=True) or {}
-            threshold = float(body.get('threshold', 0.52))
-        threshold = threshold if threshold is not None else 0.52
+            threshold = float(body.get('threshold', 0.51))
+        threshold = threshold if threshold is not None else 0.51
         
         # Get image data
         image_data = None
@@ -335,7 +335,7 @@ def cctv_start():
         source = data.get('source') or request.form.get('source')
         site_name = data.get('site_name') or request.form.get('site_name', 'Office')
         event_type = data.get('event_type') or request.form.get('event_type', 'auto')
-        threshold = float(data.get('threshold') or request.form.get('threshold', 0.52))
+        threshold = float(data.get('threshold') or request.form.get('threshold', 0.51))
         
         # invert_direction can be boolean or string 'true'/'false'
         invert_dir_val = data.get('invert_direction') or request.form.get('invert_direction', 'false')

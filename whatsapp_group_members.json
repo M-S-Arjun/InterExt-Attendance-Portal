@@ -364,6 +364,13 @@
     "isSuperAdmin": false
   },
   {
+    "id": "919400910682",
+    "serialized": "919400910682@c.us",
+    "resolvedPhone": "919400910682",
+    "isAdmin": false,
+    "isSuperAdmin": false
+  },
+  {
     "id": "919633603478",
     "serialized": "919633603478@c.us",
     "resolvedPhone": "919633603478",
@@ -381,13 +388,6 @@
     "id": "918075849819",
     "serialized": "918075849819@c.us",
     "resolvedPhone": "918075849819",
-    "isAdmin": false,
-    "isSuperAdmin": false
-  },
-  {
-    "id": "919400910682",
-    "serialized": "919400910682@c.us",
-    "resolvedPhone": "919400910682",
     "isAdmin": false,
     "isSuperAdmin": false
   },

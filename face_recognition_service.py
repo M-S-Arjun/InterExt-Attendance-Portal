@@ -214,7 +214,7 @@ class FaceRecognitionModel:
             traceback.print_exc()
             return None
 
-    def recognize_faces(self, image_path_or_data, threshold: float = 0.52) -> List[Tuple[str, float]]:
+    def recognize_faces(self, image_path_or_data, threshold: float = 0.51) -> List[Tuple[str, float]]:
         """
         Recognize multiple employees from image
         
@@ -400,7 +400,7 @@ class FaceRecognitionModel:
         except Exception as e:
             logger.error(f"Failed to load embeddings: {e}")
     
-    def recognize_face(self, image_path_or_data, threshold: float = 0.52) -> Optional[Tuple[str, float]]:
+    def recognize_face(self, image_path_or_data, threshold: float = 0.51) -> Optional[Tuple[str, float]]:
         """
         Recognize employee from image
         
@@ -475,7 +475,7 @@ def main():
     parser.add_argument('--recognize', type=str, help='Recognize face in image')
     parser.add_argument('--save', type=str, help='Save embeddings to file')
     parser.add_argument('--load', type=str, help='Load embeddings from file')
-    parser.add_argument('--threshold', type=float, default=0.52, help='Recognition threshold')
+    parser.add_argument('--threshold', type=float, default=0.51, help='Recognition threshold')
     parser.add_argument('--model', type=str, default='buffalo_l', help='Model name')
     
     args = parser.parse_args()

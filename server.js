@@ -23,7 +23,7 @@ const database = require('./database');
 const whatsapp = require('./whatsapp');
 const bcrypt = require('bcryptjs');
 
-const FACE_RECOGNITION_MIN_CONFIDENCE = 0.52;
+const FACE_RECOGNITION_MIN_CONFIDENCE = 0.51;
 
 function getLocalDateString(dateInput = new Date()) {
   const d = new Date(dateInput);
@@ -320,6 +320,10 @@ app.post('/api/employee/login', (req, res) => {
     if (!isValid) {
       return res.status(401).json({ error: "Invalid Employee ID or password." });
     }
+
+    if (employee.status !== 'active') {
+      return res.status(401).json({ error: "Access denied. Employee profile is inactive." });
+    }
     
     const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
     activeEmployeeSessions.set(token, employee.id);
@@ -355,10 +359,11 @@ app.post('/api/employee/change-password', requireEmployeeAuth, (req, res) => {
     }
     
     let isValid = false;
-    if (!employee.password) {
-      isValid = (oldPassword === "1234");
-    } else {
-      isValid = bcrypt.compareSync(oldPassword, employee.password);
+    const currentPasscode = String(employee.passcode || '1234');
+    if (oldPassword === currentPasscode) {
+      isValid = true;
+    } else if (employee.password && bcrypt.compareSync(oldPassword, employee.password)) {
+      isValid = true;
     }
     
     if (!isValid) {
@@ -366,6 +371,7 @@ app.post('/api/employee/change-password', requireEmployeeAuth, (req, res) => {
     }
     
     employee.password = bcrypt.hashSync(newPassword, 10);
+    employee.passcode = String(newPassword).trim();
     database.writeAtomic(db);
     database.syncToExcelAsync();
     
@@ -386,22 +392,22 @@ app.get('/api/employee/dashboard-data', requireEmployeeAuth, (req, res) => {
 
     const todayStr = getLocalDateString();
     
-    // Fetch employee attendance logs this month
-    const currentMonthPrefix = new Date().toISOString().substring(0, 7); // "2026-06"
-    const attendanceLogs = (db.attendance || []).filter(
-      a => a.employeeId === employee.id && a.date.startsWith(currentMonthPrefix)
+    // Fetch employee attendance logs (full history)
+    const fullAttendanceLogs = (db.attendance || []).filter(
+      a => a.employeeId === employee.id
     );
+    fullAttendanceLogs.sort((a, b) => b.date.localeCompare(a.date));
     
-    // Sort logs descending by date
-    attendanceLogs.sort((a, b) => b.date.localeCompare(a.date));
+    const currentMonthPrefix = new Date().toISOString().substring(0, 7);
+    const currentMonthLogs = fullAttendanceLogs.filter(a => a.date.startsWith(currentMonthPrefix));
     
     // Helper function to check if a status is present
     const isPresent = (status, checkIn) => ['checked-in', 'completed', 'Late Check-in', 'Early Check-out', 'half-day leave'].includes(status) || (status === 'late' && checkIn);
 
-    // Sum worked days, late days, OT hours
-    const workedDays = attendanceLogs.filter(a => isPresent(a.status, a.checkIn)).length;
-    const lateDays = attendanceLogs.filter(a => a.isLate === true || a.status === 'late' || a.status === 'Late Check-in').length;
-    const otHoursSum = attendanceLogs.reduce((sum, a) => sum + (Number(a.otHours) || 0), 0);
+    // Sum worked days, late days, OT hours for current month
+    const workedDays = currentMonthLogs.filter(a => isPresent(a.status, a.checkIn)).length;
+    const lateDays = currentMonthLogs.filter(a => a.isLate === true || a.status === 'late' || a.status === 'Late Check-in').length;
+    const otHoursSum = currentMonthLogs.reduce((sum, a) => sum + (Number(a.otHours) || 0), 0);
     
     // Active loans and balance
     const loans = employee.loans || [];
@@ -420,42 +426,96 @@ app.get('/api/employee/dashboard-data', requireEmployeeAuth, (req, res) => {
     const leavesRemaining = Math.max(0, leavesAllowed - totalLeavesTaken);
     
     // Fetch payslips (monthly salary sheet calculations)
-    // Let's generate payslip details dynamically for the past 3 months
+    // Generate payslip details dynamically for ALL distinct months the employee has logs or payroll records
     const payslips = [];
-    const currentMonth = new Date().getMonth();
-    const currentYear = new Date().getFullYear();
+    const uniqueMonths = new Set();
     
-    for (let i = 0; i < 3; i++) {
-      const d = new Date(currentYear, currentMonth - i, 1);
-      const mStr = d.toISOString().substring(0, 7);
+    // Scan attendance for months
+    (db.attendance || []).forEach(a => {
+      if (a.employeeId === employee.id && a.date) {
+        uniqueMonths.add(a.date.substring(0, 7));
+      }
+    });
+    
+    // Scan past payroll adjustments
+    (db.payroll || []).forEach(p => {
+      if (p.employeeId === employee.id && p.month) {
+        uniqueMonths.add(p.month);
+      }
+    });
+
+    // Add current month prefix
+    uniqueMonths.add(currentMonthPrefix);
+    
+    // Sort months descending (newest first)
+    const sortedMonths = Array.from(uniqueMonths).sort((a, b) => b.localeCompare(a));
+    
+    for (const mStr of sortedMonths) {
+      const parts = mStr.split('-');
+      if (parts.length !== 2) continue;
+      const year = parseInt(parts[0]);
+      const month = parseInt(parts[1]);
+      const d = new Date(year, month - 1, 1);
       const mName = d.toLocaleString('default', { month: 'long', year: 'numeric' });
       
-      const salarySheet = database.getMonthlySalarySheet(mStr);
-      const empRecord = (salarySheet.rows || []).find(r => r.id === employee.id);
+      const salarySheet = database.getMonthlySalarySheet(mStr) || [];
+      const empRecord = salarySheet.find(r => r.employeeId === employee.id || r.id === employee.id);
       
       if (empRecord) {
         payslips.push({
           period: mName,
           monthStr: mStr,
-          daysWorked: empRecord.daysWorked || 0,
-          grossSalary: empRecord.payableSalary || 0,
-          deductions: empRecord.advancesDeducted || 0,
-          netSalary: empRecord.netPayable || 0,
-          dailyRate: employee.dailyRate || 0,
+          daysWorked: empRecord.workingDays !== undefined ? empRecord.workingDays : 0,
+          grossSalary: empRecord.earnedSalary || 0,
+          deductions: empRecord.salaryAdvance || 0,
+          netSalary: empRecord.netSalary || 0,
+          dailyRate: empRecord.dailyRate || employee.dailyRate || 0,
           monthlyWage: employee.monthlyWage || 0,
+          otHours: empRecord.otHours || 0,
+          otPayout: empRecord.otPayout || 0,
+          pfDeduction: empRecord.pfDeduction || 0,
+          esicDeduction: empRecord.esicDeduction || 0,
+          ptDeduction: empRecord.ptDeduction || 0,
+          lopDays: empRecord.lopDays || 0,
+          lopAmount: empRecord.lopAmount || 0,
           designation: employee.designation || "Staff"
         });
       }
     }
 
+    // Calculate current month's estimated salary
+    const isOfficeStaff = employee.modeOfWork && employee.modeOfWork.toLowerCase().trim() === 'office staff';
+    const isDailyWageWorker = !isOfficeStaff;
+    const stdWorkingDays = isOfficeStaff ? 30 : 26;
+    
+    let estimatedSalary = 0;
+    const dailyRate = Number(employee.dailyRate) || 0;
+    const monthlyWage = Number(employee.monthlyWage) || 0;
+    const hourlyRate = Number(employee.hourlyRate) || (dailyRate / 8);
+    const otPayout = otHoursSum * hourlyRate;
+    
+    if (isDailyWageWorker) {
+      estimatedSalary = (dailyRate * workedDays) + otPayout;
+    } else {
+      if (employee.fixedSalary === true || employee.fixedSalary === 'true' || employee.salaryLocked === true) {
+        estimatedSalary = monthlyWage + otPayout;
+      } else {
+        const fraction = Math.min(1, workedDays / stdWorkingDays);
+        estimatedSalary = (monthlyWage * fraction) + otPayout;
+      }
+    }
+    
+    // Deduct active loan installments due this month if any
+    const monthlyDeductions = activeLoans.reduce((sum, l) => sum + (Number(l.monthlyInstallment) || 0), 0);
+    estimatedSalary = Math.max(0, Math.round(estimatedSalary - monthlyDeductions));
+
+    // Clone employee object and remove sensitive credentials
+    const employeeInfo = { ...employee };
+    delete employeeInfo.passcode;
+
     res.json({
       success: true,
-      employee: {
-        id: employee.id,
-        userId: employee.userId,
-        name: employee.name,
-        designation: employee.designation || "Staff"
-      },
+      employee: employeeInfo,
       stats: {
         workedDays,
         lateDays,
@@ -463,12 +523,53 @@ app.get('/api/employee/dashboard-data', requireEmployeeAuth, (req, res) => {
         totalLoanBalance,
         leavesAllowed,
         leavesTaken: totalLeavesTaken,
-        leavesRemaining
+        leavesRemaining,
+        estimatedSalary
       },
-      attendance: attendanceLogs,
+      attendance: fullAttendanceLogs,
       loans: loans,
       leaves: leaveApplications,
       payslips: payslips
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Employee Monthly Attendance History Endpoint
+app.get('/api/employee/attendance-month', requireEmployeeAuth, (req, res) => {
+  try {
+    const { month } = req.query; // YYYY-MM
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: "Valid month string (YYYY-MM) is required." });
+    }
+    
+    const db = database.read();
+    const employee = db.employees.find(e => e && e.id === req.employeeId);
+    if (!employee) {
+      return res.status(404).json({ error: "Employee not found." });
+    }
+    
+    const attendanceLogs = (db.attendance || []).filter(
+      a => a.employeeId === employee.id && a.date.startsWith(month)
+    );
+    
+    attendanceLogs.sort((a, b) => b.date.localeCompare(a.date));
+    
+    const isPresent = (status, checkIn) => ['checked-in', 'completed', 'Late Check-in', 'Early Check-out', 'half-day leave'].includes(status) || (status === 'late' && checkIn);
+    
+    const workedDays = attendanceLogs.filter(a => isPresent(a.status, a.checkIn)).length;
+    const lateDays = attendanceLogs.filter(a => a.isLate === true || a.status === 'late' || a.status === 'Late Check-in').length;
+    const otHoursSum = attendanceLogs.reduce((sum, a) => sum + (Number(a.otHours) || 0), 0);
+    
+    res.json({
+      success: true,
+      attendance: attendanceLogs,
+      stats: {
+        workedDays,
+        lateDays,
+        otHours: otHoursSum
+      }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -507,6 +608,109 @@ app.post('/api/employee/apply-leave', requireEmployeeAuth, (req, res) => {
     database.syncToExcelAsync();
     
     res.status(201).json({ success: true, leave: newLeave });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Employee Update Profile Endpoint
+app.post('/api/employee/update-profile', requireEmployeeAuth, (req, res) => {
+  try {
+    const db = database.read();
+    const employee = db.employees.find(e => e && e.id === req.employeeId);
+    if (!employee) {
+      return res.status(404).json({ error: "Employee not found." });
+    }
+
+    const updates = req.body;
+    
+    // Safety check: Only allow updates on these specific personal/document fields
+    const allowedFields = [
+      'phone', 'dob', 'joiningDate', 'emergencyContact', 'bloodGroup', 'address',
+      'aadhaar', 'pan', 'drivingLicense'
+    ];
+
+    allowedFields.forEach(field => {
+      if (updates[field] !== undefined) {
+        employee[field] = updates[field];
+      }
+    });
+
+    // Handle Profile Photo Upload
+    if (updates.profilePhotoBase64) {
+      const uploadsDir = path.join(__dirname, 'public', 'uploads', 'profiles');
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+      
+      let ext = 'png';
+      const mimeMatch = updates.profilePhotoBase64.match(/^data:([a-zA-Z0-9.+\/-]+);base64,/);
+      if (mimeMatch) {
+        const mimeType = mimeMatch[1];
+        if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') ext = 'jpg';
+        else if (mimeType === 'image/webp') ext = 'webp';
+      }
+      
+      const base64Data = updates.profilePhotoBase64.replace(/^data:[a-zA-Z0-9.+\/-]+;base64,/, '');
+      const filename = `${employee.id}_${Date.now()}.${ext}`;
+      fs.writeFileSync(path.join(uploadsDir, filename), Buffer.from(base64Data, 'base64'));
+      
+      // Clean up old photo
+      if (employee.profilePhoto) {
+        const oldPath = path.join(__dirname, 'public', employee.profilePhoto);
+        if (fs.existsSync(oldPath)) {
+          try { fs.unlinkSync(oldPath); } catch (e) {}
+        }
+      }
+      employee.profilePhoto = `/uploads/profiles/${filename}`;
+    }
+
+    // Handle Document Scans Upload
+    const docFields = [
+      { base64Key: 'aadhaarPhotoBase64', pathKey: 'aadhaarPhoto', prefix: 'aadhaar' },
+      { base64Key: 'panPhotoBase64', pathKey: 'panPhoto', prefix: 'pan' },
+      { base64Key: 'drivingLicensePhotoBase64', pathKey: 'drivingLicensePhoto', prefix: 'dl' }
+    ];
+
+    docFields.forEach(field => {
+      if (updates[field.base64Key]) {
+        const docDir = path.join(__dirname, 'public', 'uploads', 'documents');
+        if (!fs.existsSync(docDir)) {
+          fs.mkdirSync(docDir, { recursive: true });
+        }
+        
+        let ext = 'png';
+        const mimeMatch = updates[field.base64Key].match(/^data:([a-zA-Z0-9.+\/-]+);base64,/);
+        if (mimeMatch) {
+          const mimeType = mimeMatch[1];
+          if (mimeType === 'application/pdf') ext = 'pdf';
+          else if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') ext = 'jpg';
+          else if (mimeType === 'image/webp') ext = 'webp';
+        }
+        
+        const base64Data = updates[field.base64Key].replace(/^data:[a-zA-Z0-9.+\/-]+;base64,/, '');
+        const filename = `${field.prefix}_${employee.id}_${Date.now()}.${ext}`;
+        fs.writeFileSync(path.join(docDir, filename), Buffer.from(base64Data, 'base64'));
+        
+        // Clean up old file
+        if (employee[field.pathKey]) {
+          const oldPath = path.join(__dirname, 'public', employee[field.pathKey]);
+          if (fs.existsSync(oldPath)) {
+            try { fs.unlinkSync(oldPath); } catch (e) {}
+          }
+        }
+        employee[field.pathKey] = `/uploads/documents/${filename}`;
+      }
+    });
+
+    database.writeAtomic(db);
+    database.syncToExcelAsync();
+
+    // Remove passcode for clean response
+    const saved = { ...employee };
+    delete saved.passcode;
+
+    res.json({ success: true, employee: saved });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1012,6 +1216,253 @@ app.post('/api/attendance/save', (req, res) => {
   }
 });
 
+// Import biometric attendance from Excel file (Base64)
+app.post('/api/attendance/import-biometric', async (req, res) => {
+  try {
+    const { fileBase64 } = req.body;
+    if (!fileBase64) {
+      return res.status(400).json({ error: 'fileBase64 is required.' });
+    }
+
+    const buffer = Buffer.from(fileBase64, 'base64');
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    // raw: false formats cells according to Excel formats (string representations)
+    const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '', raw: false });
+
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ error: 'The uploaded Excel file is empty.' });
+    }
+
+    // Auto-detect columns in the first 15 rows with robust default fallbacks
+    let colUserId = -1;
+    let colName = -1;
+    let colShift = -1;
+    let inCols = [];
+    let outCols = [];
+
+    for (let i = 0; i < Math.min(rows.length, 15); i++) {
+      const row = rows[i];
+      if (!row) continue;
+      for (let c = 0; c < row.length; c++) {
+        const val = row[c] ? row[c].toString().toLowerCase().trim() : '';
+        if (!val) continue;
+
+        if (colUserId === -1 && (val === 'user id' || val === 'emp code' || val === 'userid' || val === 'empcode' || val === 'user_id' || val === 'id' || val === 'run by:' || val.includes('user'))) {
+          if (val !== 'run by:' && !val.includes('run by')) {
+            colUserId = c;
+          }
+        }
+        if (colName === -1 && (val === 'name' || val === 'user name' || val === 'employee name' || val === 'username' || val.includes('name'))) {
+          if (!val.includes('run by')) {
+            colName = c;
+          }
+        }
+        if (colShift === -1 && (val === 'shift' || val.includes('shift'))) {
+          colShift = c;
+        }
+
+        if (val.startsWith('in-') || val === 'in' || val.includes('in-spfid') || val.includes('check-in') || val.includes('checkin') || val === 'in1' || val === 'in2') {
+          if (!inCols.includes(c)) inCols.push(c);
+        } else if (val.startsWith('out-') || val === 'out' || val.includes('out-spfid') || val.includes('check-out') || val.includes('checkout') || val === 'out1' || val === 'out2') {
+          if (!outCols.includes(c)) outCols.push(c);
+        }
+      }
+    }
+
+    // Apply fallbacks based on typical biometric Excel report structures (Column B=User ID, C=Name, D=Shift, E=In1, F=Out1, G=In2, H=Out2)
+    if (colUserId === -1) colUserId = 1;
+    if (colName === -1) colName = 2;
+    if (colShift === -1) colShift = 3;
+
+    inCols.sort((a, b) => a - b);
+    outCols.sort((a, b) => a - b);
+
+    if (inCols.length === 0) {
+      inCols = [4, 6];
+    }
+    if (outCols.length === 0) {
+      outCols = [5, 7];
+    }
+
+    let colIn1 = inCols[0];
+    let colOut1 = outCols[0];
+    let colIn2 = inCols.length > 1 ? inCols[1] : (outCols[0] + 1); // fallback index if not detected
+    let colOut2 = outCols.length > 1 ? outCols[1] : (colIn2 + 1);
+
+    const db = database.read();
+    const employees = db.employees || [];
+    let currentDateStr = null;
+    let importedCount = 0;
+    const unrecognizedEmployeesMap = new Map();
+    const importedRecords = [];
+
+    // Robust time parser to support string hours and numeric fractional day representations
+    const parseTime = (val) => {
+      if (!val) return null;
+      
+      const s = val.toString().trim();
+      const match = s.match(/^(\d{1,2}):(\d{2})/);
+      if (match) {
+        const h = match[1].padStart(2, '0');
+        const m = match[2];
+        return `${h}:${m}:00`;
+      }
+      
+      if (typeof val === 'number') {
+        const totalMinutes = Math.round(val * 24 * 60);
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        const h = hours.toString().padStart(2, '0');
+        const m = minutes.toString().padStart(2, '0');
+        return `${h}:${m}:00`;
+      }
+      
+      return null;
+    };
+
+    database.startTransaction();
+
+    try {
+      for (let r = 0; r < rows.length; r++) {
+        const row = rows[r];
+        if (!row || row.length === 0) continue;
+
+        const cell0 = row[0] ? row[0].toString().trim() : '';
+
+        // 1. Date Header Detection
+        if (cell0) {
+          // Matches DD/MM/YYYY, DD-MM-YYYY
+          let dateMatch = cell0.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})/);
+          if (dateMatch) {
+            const day = dateMatch[1];
+            const month = dateMatch[2];
+            const year = dateMatch[3];
+            currentDateStr = `${year}-${month}-${day}`;
+            continue;
+          }
+          
+          dateMatch = cell0.match(/^(\d{4})[\/\-](\d{2})[\/\-](\d{2})/);
+          if (dateMatch) {
+            const year = dateMatch[1];
+            const month = dateMatch[2];
+            const day = dateMatch[3];
+            currentDateStr = `${year}-${month}-${day}`;
+            continue;
+          }
+
+          // Handle native JavaScript Date object parsed by xlsx
+          if (row[0] instanceof Date) {
+            const d = row[0];
+            const y = d.getFullYear();
+            const m = (d.getMonth() + 1).toString().padStart(2, '0');
+            const dy = d.getDate().toString().padStart(2, '0');
+            currentDateStr = `${y}-${m}-${dy}`;
+            continue;
+          }
+        }
+
+        // 2. Data Row Identification (Starts with numeric biometric User ID in detected User ID column)
+        const userIdVal = row[colUserId] ? row[colUserId].toString().trim() : '';
+        if (!userIdVal) continue;
+
+        const userIdMatch = userIdVal.match(/^\d+$/);
+        if (userIdMatch && currentDateStr) {
+          const userId = userIdVal;
+          const empName = row[colName] ? row[colName].toString().trim() : '';
+
+          // Look up worker in registry
+          let employee = employees.find(e => e.userId && e.userId.toString().trim() === userId);
+          if (!employee) {
+            employee = employees.find(e => e.id === `emp_${userId}`);
+          }
+          if (!employee && empName) {
+            employee = employees.find(e => e.name && e.name.toLowerCase().trim() === empName.toLowerCase());
+          }
+
+          if (!employee) {
+            unrecognizedEmployeesMap.set(userId, { userId, name: empName || 'Unknown Name' });
+            continue;
+          }
+
+          // Parse raw punch times
+          const in1 = parseTime(row[colIn1]);
+          const out1 = parseTime(row[colOut1]);
+          const in2 = parseTime(row[colIn2]);
+          const out2 = parseTime(row[colOut2]);
+
+          const punches = [];
+          const createPunchTimeStr = (timeStr) => {
+            const [h, m, s] = timeStr.split(':').map(Number);
+            const [yr, mo, dy] = currentDateStr.split('-').map(Number);
+            const utcDate = new Date(Date.UTC(yr, mo - 1, dy, h, m, s || 0));
+            utcDate.setMinutes(utcDate.getMinutes() - 330); // Convert IST to UTC (IST is UTC + 5:30)
+            return utcDate.toISOString();
+          };
+
+          if (in1) punches.push({ time: createPunchTimeStr(in1), type: 'in', siteName: 'INTEREXT OFFICE', messageText: 'Biometric Punching Machine', source: 'Biometric' });
+          if (out1) punches.push({ time: createPunchTimeStr(out1), type: 'out', siteName: 'INTEREXT OFFICE', messageText: 'Biometric Punching Machine', source: 'Biometric' });
+          if (in2) punches.push({ time: createPunchTimeStr(in2), type: 'in', siteName: 'INTEREXT OFFICE', messageText: 'Biometric Punching Machine', source: 'Biometric' });
+          if (out2) punches.push({ time: createPunchTimeStr(out2), type: 'out', siteName: 'INTEREXT OFFICE', messageText: 'Biometric Punching Machine', source: 'Biometric' });
+
+          if (punches.length === 0) continue;
+
+          // Earliest punch is check-in, latest is check-out (if it's an out type)
+          const sortedPunches = punches.sort((a, b) => new Date(a.time) - new Date(b.time));
+          const checkIn = sortedPunches[0].time;
+          let checkOut = null;
+          if (sortedPunches.length > 1) {
+            const last = sortedPunches[sortedPunches.length - 1];
+            if (last.type === 'out') {
+              checkOut = last.time;
+            }
+          }
+
+          const attendanceRecord = {
+            employeeId: employee.id,
+            employeeName: employee.name,
+            date: currentDateStr,
+            checkIn: checkIn,
+            checkOut: checkOut,
+            punches: sortedPunches,
+            source: 'INTEREXT OFFICE'
+          };
+
+          database.saveAttendance(attendanceRecord);
+          importedCount++;
+          importedRecords.push({
+            userId,
+            name: employee.name,
+            date: currentDateStr,
+            checkIn: in1 || '',
+            checkOut: out1 || ''
+          });
+        }
+      }
+
+      database.commitTransaction();
+      
+      // Notify client-side listeners that attendance logs have changed
+      io.emit('attendance_updated');
+      
+      res.json({
+        success: true,
+        importedCount,
+        unrecognized: Array.from(unrecognizedEmployeesMap.values()),
+        importedRecords
+      });
+    } catch (dbErr) {
+      database.isBatching = false;
+      database.batchDb = null;
+      throw dbErr;
+    }
+  } catch (err) {
+    console.error('[API] Biometric import failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Camera attendance events
 app.get('/api/attendance/camera/events', (req, res) => {
   const { employeeId, date, limit, search } = req.query;
@@ -1215,7 +1666,7 @@ app.post('/api/face/recognize', async (req, res) => {
         method: 'POST',
         body: JSON.stringify({
           image: imageBase64,
-          threshold: threshold || 0.52
+          threshold: threshold || 0.51
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -2037,7 +2488,7 @@ app.post('/api/cctv', async (req, res) => {
             source: savedCamera.source,
             site_name: siteName,
             event_type: savedCamera.eventType,
-            threshold: 0.52
+            threshold: 0.51
           })
         });
       } catch (err) {
@@ -2929,7 +3380,18 @@ app.post('/api/employee/login', (req, res) => {
       return res.status(401).json({ error: "Invalid employee ID or phone number." });
     }
 
-    if (String(employee.passcode || '1234') !== cleanPass) {
+    if (employee.status !== 'active') {
+      return res.status(401).json({ error: "Access denied. Employee profile is inactive." });
+    }
+
+    let isPassValid = false;
+    if (String(employee.passcode || '1234') === cleanPass) {
+      isPassValid = true;
+    } else if (employee.password && bcrypt.compareSync(cleanPass, employee.password)) {
+      isPassValid = true;
+    }
+
+    if (!isPassValid) {
       return res.status(401).json({ error: "Incorrect passcode." });
     }
 
@@ -5073,7 +5535,7 @@ server.listen(PORT, () => {
             source: cam.source,
             site_name: siteName,
             event_type: cam.eventType,
-            threshold: 0.52
+            threshold: 0.51
           })
         });
       } catch (err) {
@@ -5145,7 +5607,7 @@ server.listen(PORT, () => {
                 source: cam.source,
                 site_name: siteName,
                 event_type: cam.eventType,
-                threshold: 0.52
+                threshold: 0.51
               }),
               signal: AbortSignal.timeout(5000)
             });

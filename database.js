@@ -263,11 +263,13 @@ class Database {
     const db = this.read();
     const index = db.employees.findIndex(e => e.id === employee.id);
     
+    let saved;
     if (index >= 0) {
       db.employees[index] = { ...db.employees[index], ...employee };
       if (db.employees[index].name) {
         db.employees[index].name = this.toTitleCase(db.employees[index].name);
       }
+      saved = db.employees[index];
     } else {
       employee.id = employee.id || `emp_${Date.now()}`;
       employee.status = employee.status || 'active';
@@ -275,11 +277,12 @@ class Database {
       employee.dailyRate = Number(employee.dailyRate) || 0.0;
       employee.hourlyRate = Number(employee.hourlyRate) || 0.0;
       db.employees.push(employee);
+      saved = employee;
     }
     
     this.writeAtomic(db);
     this.syncToExcelAsync();
-    return employee;
+    return saved;
   }
 
   deleteEmployee(id) {
@@ -567,19 +570,22 @@ class Database {
     let calculatedWage = 0.0;
     
     const isOfficeStaff = employee.modeOfWork && employee.modeOfWork.toLowerCase().trim() === 'office staff';
+    const isEligible = employee.otEligible !== undefined ? (employee.otEligible === true || employee.otEligible === 'true') : !isOfficeStaff;
     
     const forceHalfDay = record && record.status === 'half-day leave';
     if (totalHours >= F && !forceHalfDay) {
       // Full Day + Overtime
       isFullDay = true;
       regularHours = F;
-      if (isOfficeStaff) {
+      if (!isEligible) {
         otHours = 0.0;
         calculatedWage = dailyRate;
       } else {
         const exactOT = totalHours - overtimeBaseHours;
-        if (exactOT > 0) {
-          const otMinutes = Math.round(exactOT * 60);
+        const graceHours = (Number(employee.otGraceMinutes) || 0) / 60;
+        const billableOT = exactOT - graceHours;
+        if (billableOT > 0) {
+          const otMinutes = Math.round(billableOT * 60);
           if (otMinutes < 50) {
             otHours = 0.0;
           } else {
@@ -596,7 +602,7 @@ class Database {
       // Half Day + Extra Hours
       isHalfDay = true;
       regularHours = h;
-      if (isOfficeStaff) {
+      if (!isEligible) {
         extraHours = 0.0;
         calculatedWage = Number((dailyRate * 0.5).toFixed(2));
       } else {
@@ -733,6 +739,7 @@ class Database {
       } catch (imgErr) {
         console.warn('[CameraEvent] Failed to save attached image:', imgErr.message);
       }
+      delete event.imageBase64;
     }
 
     const existingIndex = db.cameraEvents.findIndex(e => e.id === event.id);
@@ -1118,6 +1125,34 @@ class Database {
     record.calculatedWage = Number(record.calculatedWage) || 0.0;
     record.travelHours = Number(record.travelHours) || 0.0;
     
+    // Set scannedCheckIn automatically to true if there is any punch from CCTV or Selfie
+    if (record.punches && record.punches.length > 0) {
+      const hasPhysicalScan = record.punches.some(p => p.source === 'CCTV' || p.source === 'Selfie');
+      if (hasPhysicalScan) {
+        record.scannedCheckIn = true;
+      }
+    }
+
+    // Unless it's a manual override or leave, ensure checkIn/checkOut are correctly computed from punches
+    if (!record.isManualOverride && record.status !== 'leave' && record.punches && record.punches.length > 0) {
+      // Ensure the first punch of the day is always an 'in' punch
+      if (record.punches[0].type === 'out') {
+        record.punches[0].type = 'in';
+      }
+      
+      const ins = record.punches.filter(p => p.type === 'in');
+      if (ins.length > 0) {
+        record.checkIn = ins[0].time;
+      }
+      
+      const lastPunch = record.punches[record.punches.length - 1];
+      if (lastPunch.type === 'in') {
+        record.checkOut = null;
+      } else {
+        record.checkOut = lastPunch.time;
+      }
+    }
+
     // Strict Late Check-in Check against registry shift start time
     if (record.checkIn && employee.shiftStart && employee.shiftStart.includes(':')) {
       try {

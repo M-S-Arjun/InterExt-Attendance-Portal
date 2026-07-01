@@ -168,6 +168,275 @@
     </main>
   </div>
 
+  <!-- POPUP MODAL: Edit Employee Details -->
+  <div class="modal" id="employee-modal">
+    <div class="modal-content glass-card">
+      <div class="modal-header">
+        <h3 id="employee-modal-title">Add New Employee Record</h3>
+        <button class="btn-close" onclick="closeEmployeeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="employee-form" onsubmit="handleEmployeeSubmit(event)">
+          <input type="hidden" id="emp-id">
+          
+          <!-- Tabs Navigation -->
+          <div class="modal-tabs">
+            <button type="button" class="modal-tab-btn active" onclick="switchModalTab(event, 'modal-tab-employment')">Employment & Payroll</button>
+            <button type="button" class="modal-tab-btn" onclick="switchModalTab(event, 'modal-tab-personal')">Personal Details</button>
+            <button type="button" class="modal-tab-btn" onclick="switchModalTab(event, 'modal-tab-documents')">Identity & Docs</button>
+          </div>
+
+          <!-- TAB PANEL 1: Employment & Payroll -->
+          <div class="modal-tab-panel active" id="modal-tab-employment">
+            <div class="form-group">
+              <label for="emp-userid">Worker ID</label>
+              <input type="text" id="emp-userid" class="form-control" placeholder="e.g. 2038" required>
+              <span class="help-text">Unique identification code (e.g. 2038, IN048)</span>
+            </div>
+
+            <div class="form-group">
+              <label for="emp-name">Full Name</label>
+              <input type="text" id="emp-name" class="form-control" placeholder="e.g. John Doe" required>
+              <span class="help-text">Used for fuzzy-matching. Must be distinct.</span>
+            </div>
+
+            <div class="form-group">
+              <label for="emp-designation">Designation</label>
+              <input type="text" id="emp-designation" class="form-control" placeholder="e.g. Workshop Assistant, Welder">
+              <span class="help-text">Job title (e.g. Workshop Assistant, Project Manager)</span>
+            </div>
+
+            <div class="form-group">
+              <label for="emp-mode">Mode of Work</label>
+              <input type="text" id="emp-mode" class="form-control" placeholder="e.g. Office Staff, Welders" required>
+              <span class="help-text">Job role or category (e.g. Office Staff, Welders, Daily Wages Staff)</span>
+            </div>
+
+            <div class="form-group">
+              <label for="emp-payment">Payment Mode</label>
+              <input type="text" id="emp-payment" class="form-control" placeholder="e.g. Interext, City Advertisers">
+              <span class="help-text">Payment method or agency (e.g. Interext, City Advertisers)</span>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="emp-phone">WhatsApp Phone Number (Optional)</label>
+                <input type="tel" id="emp-phone" class="form-control" placeholder="e.g. 919876543210 (country code first)">
+                <span class="help-text">Country code first, no spaces or special symbols</span>
+              </div>
+              <div class="form-group">
+                <label for="emp-passcode">Login Passcode / PIN</label>
+                <input type="text" id="emp-passcode" class="form-control" placeholder="e.g. 1234" pattern="\d{4}" maxlength="4" required value="1234">
+                <span class="help-text">4-digit code for native app login</span>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="emp-shift-start">Shift Start Time</label>
+                <input type="time" id="emp-shift-start" class="form-control">
+                <span class="help-text">e.g. 08:00</span>
+              </div>
+              <div class="form-group">
+                <label for="emp-shift-end">Shift End Time</label>
+                <input type="time" id="emp-shift-end" class="form-control">
+                <span class="help-text">e.g. 17:00</span>
+              </div>
+            </div>
+
+            <div id="emp-shift-duration-info" style="font-size: 0.85rem; margin-top: -5px; margin-bottom: 15px; font-weight: 600; color: var(--color-primary);">Shift Duration: —</div>
+
+            <div class="form-row-3">
+              <div class="form-group">
+                <label for="emp-daily">Actual Daily Wages (₹)</label>
+                <input type="number" id="emp-daily" class="form-control" placeholder="e.g. 120" min="0" step="0.01">
+              </div>
+              <div class="form-group">
+                <label for="emp-monthly">Actual Monthly Wages (₹) - Optional</label>
+                <input type="number" id="emp-monthly" class="form-control" placeholder="e.g. 25000" min="0" step="0.01">
+              </div>
+              <div class="form-group">
+                <label for="emp-hourly">Hourly Rate (₹) - Optional</label>
+                <input type="number" id="emp-hourly" class="form-control" placeholder="e.g. 20" min="0" step="0.01">
+              </div>
+            </div>
+
+            <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+              <div class="form-group" style="margin-bottom: 0;">
+                <label for="emp-std-days">Standard Working Days (per month)</label>
+                <input type="number" id="emp-std-days" class="form-control" min="1" max="31" value="30" required>
+                <span class="help-text">Standard work days in a month (e.g., 26 or 30)</span>
+              </div>
+              <div class="form-group" style="margin-bottom: 0;">
+                <label for="emp-status">Employment Status</label>
+                <select id="emp-status" class="form-control">
+                  <option value="active">Active (Standard daily scheduling)</option>
+                  <option value="resigned">Resigned</option>
+                  <option value="terminated">Terminated</option>
+                  <option value="suspended">Suspended</option>
+                  <option value="inactive">Inactive (Other)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+              <div class="form-group" style="margin-bottom: 0; display: flex; align-items: center; gap: 10px; padding-top: 25px;">
+                <input type="checkbox" id="emp-ot-eligible" style="accent-color: var(--color-primary); width: 18px; height: 18px;">
+                <label for="emp-ot-eligible" style="margin-bottom: 0; cursor: pointer; font-weight: 600;">Eligible for Overtime</label>
+              </div>
+              <div class="form-group" style="margin-bottom: 0;">
+                <label for="emp-ot-grace">Overtime Grace Period (Minutes)</label>
+                <input type="number" id="emp-ot-grace" class="form-control" placeholder="e.g. 60" min="0" value="0">
+                <span class="help-text">Minutes before OT starts (grace deducted from OT)</span>
+              </div>
+            </div>
+
+            <div class="form-group modal-highlight-box">
+              <label style="display: block; margin-bottom: 10px; font-weight: 600; color: var(--color-primary);">Statutory Deductions Eligibility</label>
+              <div style="display: flex; flex-direction: column; gap: 10px;">
+                <label class="checkbox-container" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
+                  <input type="checkbox" id="emp-pf-enabled" checked style="accent-color: var(--color-primary); width: 16px; height: 16px;">
+                  <span>Provident Fund (PF) Deduction Enabled</span>
+                </label>
+                <label class="checkbox-container" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
+                  <input type="checkbox" id="emp-esic-enabled" checked style="accent-color: var(--color-primary); width: 16px; height: 16px;">
+                  <span>ESIC Deduction Enabled</span>
+                </label>
+                <label class="checkbox-container" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
+                  <input type="checkbox" id="emp-pt-enabled" checked style="accent-color: var(--color-primary); width: 16px; height: 16px;">
+                  <span>Professional Tax (PT) Deduction Enabled</span>
+                </label>
+                <label class="checkbox-container" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem;">
+                  <input type="checkbox" id="emp-fixed-salary" style="accent-color: var(--color-primary); width: 16px; height: 16px;">
+                  <span>Lock Salary (Fixed Monthly, No LOP Deductions)</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB PANEL 2: Personal Details -->
+          <div class="modal-tab-panel" id="modal-tab-personal">
+            <div class="form-group">
+              <label for="emp-address">Home Address</label>
+              <textarea id="emp-address" class="form-control" placeholder="Enter complete home address..." rows="3"></textarea>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="emp-dob">Date of Birth</label>
+                <input type="date" id="emp-dob" class="form-control">
+              </div>
+              <div class="form-group">
+                <label for="emp-joining-date">Date of Joining</label>
+                <input type="date" id="emp-joining-date" class="form-control">
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="emp-emergency-contact">Emergency Contact Number</label>
+                <input type="tel" id="emp-emergency-contact" class="form-control" placeholder="e.g. 919876543210">
+              </div>
+              <div class="form-group">
+                <label for="emp-blood-group">Blood Group</label>
+                <select id="emp-blood-group" class="form-control">
+                  <option value="">-- Select Blood Group --</option>
+                  <option value="A+">A+</option>
+                  <option value="A-">A-</option>
+                  <option value="B+">B+</option>
+                  <option value="B-">B-</option>
+                  <option value="AB+">AB+</option>
+                  <option value="AB-">AB-</option>
+                  <option value="O+">O+</option>
+                  <option value="O-">O-</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB PANEL 3: Identity & Documents -->
+          <div class="modal-tab-panel" id="modal-tab-documents">
+            <!-- Profile Photo -->
+            <div class="form-group">
+              <label style="font-weight: 600; display: block; margin-bottom: 6px;">Profile Photo</label>
+              <div class="photo-upload-container">
+                <div class="photo-upload-preview" id="emp-photo-preview-box">
+                  <i data-lucide="user"></i>
+                </div>
+                <div class="upload-button-wrapper">
+                  <span class="btn-file-select">
+                    Choose Photo
+                    <input type="file" id="emp-profile-photo-input" accept="image/*" onchange="handleImageFileSelect(this, 'profile')">
+                  </span>
+                  <span class="help-text">JPG, PNG (max 1MB). Will be auto-resized.</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Aadhaar Card -->
+            <div class="form-group" style="padding-top: 10px; border-top: 1px solid var(--glass-border);">
+              <label for="emp-aadhaar">Aadhaar Card Number</label>
+              <input type="text" id="emp-aadhaar" class="form-control" placeholder="e.g. 1234 5678 9012">
+              <div class="doc-upload-preview-box" style="margin-top: 10px;">
+                <div class="doc-upload-preview" id="emp-aadhaar-preview-box">
+                  <i data-lucide="file-text"></i>
+                </div>
+                <div class="upload-button-wrapper">
+                  <span class="btn-file-select">
+                    Upload Aadhaar Scan
+                    <input type="file" id="emp-aadhaar-input" accept="image/*,.pdf" onchange="handleImageFileSelect(this, 'aadhaar')">
+                  </span>
+                  <span class="help-text">Aadhaar Card Front/Back scan (Image or PDF)</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- PAN Card -->
+            <div class="form-group" style="padding-top: 15px; border-top: 1px solid var(--glass-border); margin-top: 15px;">
+              <label for="emp-pan">PAN Card Number</label>
+              <input type="text" id="emp-pan" class="form-control" placeholder="e.g. ABCDE1234F" style="text-transform: uppercase;">
+              <div class="doc-upload-preview-box" style="margin-top: 10px;">
+                <div class="doc-upload-preview" id="emp-pan-preview-box">
+                  <i data-lucide="file-text"></i>
+                </div>
+                <div class="upload-button-wrapper">
+                  <span class="btn-file-select">
+                    Upload PAN Scan
+                    <input type="file" id="emp-pan-input" accept="image/*,.pdf" onchange="handleImageFileSelect(this, 'pan')">
+                  </span>
+                  <span class="help-text">PAN Card Scan (Image or PDF)</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Driving License -->
+            <div class="form-group" style="padding-top: 15px; border-top: 1px solid var(--glass-border); margin-top: 15px;">
+              <label for="emp-dl">Driving License Number</label>
+              <input type="text" id="emp-dl" class="form-control" placeholder="e.g. KL-07-2010-0001234" style="text-transform: uppercase;">
+              <div class="doc-upload-preview-box" style="margin-top: 10px;">
+                <div class="doc-upload-preview" id="emp-dl-preview-box">
+                  <i data-lucide="file-text"></i>
+                </div>
+                <div class="upload-button-wrapper">
+                  <span class="btn-file-select">
+                    Upload DL Scan
+                    <input type="file" id="emp-dl-input" accept="image/*,.pdf" onchange="handleImageFileSelect(this, 'dl')">
+                  </span>
+                  <span class="help-text">Driving License Scan (Image or PDF)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeEmployeeModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="emp-submit-btn">Save Worker</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <!-- POPUP MODAL: Add Loan -->
   <div class="modal" id="loan-modal">
     <div class="modal-content glass-card" style="max-width: 450px;">

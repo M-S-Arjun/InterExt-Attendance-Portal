@@ -2287,7 +2287,18 @@ function renderEmployeesTableBody(employees) {
 
   employees.forEach(emp => {
     const tr = document.createElement('tr');
-    const badge = emp.status === 'active' ? `<span class="badge badge-green">Active</span>` : `<span class="badge badge-secondary">Suspended</span>`;
+    let badge = `<span class="badge badge-secondary">Inactive</span>`;
+    if (emp.status === 'active') {
+      badge = `<span class="badge badge-green">Active</span>`;
+    } else if (emp.status === 'resigned') {
+      badge = `<span class="badge badge-orange" style="opacity: 0.85;">Resigned</span>`;
+    } else if (emp.status === 'terminated') {
+      badge = `<span class="badge badge-red" style="font-weight: 700;">Terminated</span>`;
+    } else if (emp.status === 'suspended') {
+      badge = `<span class="badge badge-amber">Suspended</span>`;
+    } else if (emp.status === 'inactive') {
+      badge = `<span class="badge badge-secondary">Inactive</span>`;
+    }
     
     const regDate = new Date(emp.createdAt).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
     const dailyDisplay = emp.dailyRate ? `<strong>₹${emp.dailyRate.toFixed(2)}</strong>` : "—";
@@ -2394,6 +2405,8 @@ function openEmployeeModal() {
   document.getElementById('emp-esic-enabled').checked = true;
   document.getElementById('emp-pt-enabled').checked = true;
   document.getElementById('emp-fixed-salary').checked = false;
+  document.getElementById('emp-ot-eligible').checked = true;
+  document.getElementById('emp-ot-grace').value = "0";
 
   // Reset temp base64 caches
   window.tempProfilePhotoBase64 = null;
@@ -2598,6 +2611,10 @@ function editEmployee(id) {
   document.getElementById('emp-esic-enabled').checked = emp.esicEnabled !== false;
   document.getElementById('emp-pt-enabled').checked = emp.ptEnabled !== false;
   document.getElementById('emp-fixed-salary').checked = emp.fixedSalary === true;
+  
+  const isOffice = (emp.modeOfWork || "").toLowerCase().trim() === 'office staff';
+  document.getElementById('emp-ot-eligible').checked = emp.otEligible !== undefined ? (emp.otEligible === true || emp.otEligible === 'true') : !isOffice;
+  document.getElementById('emp-ot-grace').value = emp.otGraceMinutes !== undefined ? emp.otGraceMinutes : "0";
 
   // Reset temp base64 caches
   window.tempProfilePhotoBase64 = null;
@@ -2648,6 +2665,9 @@ function editEmployee(id) {
 async function handleEmployeeSubmit(e) {
   e.preventDefault();
   
+  const empId = document.getElementById('emp-id').value || null;
+  const existingEmp = state.employees.find(e => e.id === empId) || {};
+  
   const dailyRateVal = document.getElementById('emp-daily').value;
   const monthlyWageVal = document.getElementById('emp-monthly').value;
   const hourlyRateVal = document.getElementById('emp-hourly').value;
@@ -2674,14 +2694,14 @@ async function handleEmployeeSubmit(e) {
   }
 
   const data = {
-    id: document.getElementById('emp-id').value || null,
+    id: empId,
     userId: document.getElementById('emp-userid').value.trim(),
     name: document.getElementById('emp-name').value.trim(),
     modeOfWork: document.getElementById('emp-mode').value.trim(),
     designation: document.getElementById('emp-designation').value.trim(),
     paymentMode: document.getElementById('emp-payment').value.trim(),
     phone: document.getElementById('emp-phone').value.replace(/\D/g, ''),
-    siteId: (state.employees.find(e => e.id === document.getElementById('emp-id').value)?.siteId) || "",
+    siteId: (state.employees.find(e => e.id === empId)?.siteId) || "",
     dailyRate: dailyRateVal !== "" ? Number(dailyRateVal) : 120.00,
     monthlyWage: monthlyWageVal !== "" ? Number(monthlyWageVal) : null,
     hourlyRate: hourlyRateVal !== "" ? Number(hourlyRateVal) : (dailyRateVal !== "" ? Number((Number(dailyRateVal) / F).toFixed(2)) : 20.00),
@@ -2693,6 +2713,8 @@ async function handleEmployeeSubmit(e) {
     esicEnabled: document.getElementById('emp-esic-enabled').checked,
     ptEnabled: document.getElementById('emp-pt-enabled').checked,
     fixedSalary: document.getElementById('emp-fixed-salary').checked,
+    otEligible: document.getElementById('emp-ot-eligible').checked,
+    otGraceMinutes: Number(document.getElementById('emp-ot-grace').value) || 0,
     status: document.getElementById('emp-status').value,
     passcode: document.getElementById('emp-passcode').value.trim() || "1234",
 
@@ -2707,6 +2729,12 @@ async function handleEmployeeSubmit(e) {
     aadhaar: document.getElementById('emp-aadhaar').value.trim(),
     pan: document.getElementById('emp-pan').value.trim().toUpperCase(),
     drivingLicense: document.getElementById('emp-dl').value.trim().toUpperCase(),
+
+    // Preserve existing photo/document paths if not being updated
+    profilePhoto: existingEmp.profilePhoto || null,
+    aadhaarPhoto: existingEmp.aadhaarPhoto || null,
+    panPhoto: existingEmp.panPhoto || null,
+    drivingLicensePhoto: existingEmp.drivingLicensePhoto || null,
 
     // Base64 document attachments
     profilePhotoBase64: window.tempProfilePhotoBase64 || null,
@@ -2952,8 +2980,24 @@ function renderEmployeeProfile(emp) {
     ? `<img src="${emp.profilePhoto}" class="profile-avatar-large" alt="${emp.name}" style="cursor: zoom-in;" onclick="window.enlargeProfilePhoto('${emp.profilePhoto}')" title="Click to enlarge">`
     : `<div class="profile-avatar-large">${initials}</div>`;
     
-  const badgeClass = emp.status === 'active' ? 'badge-green' : 'badge-secondary';
-  const badgeText = emp.status === 'active' ? 'Active' : 'Suspended';
+  let badgeClass = 'badge-secondary';
+  let badgeText = 'Inactive';
+  if (emp.status === 'active') {
+    badgeClass = 'badge-green';
+    badgeText = 'Active';
+  } else if (emp.status === 'resigned') {
+    badgeClass = 'badge-orange';
+    badgeText = 'Resigned';
+  } else if (emp.status === 'terminated') {
+    badgeClass = 'badge-red';
+    badgeText = 'Terminated';
+  } else if (emp.status === 'suspended') {
+    badgeClass = 'badge-amber';
+    badgeText = 'Suspended';
+  } else if (emp.status === 'inactive') {
+    badgeClass = 'badge-secondary';
+    badgeText = 'Inactive';
+  }
   const phoneDisplay = emp.phone ? `+${emp.phone}` : '—';
   
   // Documents attachments HTML formatting
@@ -3760,17 +3804,20 @@ function updateCalculatedHoursAndWage() {
 
       const forceHalfDay = status === 'half-day leave';
       const isOfficeStaff = employee.modeOfWork && employee.modeOfWork.toLowerCase().trim() === 'office staff';
+      const isEligible = employee.otEligible !== undefined ? (employee.otEligible === true || employee.otEligible === 'true') : !isOfficeStaff;
 
       if (totalHours >= F && !forceHalfDay) {
         isFullDay = true;
         regularHours = F;
-        if (isOfficeStaff) {
+        if (!isEligible) {
           otHours = 0.0;
           calculatedWage = dailyRate;
         } else {
           const exactOT = totalHours - overtimeBaseHours;
-          if (exactOT > 0) {
-            const otMinutes = Math.round(exactOT * 60);
+          const graceHours = (Number(employee.otGraceMinutes) || 0) / 60;
+          const billableOT = exactOT - graceHours;
+          if (billableOT > 0) {
+            const otMinutes = Math.round(billableOT * 60);
             if (otMinutes < 50) {
               otHours = 0.0;
             } else {
@@ -3778,16 +3825,21 @@ function updateCalculatedHoursAndWage() {
               const minutesPart = otMinutes % 60;
               otHours = minutesPart >= 50 ? hoursPart + 1.0 : hoursPart * 1.0;
             }
+          } else {
+            otHours = 0.0;
           }
           calculatedWage = Number((dailyRate + (otHours * hourlyRate)).toFixed(2));
         }
       } else if (totalHours >= h || forceHalfDay) {
         isHalfDay = true;
         regularHours = h;
-        if (totalHours > h) {
-          extraHours = Number((totalHours - h).toFixed(2));
+        if (!isEligible) {
+          extraHours = 0.0;
+          calculatedWage = Number((dailyRate * 0.5).toFixed(2));
+        } else {
+          extraHours = Math.max(0.0, Number((totalHours - h).toFixed(2)));
+          calculatedWage = Number(((dailyRate * 0.5) + (extraHours * hourlyRate)).toFixed(2));
         }
-        calculatedWage = Number(((dailyRate * 0.5) + (extraHours * hourlyRate)).toFixed(2));
       } else {
         regularHours = totalHours;
         calculatedWage = Number((totalHours * hourlyRate).toFixed(2));
@@ -6472,11 +6524,17 @@ async function loadCctvCameras() {
       const timeString = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + new Date().toLocaleTimeString('en-US', { hour12: false });
       
       const previewHtml = isRunning 
-        ? `<div style="width: 100%; aspect-ratio: 16/9; background: #000; border-radius: var(--border-radius-sm); overflow: hidden; margin-top: 4px; border: 1px solid var(--glass-border); display: flex; align-items: center; justify-content: center; position: relative; box-shadow: inset 0 0 20px rgba(0,0,0,0.8);">
+        ? `<div class="cctv-camera-preview" onclick="enlargeCctvStream('${cam.id}', '${cam.name.replace(/'/g, "\\'")}')" style="width: 100%; aspect-ratio: 16/9; background: #000; border-radius: var(--border-radius-sm); overflow: hidden; margin-top: 4px; border: 1px solid var(--glass-border); display: flex; align-items: center; justify-content: center; position: relative; box-shadow: inset 0 0 20px rgba(0,0,0,0.8); cursor: pointer;">
              <img src="/api/cctv/stream/${cam.id}" style="width: 100%; height: 100%; object-fit: cover;" alt="Live Stream" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
              <div style="display: none; flex-direction: column; align-items: center; gap: 8px; color: var(--text-tertiary); font-size: 0.75rem;">
                <i data-lucide="video-off" style="width: 24px; height: 24px;"></i>
                <span>Preview stream offline</span>
+             </div>
+             <!-- Hover Zoom Overlay -->
+             <div class="cctv-zoom-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.2s ease; z-index: 10;">
+               <div style="background: var(--color-primary); color: #fff; width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(255, 107, 0, 0.4);">
+                 <i data-lucide="maximize-2" style="width: 18px; height: 18px;"></i>
+               </div>
              </div>
              <!-- CCTV HUD Overlay -->
              <div style="position: absolute; top: 8px; left: 8px; right: 8px; display: flex; justify-content: space-between; align-items: center; pointer-events: none; text-shadow: 1px 1px 2px #000; font-family: 'Courier New', monospace; font-weight: bold; font-size: 0.7rem; color: #fff; z-index: 5;">
@@ -7812,6 +7870,161 @@ window.copyChatResponse = function(btn) {
         if (window.lucide) window.lucide.createIcons();
       }, 1500);
     }
+  }
+};
+
+window.handleBiometricFileImport = async function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  // Clear input value so same file can be selected again
+  event.target.value = '';
+
+  // Show a loading toast
+  TransactionManager.showStatusToast('Uploading and importing biometric attendance...');
+
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    const base64Str = e.target.result.split(',')[1];
+    try {
+      const res = await fetch('/api/attendance/import-biometric', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ fileBase64: base64Str })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to import biometric file');
+      }
+
+      // Refresh attendance/logs
+      if (typeof refreshWhatsAppLogs === 'function') {
+        refreshWhatsAppLogs();
+      } else if (typeof refreshDashboardData === 'function') {
+        refreshDashboardData();
+      }
+
+      // Map API response to the summary format expected by displayBiometricReport
+      const summary = {
+        imported: data.importedCount,
+        errors: data.unrecognized ? data.unrecognized.length : 0,
+        warnings: 0,
+        details: [
+          { type: 'success', message: `Successfully parsed Excel file. Imported/updated ${data.importedCount} attendance records.` },
+          ...(data.unrecognized || []).map(u => ({
+            type: 'error',
+            message: `Skipped: User ID "${u.userId}" (${u.name}) is not registered in the Workers Registry.`
+          }))
+        ]
+      };
+
+      // Display summary modal
+      displayBiometricReport(summary);
+      TransactionManager.showStatusToast(`Import complete. ${data.importedCount} records loaded.`);
+    } catch (err) {
+      console.error('Biometric import error:', err);
+      TransactionManager.showStatusToast('Biometric Import Error: ' + err.message, true);
+    }
+  };
+  reader.onerror = function() {
+    TransactionManager.showStatusToast('Biometric Import Error: Failed to read file', true);
+  };
+  reader.readAsDataURL(file);
+};
+
+function displayBiometricReport(summary) {
+  const statsContainer = document.getElementById('biometric-report-stats');
+  const detailsContainer = document.getElementById('biometric-report-details');
+
+  // Create Stats cards
+  statsContainer.innerHTML = `
+    <div style="background: rgba(46, 213, 115, 0.15); border: 1px solid rgba(46, 213, 115, 0.3); border-radius: 8px; padding: 12px; text-align: center;">
+      <div style="font-size: 1.5rem; font-weight: 700; color: #2ed573;">${summary.imported}</div>
+      <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.8; margin-top: 4px;">Imported</div>
+    </div>
+    <div style="background: rgba(255, 71, 87, 0.15); border: 1px solid rgba(255, 71, 87, 0.3); border-radius: 8px; padding: 12px; text-align: center;">
+      <div style="font-size: 1.5rem; font-weight: 700; color: #ff4757;">${summary.errors}</div>
+      <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.8; margin-top: 4px;">Errors</div>
+    </div>
+    <div style="background: rgba(255, 165, 0, 0.15); border: 1px solid rgba(255, 165, 0, 0.3); border-radius: 8px; padding: 12px; text-align: center;">
+      <div style="font-size: 1.5rem; font-weight: 700; color: #ffa500;">${summary.warnings}</div>
+      <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.8; margin-top: 4px;">Warnings</div>
+    </div>
+  `;
+
+  // Create detail log rows
+  if (!summary.details || summary.details.length === 0) {
+    detailsContainer.innerHTML = `<div style="text-align: center; opacity: 0.5; padding: 20px;">No details recorded.</div>`;
+  } else {
+    detailsContainer.innerHTML = summary.details.map(item => {
+      let icon = 'info';
+      let color = 'var(--text-color)';
+      let bg = 'rgba(255,255,255,0.03)';
+      if (item.type === 'success') {
+        icon = 'check-circle';
+        color = '#2ed573';
+      } else if (item.type === 'error') {
+        icon = 'alert-triangle';
+        color = '#ff4757';
+      } else if (item.type === 'warning') {
+        icon = 'alert-circle';
+        color = '#ffa500';
+      }
+      return `
+        <div style="display: flex; gap: 10px; align-items: flex-start; padding: 8px; margin-bottom: 6px; border-radius: 4px; background: ${bg}; font-size: 0.85rem; line-height: 1.4;">
+          <i data-lucide="${icon}" style="width: 16px; height: 16px; min-width: 16px; color: ${color}; margin-top: 2px;"></i>
+          <span style="color: ${color}; flex-grow: 1;">${item.message}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Open the modal
+  const modal = document.getElementById('biometric-report-modal');
+  if (modal) {
+    modal.classList.add('active');
+  }
+
+  // Re-run lucide to render dynamic icons
+  if (typeof lucide !== 'undefined') {
+    lucide.createIcons();
+  }
+}
+
+window.closeBiometricReportModal = function() {
+  const modal = document.getElementById('biometric-report-modal');
+  if (modal) {
+    modal.classList.remove('active');
+  }
+};
+
+// CCTV Enlarge/Zoom modal functions
+window.enlargeCctvStream = function(cameraId, cameraName) {
+  const modal = document.getElementById('cctv-enlarge-modal');
+  const img = document.getElementById('cctv-enlarge-img');
+  const title = document.getElementById('cctv-enlarge-title');
+  
+  if (modal && img && title) {
+    title.innerHTML = `<i data-lucide="video" style="color: var(--color-primary); width: 20px; height: 20px;"></i> Live Stream: ${cameraName}`;
+    img.src = `/api/cctv/stream/${cameraId}`;
+    modal.classList.add('active');
+    if (typeof lucide !== 'undefined') {
+      lucide.createIcons();
+    }
+  }
+};
+
+window.closeCctvEnlargeModal = function() {
+  const modal = document.getElementById('cctv-enlarge-modal');
+  const img = document.getElementById('cctv-enlarge-img');
+  
+  if (modal && img) {
+    modal.classList.remove('active');
+    // Clear src to stop stream load immediately
+    img.src = '';
   }
 };
 

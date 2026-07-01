@@ -188,7 +188,7 @@
             </div>
 
             <!-- CCTV list layout -->
-            <div id="cctv-list-container" class="cctv-list-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
+            <div id="cctv-list-container" class="cctv-list-grid">
               <div class="loading-state" style="grid-column: 1 / -1; text-align: center; padding: 20px; color: var(--text-tertiary);">
                 <i data-lucide="loader" class="animate-spin" style="margin-bottom: 8px;"></i>
                 <p style="margin: 0; font-size: 0.85rem;">Loading CCTV configurations...</p>
@@ -324,6 +324,24 @@
             <button type="submit" class="btn btn-primary">Save Camera</button>
           </div>
         </form>
+      </div>
+    </div>
+  </div>
+  
+  <!-- CCTV Enlarge Modal -->
+  <div class="modal" id="cctv-enlarge-modal" onclick="closeCctvEnlargeModal()">
+    <div class="modal-content glass-card" style="max-width: 1000px; width: 90vw;" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3 id="cctv-enlarge-title" style="display: flex; align-items: center; gap: 8px;">
+          <i data-lucide="video" style="color: var(--color-primary); width: 20px; height: 20px;"></i>
+          Live Video Feed
+        </h3>
+        <button class="btn-close" onclick="closeCctvEnlargeModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 0; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; aspect-ratio: 16/9; max-height: 75vh; border-bottom-left-radius: var(--border-radius-md); border-bottom-right-radius: var(--border-radius-md); position: relative; box-shadow: inset 0 0 40px rgba(0,0,0,0.9);">
+        <img id="cctv-enlarge-img" src="" style="width: 100%; height: 100%; object-fit: contain;" alt="Enlarged Live Stream">
+        <!-- Overlay scanning lines -->
+        <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%); background-size: 100% 4px; pointer-events: none; opacity: 0.25;"></div>
       </div>
     </div>
   </div>

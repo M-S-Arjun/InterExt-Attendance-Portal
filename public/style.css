@@ -2466,8 +2466,29 @@ textarea.form-control {
 
 .cctv-list-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+
+@media (min-width: 768px) {
+  .cctv-list-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1200px) {
+  .cctv-list-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.cctv-camera-preview {
+  position: relative;
+  transition: border-color var(--transition-normal);
+}
+
+.cctv-camera-preview:hover .cctv-zoom-overlay {
+  opacity: 1 !important;
 }
 
 .cctv-camera-card {
@@ -3731,13 +3752,19 @@ html.sidebar-collapsed .sidebar:hover .sidebar-nav::-webkit-scrollbar {
   border-top-color: var(--text-primary) !important;
 }
 .flatpickr-current-month input.cur-year {
-  color: inherit !important;
+  color: var(--text-primary) !important;
   font-size: 0.85rem !important;
   font-weight: 600 !important;
 }
 .flatpickr-current-month .flatpickr-monthDropdown-months {
   font-size: 0.85rem !important;
   font-weight: 600 !important;
+  color: var(--text-primary) !important;
+  background: transparent !important;
+}
+.flatpickr-current-month .flatpickr-monthDropdown-months option {
+  background-color: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
 }
 .flatpickr-weekdays {
   height: 24px !important;
