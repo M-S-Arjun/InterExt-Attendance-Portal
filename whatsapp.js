@@ -134,6 +134,12 @@ class WhatsAppManager extends EventEmitter {
       
       console.log(`[Health Monitor] Checking WhatsApp connection state: "${this.status}" | Last check: ${timeSinceLastCheck}ms ago`);
       
+      if (this.status === 'qr') {
+        // Do NOT reinitialize while showing QR - user may be scanning. Just log.
+        console.log('[Health Monitor] Status is "qr" - waiting for user to scan. Not rebooting.');
+        return;
+      }
+
       if (this.status === 'disconnected') {
         console.warn("[Health Monitor] Client disconnected. Triggering immediate reboot...");
         this.initialize();
@@ -229,17 +235,25 @@ class WhatsAppManager extends EventEmitter {
                 ? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
                 : undefined)),
           protocolTimeout: 240000, // Terminate Protocol errors by setting 240s timeout (4 minutes for large accounts)
-          args: []
+          args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage']
         }
       });
 
       this.registerEvents();
       this.client.initialize().catch(err => {
-        console.error("[Startup] Client initialization promise rejected:", err);
+        const msg = err.message || String(err);
+        console.error("[Startup] Client initialization promise rejected:", msg);
+        if (msg.includes('detached') || msg.includes('Navigating frame') || msg.includes('Execution context')) {
+          console.warn("[Startup] Suppressing transient frame navigation rejection during page load...");
+          this.isInitializing = false;
+          return;
+        }
         this.status = 'disconnected';
         this.isInitializing = false;
         this.emit('status', this.status);
-        setTimeout(() => this.initialize(), 5000);
+        const retryDelay = msg.includes('ERR_NAME_NOT_RESOLVED') ? 15000 : 5000;
+        console.log(`[Startup] Will retry WhatsApp initialization in ${retryDelay / 1000} seconds...`);
+        setTimeout(() => this.initialize(), retryDelay);
       });
     } catch (err) {
       console.error("Failed to initialize WhatsApp Client:", err);
@@ -259,6 +273,11 @@ class WhatsAppManager extends EventEmitter {
       try {
         this.qrCodeDataUrl = await QRCode.toDataURL(qr);
         this.status = 'qr';
+        const fs = require('fs');
+        const path = require('path');
+        const buffer = Buffer.from(this.qrCodeDataUrl.split(',')[1], 'base64');
+        fs.writeFileSync(path.join(__dirname, 'public', 'qr.png'), buffer);
+        console.log("[WhatsApp] Saved QR code to public/qr.png");
         this.emit('qr', this.qrCodeDataUrl);
         this.emit('status', this.status);
       } catch (err) {
@@ -722,9 +741,16 @@ class WhatsAppManager extends EventEmitter {
   async recoverMissedMessages(chat, preFetchedMessages = null) {
     console.log(`[Recovery Engine] Starting missed messages recovery for group: "${chat.name}"...`);
     try {
-      // Fetch the last 500 messages from the group if not pre-fetched
-      const messages = preFetchedMessages || await chat.fetchMessages({ limit: 500 });
-      console.log(`[Recovery Engine] Fetched ${messages.length} historical messages from WhatsApp.`);
+      let messages = preFetchedMessages;
+      if (!messages) {
+        try {
+          messages = await chat.fetchMessages({ limit: 500 });
+        } catch (fetchErr) {
+          console.warn(`[Recovery Engine] Could not fetch messages for ${chat.name}: ${fetchErr.message}`);
+          return;
+        }
+      }
+      console.log(`[Recovery Engine] Fetched ${messages ? messages.length : 0} historical messages from WhatsApp.`);
 
       const processedIds = database.getProcessedMessageIds();
 
