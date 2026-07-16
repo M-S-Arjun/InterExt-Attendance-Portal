@@ -3518,6 +3518,17 @@ app.post('/api/face/cctv-event', async (req, res) => {
       }
     }
 
+    // Deduplication check: prevent duplicate logs for the same employee, event type within 2 minutes
+    const existingEvent = (db.cameraEvents || []).find(e => {
+      if (e.employeeId !== employee.id || e.eventType !== resolvedEventType) return false;
+      const diffMs = Math.abs(now.getTime() - new Date(e.timestamp).getTime());
+      return diffMs < 120000; // 2 minutes window
+    });
+    if (existingEvent) {
+      console.log(`[CCTV Event] Ignoring duplicate event for ${employee.name} (${resolvedEventType}) within 2 minutes.`);
+      return res.json({ success: true, status: 'ignored_duplicate', cameraEvent: existingEvent });
+    }
+
     const isLateCheckInPendingScan = existingAttendance && existingAttendance.status === 'late' && !existingAttendance.scannedCheckIn;
 
     const isScanLateTime = (() => {
@@ -6608,6 +6619,16 @@ process.once('SIGTERM', () => gracefulServerShutdown('SIGTERM'));
 process.once('SIGUSR2', () => gracefulServerShutdown('SIGUSR2'));
 
 // Boot systems
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[FATAL] Port ${PORT} is already in use. Another server instance may be running. Exiting to allow PM2 to clean up and restart...`);
+    process.exit(1);
+  } else {
+    console.error('[FATAL] Server error:', err);
+    process.exit(1);
+  }
+});
+
 server.listen(PORT, () => {
   console.log(`=============================================================`);
   console.log(`  Attendance Dashboard running at: http://localhost:${PORT}`);
