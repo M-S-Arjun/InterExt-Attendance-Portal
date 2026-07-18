@@ -1,0 +1,25 @@
+2026/07/17-15:07:01.698 5380 Reusing MANIFEST D:\Whatsapp Attendance Tracking\.wwebjs_auth\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/07/17-15:07:01.698 5380 Recovering log #132
+2026/07/17-15:07:01.699 5380 Reusing old log D:\Whatsapp Attendance Tracking\.wwebjs_auth\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000132.log 
+2026/07/17-15:07:01.699 5380 Delete type=2 #131
+2026/07/17-15:07:02.167 3cb0 Level-0 table #137: started
+2026/07/17-15:07:02.169 3cb0 Level-0 table #137: 33534 bytes OK
+2026/07/17-15:07:02.170 3cb0 Delete type=0 #132
+2026/07/17-15:07:02.170 5380 Manual compaction at level-0 from '\x00&\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00'\x00\x00\x00' @ 0 : 0; will stop at '\x00&\x00\x00\xc8\x1a\x00u\x00n\x00r\x00e\x00s\x00p\x00o\x00n\x00s\x00i\x00v\x00e\x00n\x00e\x00s\x00s\x00-\x00e\x00v\x00e\x00n\x00t\x00s\x00-\x00v\x002' @ 710366 : 1
+2026/07/17-15:07:02.170 5380 Compacting 1@0 + 1@1 files
+2026/07/17-15:07:02.172 5380 Generated table #138@0: 819 keys, 24619 bytes
+2026/07/17-15:07:02.172 5380 Compacted 1@0 + 1@1 files => 24619 bytes
+2026/07/17-15:07:02.173 5380 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/07/17-15:07:02.173 5380 Delete type=2 #137
+2026/07/17-15:07:02.173 5380 Manual compaction at level-0 from '\x00&\x00\x00\xc8\x1a\x00u\x00n\x00r\x00e\x00s\x00p\x00o\x00n\x00s\x00i\x00v\x00e\x00n\x00e\x00s\x00s\x00-\x00e\x00v\x00e\x00n\x00t\x00s\x00-\x00v\x002' @ 710366 : 1 .. '\x00'\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/07/17-15:07:02.175 5380 Level-0 table #140: started
+2026/07/17-15:07:02.176 5380 Level-0 table #140: 4877 bytes OK
+2026/07/17-15:07:02.176 5380 Delete type=2 #134
+2026/07/17-15:07:02.176 5380 Delete type=0 #136
+2026/07/17-15:07:02.177 5380 Manual compaction at level-0 from '\x00%\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00&\x00\x00\x00' @ 0 : 0; will stop at '\x00%\x0a\x02\x03\x00\x00\x00\x00\x00\x00\xf0?' @ 711442 : 0
+2026/07/17-15:07:02.177 5380 Compacting 1@0 + 1@1 files
+2026/07/17-15:07:02.178 5380 Generated table #141@0: 466 keys, 4200 bytes
+2026/07/17-15:07:02.178 5380 Compacted 1@0 + 1@1 files => 4200 bytes
+2026/07/17-15:07:02.178 5380 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/07/17-15:07:02.178 5380 Delete type=2 #140
+2026/07/17-15:07:02.178 5380 Manual compaction at level-0 from '\x00%\x0a\x02\x03\x00\x00\x00\x00\x00\x00\xf0?' @ 711442 : 0 .. '\x00&\x00\x00\x00' @ 0 : 0; will stop at (end)
