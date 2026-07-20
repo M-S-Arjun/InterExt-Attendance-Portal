@@ -90,16 +90,16 @@ class FaceRecognitionModel:
                 allowed_modules=['detection', 'recognition'],
                 providers=providers
             )
-            self.app.prepare(ctx_id=-1, det_size=(640, 640), det_thresh=0.4)
+            self.app.prepare(ctx_id=-1, det_size=(640, 640), det_thresh=0.25)
 
-            # Fast model for real-time CCTV loop - lower det_thresh=0.35 catches
-            # faces at distance/angle in group scenarios (standard=0.4).
+            # Fast model for real-time CCTV loop - det_thresh=0.20 catches
+            # multiple faces, partial angles, and shadowed faces in group scenarios.
             self.fast_app = FaceAnalysis(
                 name=self.model_name,
                 allowed_modules=['detection', 'recognition'],
                 providers=providers
             )
-            self.fast_app.prepare(ctx_id=-1, det_size=(640, 640), det_thresh=0.25)
+            self.fast_app.prepare(ctx_id=-1, det_size=(640, 640), det_thresh=0.20)
 
             logger.info("InsightFace dual-res model loaded successfully")
         except Exception as e:
@@ -124,11 +124,11 @@ class FaceRecognitionModel:
         """Run face detection+embedding using the fast detector with 4K scaling & CLAHE contrast enhancement.
 
         Use this in the live CCTV inference thread for maximum throughput and accuracy.
-        Resizes high-res/4K inputs to 540p target height, enhances contrast for shadows and
+        Resizes high-res/4K inputs to 720p target height, enhances contrast for shadows and
         varying skin tones using CLAHE, and scales detected coordinates back to original resolution.
         """
         h, w = frame.shape[:2]
-        target_h = 540
+        target_h = 720
         target_w = int(w * (target_h / h))
         
         # 1. Resize frame to target height for fast and accurate detection
@@ -169,11 +169,11 @@ class FaceRecognitionModel:
         """Run face detection ONLY (no recognition) using the fast detector.
         
         This is extremely fast (~38ms on CPU) and does not hold any thread locks.
-        Resizes frame to 540p, applies CLAHE, and returns unscaled Face objects 
+        Resizes frame to 720p, applies CLAHE, and returns unscaled Face objects 
         with the CLAHE-enhanced frame.
         """
         h, w = frame.shape[:2]
-        target_h = 540
+        target_h = 720
         target_w = int(w * (target_h / h))
         
         resized = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
